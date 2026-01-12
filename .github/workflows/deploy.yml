@@ -1,8 +1,13 @@
+
 name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [ main ]
+
+# 배포 액션이 리포지토리에 파일을 쓸 수 있도록 권한을 허용합니다.
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
