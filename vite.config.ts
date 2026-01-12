@@ -1,13 +1,12 @@
-
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // GitHub Pages 배포 시 저장소 이름을 base에 넣으세요 (예: '/your-repo-name/')
-  // 여기서는 루트 배포를 가정합니다.
+  // GitHub Pages 배포 시 루트 경로를 인식하도록 설정
   base: './', 
   define: {
+    // 빌드 타임에 process.env.API_KEY를 실제 값으로 치환합니다.
     'process.env.API_KEY': JSON.stringify(process.env.API_KEY)
   }
 });
