@@ -37,10 +37,12 @@ export const TestManager: React.FC<Props> = ({
   const [entryStep, setEntryStep] = useState<EntryStep>('idle');
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
   
-  // 타이머 상태
+  // 타이머 상태 (화면 꺼짐 대응: 타임스탬프 방식)
   const [testSeconds, setTestSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const accumulatedSecondsRef = useRef<number>(0);
 
   // 점수 입력 상태 (화살표 UI)
   const [scoreTens, setScoreTens] = useState(0);
@@ -58,14 +60,25 @@ export const TestManager: React.FC<Props> = ({
   const activeCategory = testCategories.find(c => c.id === activeCategoryId);
   const activeSpace = activeCategory?.difficultySpaces.find(s => s.id === activeSpaceId);
 
-  // 타이머 로직
+  // 타이머 로직 (화면 꺼짐 대응)
   useEffect(() => {
     if (isTimerRunning) {
+      startTimeRef.current = Date.now();
       timerRef.current = window.setInterval(() => {
-        setTestSeconds(prev => prev + 1);
+        if (startTimeRef.current !== null) {
+          const now = Date.now();
+          const currentElapsed = Math.floor((now - startTimeRef.current) / 1000);
+          setTestSeconds(accumulatedSecondsRef.current + currentElapsed);
+        }
       }, 1000);
     } else {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        if (startTimeRef.current !== null) {
+          accumulatedSecondsRef.current += Math.floor((Date.now() - startTimeRef.current) / 1000);
+        }
+      }
+      startTimeRef.current = null;
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isTimerRunning]);
@@ -79,6 +92,8 @@ export const TestManager: React.FC<Props> = ({
 
   const handleStartTest = () => {
     setTestSeconds(0);
+    accumulatedSecondsRef.current = 0;
+    startTimeRef.current = null;
     setIsTimerRunning(true);
     setEntryStep('timer');
   };
@@ -91,6 +106,8 @@ export const TestManager: React.FC<Props> = ({
   const resetEntry = () => {
     setEntryStep('idle');
     setTestSeconds(0);
+    accumulatedSecondsRef.current = 0;
+    startTimeRef.current = null;
     setIsTimerRunning(false);
     setScoreTens(0);
     setScoreOnes(0);
@@ -182,7 +199,7 @@ export const TestManager: React.FC<Props> = ({
       h1: score,
       b: formData.b,
       tStudy: formData.tStudy,
-      tTest: parseFloat((testSeconds / 60).toFixed(2)), // 소수점 2자리까지 정밀하게 저장
+      tTest: parseFloat((testSeconds / 60).toFixed(2)),
       tRec: formData.tRec
     };
 
@@ -202,11 +219,8 @@ export const TestManager: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* 단계별 입력 오버레이 */}
         {entryStep !== 'idle' && (
           <div className={`fixed inset-0 flex flex-col items-center justify-center p-6 ${entryStep === 'timer' ? 'bg-slate-950' : 'bg-white'}`} style={{ zIndex: 99998 }}>
-            
-            {/* 닫기 버튼 */}
             <button 
               type="button"
               onClick={handleCancelEntry}
@@ -217,7 +231,6 @@ export const TestManager: React.FC<Props> = ({
               <span className="text-3xl font-bold">✕</span>
             </button>
 
-            {/* 취소 확인 모달 */}
             {isConfirmingCancel && (
               <div className="fixed inset-0 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm z-[100000]">
                 <div className="bg-white w-full max-w-sm rounded-[3rem] p-10 text-center shadow-2xl">
@@ -232,7 +245,6 @@ export const TestManager: React.FC<Props> = ({
               </div>
             )}
 
-            {/* 단계별 콘텐츠 */}
             <div className="w-full max-w-lg relative" style={{ zIndex: 99998 }}>
               {entryStep === 'timer' && (
                 <div className="flex flex-col items-center text-center">
@@ -319,7 +331,6 @@ export const TestManager: React.FC<Props> = ({
 
         {analytics ? (
           <div className="space-y-10 pb-10">
-            {/* 상단 통계 */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
                 <div>
@@ -341,7 +352,6 @@ export const TestManager: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* 상세 지표 및 적분 모델 분석 */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-white rounded-[3rem] border border-slate-200 shadow-xl overflow-hidden flex flex-col">
                     <div className="bg-slate-900 px-8 py-5 text-white flex justify-between items-center">
@@ -395,7 +405,6 @@ export const TestManager: React.FC<Props> = ({
                     </div>
                 </div>
 
-                {/* 그래프 길이 분석 */}
                 <div className="bg-indigo-600 rounded-[3rem] p-10 text-white shadow-2xl shadow-indigo-200 flex flex-col justify-between">
                     <div>
                         <div className="flex items-center gap-2 mb-8">
@@ -423,7 +432,6 @@ export const TestManager: React.FC<Props> = ({
                     </div>
                 </div>
 
-                {/* 학습량 예측 섹션 */}
                 <div className="lg:col-span-3 bg-white rounded-[3.5rem] p-12 border border-slate-200 shadow-xl mt-4">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-12">
                         <div>
@@ -480,7 +488,6 @@ export const TestManager: React.FC<Props> = ({
     );
   }
 
-  // 계층 이동 UI
   return (
     <div className="space-y-6">
       {!activeCategoryId ? (
