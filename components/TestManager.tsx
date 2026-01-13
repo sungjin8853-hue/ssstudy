@@ -233,7 +233,7 @@ export const TestManager: React.FC<Props> = ({
 
             {isConfirmingCancel && (
               <div className="fixed inset-0 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm z-[100000]">
-                <div className="bg-white w-full max-w-sm rounded-[3rem] p-10 text-center shadow-2xl">
+                <div className="bg-white w-full max-sm rounded-[3rem] p-10 text-center shadow-2xl">
                   <div className="text-4xl mb-4">⚠️</div>
                   <h4 className="text-xl font-black text-slate-900 mb-2">입력을 중단할까요?</h4>
                   <p className="text-slate-500 text-sm mb-10 leading-relaxed">지금 중단하면 기록이 저장되지 않습니다.</p>
@@ -290,12 +290,20 @@ export const TestManager: React.FC<Props> = ({
                     <span className="text-white font-black text-2xl md:text-3xl">최종 { (scoreTens * 10) + scoreOnes } 점</span>
                   </div>
 
-                  <button 
-                    onClick={() => setEntryStep('details')}
-                    className="w-full py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-xl hover:bg-slate-800 transition-all shadow-xl"
-                  >
-                    다음 (부가 정보 입력)
-                  </button>
+                  <div className="w-full flex gap-4">
+                    <button 
+                      onClick={() => setEntryStep('timer')}
+                      className="flex-1 py-6 bg-slate-100 text-slate-500 rounded-[2.5rem] font-black text-xl hover:bg-slate-200 transition-all"
+                    >
+                      뒤로
+                    </button>
+                    <button 
+                      onClick={() => setEntryStep('details')}
+                      className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-xl hover:bg-slate-800 transition-all shadow-xl"
+                    >
+                      다음 (부가 정보)
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -317,12 +325,20 @@ export const TestManager: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  <button 
-                    onClick={handleFinalSave}
-                    className="w-full py-6 bg-indigo-600 text-white rounded-[2.5rem] font-black text-xl hover:bg-indigo-700 transition-all shadow-xl"
-                  >
-                    저장 및 정밀 분석
-                  </button>
+                  <div className="w-full flex gap-4">
+                    <button 
+                      onClick={() => setEntryStep('score')}
+                      className="flex-1 py-6 bg-slate-100 text-slate-500 rounded-[2.5rem] font-black text-xl hover:bg-slate-200 transition-all"
+                    >
+                      뒤로
+                    </button>
+                    <button 
+                      onClick={handleFinalSave}
+                      className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2.5rem] font-black text-xl hover:bg-indigo-700 transition-all shadow-xl"
+                    >
+                      저장 및 정밀 분석
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
