@@ -23,14 +23,19 @@ const App: React.FC = () => {
     return d.toLocaleDateString('ko-KR', options);
   }, []);
 
-  // Persistence
+  // Persistence (Safe Load)
   useEffect(() => {
-    const savedSubs = localStorage.getItem('swp_subjects');
-    const savedTests = localStorage.getItem('swp_tests_categories_v3');
-    const savedLogs = localStorage.getItem('swp_logs');
-    if (savedSubs) setSubjects(JSON.parse(savedSubs));
-    if (savedTests) setTestCategories(JSON.parse(savedTests));
-    if (savedLogs) setLogs(JSON.parse(savedLogs));
+    try {
+      const savedSubs = localStorage.getItem('swp_subjects');
+      const savedTests = localStorage.getItem('swp_tests_categories_v3');
+      const savedLogs = localStorage.getItem('swp_logs');
+      
+      if (savedSubs) setSubjects(JSON.parse(savedSubs) || []);
+      if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
+      if (savedLogs) setLogs(JSON.parse(savedLogs) || []);
+    } catch (e) {
+      console.error("Failed to load data from localStorage", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -39,7 +44,7 @@ const App: React.FC = () => {
     localStorage.setItem('swp_logs', JSON.stringify(logs));
   }, [subjects, testCategories, logs]);
 
-  // AI 팁 로직 - 배포 시 API_KEY가 없을 경우를 대비해 안전하게 처리
+  // AI 팁 로직
   useEffect(() => {
     const fetchAiTip = async () => {
       if (!process.env.API_KEY) return;
@@ -52,7 +57,7 @@ const App: React.FC = () => {
         });
         if (response.text) setAiTip(response.text.replace(/\"/g, ''));
       } catch (e) {
-        // AI fetch 실패 시 기본값 유지
+        // AI fetch 실패 시 무시
       }
     };
     fetchAiTip();
@@ -67,6 +72,10 @@ const App: React.FC = () => {
       difficultySpaces: []
     };
     setTestCategories(prev => [...prev, newCategory]);
+  };
+
+  const handleUpdateSubject = (updatedSubject: Subject) => {
+    setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
   };
 
   const handleDeleteSubject = (id: string) => {
@@ -152,6 +161,24 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleUpdateLog = (updatedLog: StudyLog) => {
+    const oldLog = logs.find(l => l.id === updatedLog.id);
+    if (!oldLog) return;
+
+    setLogs(prev => prev.map(l => l.id === updatedLog.id ? updatedLog : l));
+    
+    // 과목 완료 페이지 동기화
+    if (oldLog.subjectId === updatedLog.subjectId) {
+      const pageDiff = updatedLog.pagesRead - oldLog.pagesRead;
+      setSubjects(prev => prev.map(sub => {
+        if (sub.id === updatedLog.subjectId) {
+          return { ...sub, completedPages: sub.completedPages + pageDiff };
+        }
+        return sub;
+      }));
+    }
+  };
+
   const handleToggleReview = (logId: string) => {
     setLogs(logs.map(log => 
       log.id === logId ? { ...log, isReviewed: !log.isReviewed } : log
@@ -179,6 +206,7 @@ const App: React.FC = () => {
         </div>
       </nav>
 
+      {/* 모바일 탭 바 */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-lg">
         <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📊</button>
         <button onClick={() => setActiveTab('test')} className={`p-2 rounded-xl ${activeTab === 'test' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>🎯</button>
@@ -200,18 +228,24 @@ const App: React.FC = () => {
 
         <div className="transition-all duration-300">
           {activeTab === 'dashboard' && (
-            <div className="space-y-10 animate-in fade-in slide-in-from-top-4 duration-500">
-              <Analytics subjects={subjects} logs={logs} />
-              <TodaySummary logs={logs} subjects={subjects} />
+            <div className="space-y-10 animate-fade-in">
+              <Analytics subjects={subjects} logs={logs} onUpdateSubject={handleUpdateSubject} />
+              <TodaySummary logs={logs} subjects={subjects} onUpdateLog={handleUpdateLog} />
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-6 border-t border-slate-200">
                  <SessionLogger subjects={subjects} onLogSession={handleLogSession} />
-                 <SubjectPlanner subjects={subjects} onAddSubject={handleAddSubject} onDeleteSubject={handleDeleteSubject} />
+                 <SubjectPlanner 
+                    subjects={subjects} 
+                    logs={logs}
+                    onAddSubject={handleAddSubject} 
+                    onUpdateSubject={handleUpdateSubject}
+                    onDeleteSubject={handleDeleteSubject} 
+                  />
               </div>
             </div>
           )}
 
           {activeTab === 'test' && (
-            <div className="animate-in fade-in slide-in-from-right-4 duration-500">
+            <div className="animate-fade-in">
               <TestManager 
                 testCategories={testCategories} 
                 logs={logs}
