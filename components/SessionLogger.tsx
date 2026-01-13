@@ -20,28 +20,42 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
   const [photo, setPhoto] = useState<string | undefined>(undefined);
   const [seconds, setSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [isConfirmingCancel, setIsConfirmingCancel] = useState(false); // 커스텀 확인 창 상태
+  const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
   
   const timerRef = useRef<number | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const accumulatedSecondsRef = useRef<number>(0);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
 
-  // 타이머 로직
+  // 타이머 로직 (화면 꺼짐 대응: 타임스탬프 방식)
   useEffect(() => {
     if (isTimerRunning) {
+      startTimeRef.current = Date.now();
       timerRef.current = window.setInterval(() => {
-        setSeconds(prev => prev + 1);
+        if (startTimeRef.current !== null) {
+          const now = Date.now();
+          const currentElapsed = Math.floor((now - startTimeRef.current) / 1000);
+          setSeconds(accumulatedSecondsRef.current + currentElapsed);
+        }
       }, 1000);
     } else {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        if (startTimeRef.current !== null) {
+          accumulatedSecondsRef.current += Math.floor((Date.now() - startTimeRef.current) / 1000);
+        }
+      }
+      startTimeRef.current = null;
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isTimerRunning]);
 
-  // 실시간 분 계산
+  // 실시간 분 계산 (소수점 2자리)
   useEffect(() => {
-    if (seconds > 0) {
+    if (seconds >= 0) {
       setMinutes(parseFloat((seconds / 60).toFixed(2)));
     }
   }, [seconds]);
@@ -56,6 +70,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
   const resetAll = () => {
     setStep('idle');
     setSeconds(0);
+    accumulatedSecondsRef.current = 0;
+    startTimeRef.current = null;
     setIsTimerRunning(false);
     setTens(0);
     setOnes(0);
@@ -67,7 +83,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
   const handleXClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsConfirmingCancel(true); // 취소 확인 창 띄우기
+    setIsConfirmingCancel(true);
   };
 
   const handleStartMeasurement = () => {
@@ -75,6 +91,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
       alert("과목을 먼저 선택해주세요!");
       return;
     }
+    accumulatedSecondsRef.current = 0;
+    setSeconds(0);
     setStep('timer');
     setIsTimerRunning(true);
   };
@@ -137,7 +155,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
     resetAll();
   };
 
-  // 1. 대기 상태 (기본 카드)
   if (step === 'idle') {
     return (
       <div className="bg-white p-8 rounded-[3.5rem] shadow-sm border border-slate-200">
@@ -168,14 +185,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
     );
   }
 
-  // 2. 측정 중/기록 중 (전체 화면 오버레이)
   const isDark = step === 'timer';
   const bgColor = isDark ? 'bg-slate-950' : 'bg-white';
 
   return (
     <div className={`fixed inset-0 flex flex-col items-center justify-center p-6 ${bgColor}`} style={{ zIndex: 99998 }}>
-      
-      {/* 닫기(X) 버튼: 별도의 커스텀 핸들러 사용 */}
       <button 
         type="button"
         onClick={handleXClick}
@@ -186,7 +200,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
         <span className="text-3xl font-bold">✕</span>
       </button>
 
-      {/* 커스텀 확인 모달 (브라우저 confirm 대체) */}
       {isConfirmingCancel && (
         <div className="fixed inset-0 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm z-[100000]">
           <div className="bg-white w-full max-w-sm rounded-[3rem] p-10 text-center shadow-2xl animate-in zoom-in duration-200">
@@ -211,7 +224,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
         </div>
       )}
 
-      {/* 메인 콘텐츠 영역 */}
       <div className="w-full max-w-lg relative" style={{ zIndex: 99998 }}>
         {step === 'timer' && (
           <div className="flex flex-col items-center text-center">
