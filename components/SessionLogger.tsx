@@ -276,12 +276,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
               <span className="text-white font-black text-2xl md:text-3xl">총 {(tens * 10) + ones} 페이지 공부</span>
             </div>
 
-            <button 
-              onClick={() => setStep('photo')}
-              className="w-full py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-xl hover:bg-slate-800 transition-all shadow-xl"
-            >
-              다음 (인증 사진)
-            </button>
+            <div className="w-full flex gap-4">
+              <button 
+                onClick={() => setStep('timer')}
+                className="flex-1 py-6 bg-slate-100 text-slate-500 rounded-[2.5rem] font-black text-xl hover:bg-slate-200 transition-all"
+              >
+                뒤로
+              </button>
+              <button 
+                onClick={() => setStep('photo')}
+                className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-xl hover:bg-slate-800 transition-all shadow-xl"
+              >
+                다음 (인증 사진)
+              </button>
+            </div>
           </div>
         )}
 
@@ -326,10 +334,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
 
             <canvas ref={canvasRef} className="hidden" />
 
-            <div className="w-full max-w-[400px]">
+            <div className="w-full max-w-[400px] flex gap-4">
+              <button 
+                onClick={() => setStep('pages')}
+                className="flex-1 py-6 bg-slate-100 text-slate-500 rounded-[2.5rem] font-black text-xl hover:bg-slate-200 transition-all"
+              >
+                뒤로
+              </button>
               <button 
                 onClick={handleFinalSave}
-                className={`w-full py-6 rounded-[2.5rem] font-black text-xl transition-all shadow-xl ${
+                className={`flex-[2] py-6 rounded-[2.5rem] font-black text-xl transition-all shadow-xl ${
                   photo ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'
                 }`}
               >
