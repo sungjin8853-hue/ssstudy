@@ -141,16 +141,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
 
   if (step === 'idle') {
     return (
-      <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-200">
+      <div className="animate-fade-in">
         <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-8">
-            <span className="w-2 h-5 bg-green-500 rounded-full"></span>
-            학습 로거
+            <span className="w-2 h-5 bg-indigo-500 rounded-full"></span>
+            학습 세션 시작
         </h2>
-        <div className="space-y-6">
-          <div>
-            <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest px-1">대상 과목</label>
+        <div className="space-y-6 max-w-md mx-auto">
+          <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest px-1">측정할 과목 선택</label>
             <select 
-              className="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-bold appearance-none cursor-pointer focus:border-indigo-500 transition-colors"
+              className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold appearance-none cursor-pointer focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
               value={subjectId}
               onChange={e => setSubjectId(e.target.value)}
             >
@@ -160,9 +160,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
           </div>
           <button 
             onClick={handleStartMeasurement}
-            className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2"
+            className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 group"
           >
-            <span>⏱️</span> 학습 측정 시작
+            <span className="text-2xl group-hover:rotate-12 transition-transform">⏱️</span> 측정 엔진 가동
           </button>
         </div>
       </div>
@@ -218,10 +218,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
             <div className="flex items-center gap-8 mb-16">
               {[tens, ones].map((val, i) => (
                 <div key={i} className="flex flex-col items-center gap-4">
-                  {/* Fix: Using functional state update to resolve 't' and 'o' being undefined */}
                   <button onClick={() => i === 0 ? setTens(prev => (prev + 1) % 10) : setOnes(prev => (prev + 1) % 10)} className="w-16 h-16 bg-slate-50 rounded-2xl text-xl">▲</button>
                   <div className="text-7xl font-black text-slate-900 w-20 text-center">{i === 0 ? tens : ones}</div>
-                  {/* Fix: Using functional state update to resolve 't' and 'o' being undefined */}
                   <button onClick={() => i === 0 ? setTens(prev => (prev - 1 + 10) % 10) : setOnes(prev => (prev - 1 + 10) % 10)} className="w-16 h-16 bg-slate-50 rounded-2xl text-xl">▼</button>
                 </div>
               ))}
