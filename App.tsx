@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord } from './types';
+import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord, TagDefinition } from './types';
 import { SubjectPlanner } from './components/SubjectPlanner';
 import { SessionLogger } from './components/SessionLogger';
 import { Analytics } from './components/Analytics';
@@ -14,7 +14,9 @@ const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
+  const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'review' | 'test'>('dashboard');
+  const [dashboardActionTab, setDashboardActionTab] = useState<'logger' | 'planner'>('logger');
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
 
   const todayStr = useMemo(() => {
@@ -29,10 +31,12 @@ const App: React.FC = () => {
       const savedSubs = localStorage.getItem('swp_subjects');
       const savedTests = localStorage.getItem('swp_tests_categories_v3');
       const savedLogs = localStorage.getItem('swp_logs');
+      const savedTags = localStorage.getItem('swp_tags');
       
       if (savedSubs) setSubjects(JSON.parse(savedSubs) || []);
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
       if (savedLogs) setLogs(JSON.parse(savedLogs) || []);
+      if (savedTags) setTagDefinitions(JSON.parse(savedTags) || []);
     } catch (e) {
       console.error("Failed to load data from localStorage", e);
     }
@@ -42,7 +46,8 @@ const App: React.FC = () => {
     localStorage.setItem('swp_subjects', JSON.stringify(subjects));
     localStorage.setItem('swp_tests_categories_v3', JSON.stringify(testCategories));
     localStorage.setItem('swp_logs', JSON.stringify(logs));
-  }, [subjects, testCategories, logs]);
+    localStorage.setItem('swp_tags', JSON.stringify(tagDefinitions));
+  }, [subjects, testCategories, logs, tagDefinitions]);
 
   // AI 팁 로직
   useEffect(() => {
@@ -64,7 +69,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleAddSubject = (s: Subject) => {
-    setSubjects([...subjects, s]);
+    setSubjects(prev => [...prev, s]);
     const newCategory: TestCategory = {
       id: `cat-${s.id}`,
       name: `${s.name} 테스트 공간`,
@@ -72,6 +77,7 @@ const App: React.FC = () => {
       difficultySpaces: []
     };
     setTestCategories(prev => [...prev, newCategory]);
+    setDashboardActionTab('logger'); // 계획 추가 후 로거로 전환
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
@@ -79,9 +85,13 @@ const App: React.FC = () => {
   };
 
   const handleDeleteSubject = (id: string) => {
-    setSubjects(subjects.filter(s => s.id !== id));
-    setLogs(logs.filter(l => l.subjectId !== id));
-    setTestCategories(testCategories.filter(c => c.subjectId !== id));
+    setSubjects(prev => prev.filter(s => s.id !== id));
+    setLogs(prev => prev.filter(l => l.subjectId !== id));
+    setTestCategories(prev => prev.filter(c => c.subjectId !== id));
+  };
+
+  const handleUpdateTags = (tags: TagDefinition[]) => {
+    setTagDefinitions(tags);
   };
 
   const handleAddCategory = (name: string, subjectId?: string) => {
@@ -91,11 +101,12 @@ const App: React.FC = () => {
       subjectId,
       difficultySpaces: []
     };
-    setTestCategories([...testCategories, newCat]);
+    setTestCategories(prev => [...prev, newCat]);
   };
 
   const handleDeleteCategory = (id: string) => {
-    setTestCategories(testCategories.filter(c => c.id !== id));
+    if (!confirm('이 시험 공간을 삭제하시겠습니까?')) return;
+    setTestCategories(prev => prev.filter(c => c.id !== id));
   };
 
   const handleAddDifficultySpace = (categoryId: string, name: string) => {
@@ -113,6 +124,7 @@ const App: React.FC = () => {
   };
 
   const handleDeleteDifficultySpace = (categoryId: string, spaceId: string) => {
+    if (!confirm('이 난이도 공간을 삭제하시겠습니까?')) return;
     setTestCategories(prev => prev.map(cat => {
       if (cat.id === categoryId) {
         return { ...cat, difficultySpaces: cat.difficultySpaces.filter(s => s.id !== spaceId) };
@@ -124,6 +136,12 @@ const App: React.FC = () => {
   const handleAddRecord = (categoryId: string, spaceId: string, record: TestRecord) => {
     setTestCategories(prev => prev.map(cat => {
       if (cat.id === categoryId) {
+        if (cat.subjectId) {
+          setSubjects(sPrev => sPrev.map(s => 
+            s.id === cat.subjectId ? { ...s, completedPages: s.completedPages + record.b } : s
+          ));
+        }
+        
         const newSpaces = cat.difficultySpaces.map(space => {
           if (space.id === spaceId) {
             return { ...space, records: [...space.records, record] };
@@ -139,11 +157,20 @@ const App: React.FC = () => {
   const handleDeleteRecord = (categoryId: string, spaceId: string, recordId: string) => {
     setTestCategories(prev => prev.map(cat => {
       if (cat.id === categoryId) {
-        const newSpaces = cat.difficultySpaces.map(space => {
-          if (space.id === spaceId) {
-            return { ...space, records: space.records.filter(r => r.id !== recordId) };
+        const space = cat.difficultySpaces.find(s => s.id === spaceId);
+        const recordToDelete = space?.records.find(r => r.id === recordId);
+        
+        if (cat.subjectId && recordToDelete) {
+          setSubjects(sPrev => sPrev.map(s => 
+            s.id === cat.subjectId ? { ...s, completedPages: Math.max(0, s.completedPages - recordToDelete.b) } : s
+          ));
+        }
+
+        const newSpaces = cat.difficultySpaces.map(s => {
+          if (s.id === spaceId) {
+            return { ...s, records: s.records.filter(r => r.id !== recordId) };
           }
-          return space;
+          return s;
         });
         return { ...cat, difficultySpaces: newSpaces };
       }
@@ -152,7 +179,7 @@ const App: React.FC = () => {
   };
   
   const handleLogSession = (log: StudyLog) => {
-    setLogs([...logs, log]);
+    setLogs(prev => [...prev, log]);
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
         return { ...sub, completedPages: sub.completedPages + log.pagesRead };
@@ -167,7 +194,6 @@ const App: React.FC = () => {
 
     setLogs(prev => prev.map(l => l.id === updatedLog.id ? updatedLog : l));
     
-    // 과목 완료 페이지 동기화
     if (oldLog.subjectId === updatedLog.subjectId) {
       const pageDiff = updatedLog.pagesRead - oldLog.pagesRead;
       setSubjects(prev => prev.map(sub => {
@@ -180,7 +206,7 @@ const App: React.FC = () => {
   };
 
   const handleToggleReview = (logId: string) => {
-    setLogs(logs.map(log => 
+    setLogs(prev => prev.map(log => 
       log.id === logId ? { ...log, isReviewed: !log.isReviewed } : log
     ));
   };
@@ -206,7 +232,6 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      {/* 모바일 탭 바 */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-lg">
         <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📊</button>
         <button onClick={() => setActiveTab('test')} className={`p-2 rounded-xl ${activeTab === 'test' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>🎯</button>
@@ -229,17 +254,44 @@ const App: React.FC = () => {
         <div className="transition-all duration-300">
           {activeTab === 'dashboard' && (
             <div className="space-y-10 animate-fade-in">
-              <Analytics subjects={subjects} logs={logs} onUpdateSubject={handleUpdateSubject} />
+              <Analytics 
+                subjects={subjects} 
+                logs={logs} 
+                tagDefinitions={tagDefinitions}
+                onUpdateSubject={handleUpdateSubject} 
+                onDeleteSubject={handleDeleteSubject} 
+                onUpdateTags={handleUpdateTags}
+              />
               <TodaySummary logs={logs} subjects={subjects} onUpdateLog={handleUpdateLog} />
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-6 border-t border-slate-200">
-                 <SessionLogger subjects={subjects} onLogSession={handleLogSession} />
-                 <SubjectPlanner 
-                    subjects={subjects} 
-                    logs={logs}
-                    onAddSubject={handleAddSubject} 
-                    onUpdateSubject={handleUpdateSubject}
-                    onDeleteSubject={handleDeleteSubject} 
-                  />
+              
+              {/* 통합 액션 허브 (Logger + Planner) */}
+              <div className="bg-white rounded-[3.5rem] shadow-sm border border-slate-200 overflow-hidden animate-fade-in">
+                <div className="flex bg-slate-50 p-3 m-4 rounded-[2rem] border border-slate-100">
+                  <button 
+                    onClick={() => setDashboardActionTab('logger')}
+                    className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition-all ${
+                      dashboardActionTab === 'logger' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <span>⏱️</span> 학습 기록 측정
+                  </button>
+                  <button 
+                    onClick={() => setDashboardActionTab('planner')}
+                    className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition-all ${
+                      dashboardActionTab === 'planner' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <span>📅</span> 새 학습 계획 추가
+                  </button>
+                </div>
+                
+                <div className="p-8 md:p-12">
+                  {dashboardActionTab === 'logger' ? (
+                    <SessionLogger subjects={subjects} onLogSession={handleLogSession} />
+                  ) : (
+                    <SubjectPlanner onAddSubject={handleAddSubject} />
+                  )}
+                </div>
               </div>
             </div>
           )}
