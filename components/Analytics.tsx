@@ -1,11 +1,12 @@
 
-import React, { useMemo, useState, useEffect } from 'react';
-import { Subject, StudyLog, TagDefinition } from '../types';
-import { calculateStats } from '../utils/math';
+import React, { useMemo, useState } from 'react';
+import { Subject, StudyLog, TagDefinition, TestCategory, TestRecord } from '../types';
+import { calculateStats, calculateRequiredReviewCount, calculateMentalBurden, calculateStudyBurdenV2 } from '../utils/math';
 
 interface Props {
   subjects: Subject[];
   logs: StudyLog[];
+  testCategories: TestCategory[];
   tagDefinitions: TagDefinition[];
   onUpdateSubject?: (updated: Subject) => void;
   onDeleteSubject?: (id: string) => void;
@@ -20,343 +21,297 @@ const COLORS = [
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
+  testCategories,
   tagDefinitions,
   onUpdateSubject, 
   onDeleteSubject,
   onUpdateTags
 }) => {
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  
-  // 수정용 상태
-  const [editPages, setEditPages] = useState<number>(0);
-  const [editDate, setEditDate] = useState<string>('');
-  const [editDailyGoal, setEditDailyGoal] = useState<number>(0);
-  
-  const [isTagAssignMode, setIsTagAssignMode] = useState(false);
-  const [tagIdBeingRenamed, setTagIdBeingRenamed] = useState<string | null>(null);
+  const [movingItemId, setMovingItemId] = useState<string | null>(null);
 
-  // 과목별 상세 통계 계산
-  const subjectStats = useMemo(() => {
+  const toggleFolder = (id: string) => {
+    const next = new Set(expandedFolderIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedFolderIds(next);
+  };
+
+  const allSubjectStats = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
+    const getFormulaInsights = (subId: string) => {
+      const allRecords: TestRecord[] = [];
+      testCategories.forEach(cat => cat.difficultySpaces.forEach(space => {
+        if (space.subjectIds?.includes(subId)) allRecords.push(...space.records);
+      }));
+      
+      if (allRecords.length === 0) return { impact: 0, predicted: 0, reviewCount: 0 };
+      
+      const sorted = [...allRecords].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const last = sorted[sorted.length - 1];
+      const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
+      
+      let impact = 0, predicted = 0;
+      let reviewCount = calculateRequiredReviewCount(last.tTest, last.tRec);
+
+      if (prev) {
+        impact = calculateMentalBurden(prev.h1, Math.max(0.1, last.h1 - prev.h1), last.b, last.tStudy, last.tTest, last.tRec).total;
+        predicted = calculateStudyBurdenV2({ h1: prev.h1, h2: Math.max(0.1, last.h1 - prev.h1), b: last.b, h3: 10, tStudy: 0, tTest: 0, tRec: 0 }).total;
+      }
+      
+      return { impact, predicted, reviewCount };
+    };
 
     return subjects.map(sub => {
       const subLogs = logs.filter(l => l.subjectId === sub.id);
       const remaining = Math.max(0, sub.totalPages - sub.completedPages);
       const stats = calculateStats(subLogs, remaining);
-      
       const target = new Date(sub.targetDate);
-      target.setHours(0, 0, 0, 0);
-      const diffTime = target.getTime() - today.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      const dailyTimeNeeded = diffDays > 0 ? stats.estimatedRemainingTime / diffDays : stats.estimatedRemainingTime;
-      const recommendedDailyPages = diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining;
+      const diffDays = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      const formula = getFormulaInsights(sub.id);
 
       return {
         ...sub,
         stats,
         diffDays,
-        dailyTimeNeeded,
-        recommendedDailyPages,
-        remainingPages: remaining
+        remainingPages: remaining,
+        recommendedDailyPages: diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining,
+        dailyTimeNeeded: (diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining) * stats.averageTimePerPage,
+        totalTimeSpent: stats.totalTimeSpent,
+        formula
       };
     });
-  }, [subjects, logs]);
+  }, [subjects, logs, testCategories]);
 
-  const filteredSubjects = useMemo(() => {
-    return subjectStats.filter(sub => {
-      const subTagIds = sub.tagIds || [];
-      const isAnyTagHidden = tagDefinitions.some(tag => 
-        subTagIds.includes(tag.id) && !tag.isVisible
-      );
-      return !isAnyTagHidden;
-    });
-  }, [subjectStats, tagDefinitions]);
-
-  // 수정 시작 핸들러
-  const startEditing = (sub: any) => {
-    setEditingId(sub.id);
-    setEditPages(sub.totalPages);
-    setEditDate(sub.targetDate);
-    setEditDailyGoal(sub.recommendedDailyPages);
-    setConfirmDeleteId(null);
-  };
-
-  // 총 페이지 수정 시 로직
-  const handleEditPagesChange = (val: number, sub: any) => {
-    setEditPages(val);
-    const remaining = Math.max(0, val - sub.completedPages);
-    if (editDailyGoal > 0) {
-      const daysNeeded = Math.ceil(remaining / editDailyGoal);
-      const newDate = new Date();
-      newDate.setDate(newDate.getDate() + daysNeeded);
-      setEditDate(newDate.toISOString().split('T')[0]);
-    }
-  };
-
-  // 목표 날짜 수정 시 로직 (하루 목표량 자동 계산)
-  const handleEditDateChange = (dateStr: string, sub: any) => {
-    setEditDate(dateStr);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const target = new Date(dateStr);
-    target.setHours(0, 0, 0, 0);
-    
-    const diffDays = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    const remaining = Math.max(0, editPages - sub.completedPages);
-    
-    if (diffDays > 0) {
-      setEditDailyGoal(Math.ceil(remaining / diffDays));
-    } else {
-      setEditDailyGoal(remaining);
-    }
-  };
-
-  // 하루 목표량 수정 시 로직 (목표 날짜 자동 계산)
-  const handleEditDailyGoalChange = (val: number, sub: any) => {
-    setEditDailyGoal(val);
-    const remaining = Math.max(0, editPages - sub.completedPages);
-    if (val > 0) {
-      const daysNeeded = Math.ceil(remaining / val);
-      const newDate = new Date();
-      newDate.setDate(newDate.getDate() + daysNeeded);
-      setEditDate(newDate.toISOString().split('T')[0]);
-    }
-  };
-
-  const handleSave = (sub: any) => {
-    if (onUpdateSubject) {
-      onUpdateSubject({
-        ...sub,
-        totalPages: editPages,
-        targetDate: editDate,
+  const getRecursiveData = (folderId: string) => {
+    const findSubjIds = (fid: string): string[] => {
+      const childFolders = tagDefinitions.filter(t => t.parentId === fid);
+      let subjs = allSubjectStats.filter(s => s.tagIds?.includes(fid));
+      childFolders.forEach(cf => {
+        subjs = [...subjs, ...allSubjectStats.filter(s => s.tagIds?.includes(cf.id))];
+        const deeper = (id: string): any[] => {
+          const c = tagDefinitions.filter(t => t.parentId === id);
+          let r = allSubjectStats.filter(s => s.tagIds?.includes(id));
+          c.forEach(cc => r = [...r, ...deeper(cc.id)]);
+          return r;
+        };
+        subjs = [...subjs, ...deeper(cf.id)];
       });
-    }
-    setEditingId(null);
-  };
+      return Array.from(new Set(subjs.map(s => s.id)));
+    };
 
-  const handleUpdateTagDef = (id: string, updates: Partial<TagDefinition>) => {
-    const newTags = tagDefinitions.map(t => t.id === id ? { ...t, ...updates } : t);
-    if (onUpdateTags) onUpdateTags(newTags);
-  };
+    const relatedSubjIds = findSubjIds(folderId);
+    const uniqueSubjs = allSubjectStats.filter(s => relatedSubjIds.includes(s.id));
+    const count = uniqueSubjs.length;
 
-  const handleDeleteTagDef = (id: string) => {
-    const newTags = tagDefinitions.filter(t => t.id !== id);
-    if (onUpdateTags) onUpdateTags(newTags);
-    subjects.forEach(sub => {
-      if (sub.tagIds?.includes(id)) {
-        if (onUpdateSubject) {
-          onUpdateSubject({
-            ...sub,
-            tagIds: sub.tagIds.filter(tid => tid !== id)
-          });
-        }
-      }
-    });
-  };
-
-  const toggleSubjectTag = (sub: Subject, tagId: string) => {
-    const currentTagIds = sub.tagIds || [];
-    const newTagIds = currentTagIds.includes(tagId)
-      ? currentTagIds.filter(id => id !== tagId)
-      : [...currentTagIds, tagId];
-    if (onUpdateSubject) {
-      onUpdateSubject({ ...sub, tagIds: newTagIds });
-    }
+    return {
+      count,
+      totalPages: uniqueSubjs.reduce((acc, cur) => acc + cur.totalPages, 0),
+      completedPages: uniqueSubjs.reduce((acc, cur) => acc + cur.completedPages, 0),
+      sumImp: uniqueSubjs.reduce((acc, cur) => acc + cur.formula.impact, 0),
+      sumPred: uniqueSubjs.reduce((acc, cur) => acc + cur.formula.predicted, 0),
+      avgRev: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.formula.reviewCount, 0) / count : 0,
+      avgEff: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / count : 0,
+      avgStd: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.standardDeviation, 0) / count : 0,
+      dailyTime: uniqueSubjs.reduce((acc, cur) => acc + cur.dailyTimeNeeded, 0),
+      dailyPages: uniqueSubjs.reduce((acc, cur) => acc + cur.recommendedDailyPages, 0),
+      remaining: uniqueSubjs.reduce((acc, cur) => acc + cur.remainingPages, 0),
+    };
   };
 
   const formatTime = (minutes: number) => {
-    if (minutes <= 0) return "0분";
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
-    return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
+    const folders = tagDefinitions.filter(f => f.parentId === parentId);
+    const subjs = allSubjectStats.filter(s => 
+      parentId ? s.tagIds?.includes(parentId) : (!s.tagIds || s.tagIds.length === 0)
+    );
+
+    return (
+      <div className={`space-y-10 ${depth > 0 ? 'ml-6 md:ml-12 pl-6 border-l-4 border-slate-200' : ''}`}>
+        {folders.map(folder => {
+          const stats = getRecursiveData(folder.id);
+          const isExpanded = expandedFolderIds.has(folder.id);
+          const isMoving = movingItemId === folder.id;
+          const progressPercent = stats.totalPages > 0 ? Math.round((stats.completedPages / stats.totalPages) * 100) : 0;
+
+          return (
+            <div key={folder.id} className="relative group/folder">
+              <div className={`flex flex-col gap-6 p-10 rounded-[3.5rem] transition-all border shadow-xl ${isExpanded ? 'bg-indigo-950 border-indigo-800 text-white' : 'bg-white border-slate-200 hover:border-indigo-400'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-6">
+                    <button onClick={() => toggleFolder(folder.id)} className={`w-14 h-14 flex items-center justify-center rounded-2xl transition-all ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <span className={`text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+                    </button>
+                    <span className="text-5xl">📂</span>
+                    <div>
+                      {editingId === folder.id ? (
+                        <input autoFocus defaultValue={folder.name} onBlur={(e) => { onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, name: e.target.value} : t)); setEditingId(null); }} className="bg-slate-800 text-white text-2xl font-black outline-none px-4 py-2 rounded-xl border border-indigo-500" />
+                      ) : (
+                        <h4 onClick={() => toggleFolder(folder.id)} className="text-3xl font-black cursor-pointer hover:underline">{folder.name}</h4>
+                      )}
+                      <p className={`text-[10px] font-black uppercase mt-2 tracking-[0.2em] ${isExpanded ? 'text-indigo-300' : 'text-slate-400'}`}>{stats.count}개 분석 통합 리포트</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setMovingItemId(isMoving ? null : folder.id)} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
+                    <button onClick={() => setEditingId(folder.id)} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all">✎</button>
+                    <button onClick={() => onUpdateTags?.(tagDefinitions.filter(t => t.id !== folder.id))} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 transition-all">✕</button>
+                  </div>
+                </div>
+
+                {/* 폴더 통합 데이터 대시보드 (공식 + 기존지표 통합) */}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                   <StatBox label="예측(b)" value={stats.sumPred.toFixed(1)} unit="P" color="text-indigo-400" highlight isDark={isExpanded} />
+                   <StatBox label="부하(L)" value={stats.sumImp.toFixed(2)} unit="" color="text-rose-400" highlight isDark={isExpanded} />
+                   <StatBox label="평균 효율" value={stats.avgEff.toFixed(1)} unit="m/p" color="text-emerald-400" isDark={isExpanded} />
+                   <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
+                   <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
+                   <StatBox label="일일 권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
+                   <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} />
+                </div>
+
+                <div className="space-y-4">
+                   <div className="flex justify-between items-end">
+                      <p className={`text-[10px] font-black uppercase tracking-widest ${isExpanded ? 'text-indigo-300' : 'text-slate-400'}`}>전체 진행률 ({progressPercent}%)</p>
+                      <p className={`text-xs font-bold ${isExpanded ? 'text-white/40' : 'text-slate-300'}`}>{stats.completedPages} / {stats.totalPages} P</p>
+                   </div>
+                   <div className={`w-full h-3 rounded-full overflow-hidden ${isExpanded ? 'bg-white/10' : 'bg-slate-100'}`}>
+                      <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-xl" style={{ width: `${progressPercent}%` }}></div>
+                   </div>
+                </div>
+
+                {isMoving && (
+                  <div className="mt-4 bg-white/5 p-6 rounded-[2.5rem] border border-white/10 animate-fade-in">
+                    <p className="text-[10px] font-black text-indigo-400 uppercase mb-4 px-2">📂 이 폴더를 어디로 이동할까요?</p>
+                    <div className="flex flex-wrap gap-3">
+                       <button onClick={() => { onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, parentId: undefined} : t)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">최상위(Root)</button>
+                       {tagDefinitions.filter(t => t.id !== folder.id).map(t => (
+                         <button key={t.id} onClick={() => { onUpdateTags?.(tagDefinitions.map(tg => tg.id === folder.id ? {...tg, parentId: t.id} : tg)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">📂 {t.name}</button>
+                       ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {isExpanded && <RenderTree parentId={folder.id} depth={depth + 1} />}
+            </div>
+          );
+        })}
+
+        {subjs.map(sub => {
+          const isMoving = movingItemId === sub.id;
+          const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
+
+          return (
+            <div key={sub.id} className="flex flex-col gap-8 p-12 bg-white border-2 border-slate-100 rounded-[4rem] hover:shadow-2xl hover:border-indigo-400 transition-all group/subj relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-6">
+                  <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all shadow-sm">
+                    <span className="text-4xl">📄</span>
+                  </div>
+                  <div>
+                    <h4 className="text-3xl font-black text-slate-900">{sub.name}</h4>
+                    <div className="flex items-center gap-4 mt-3">
+                      <span className={`text-[10px] font-black px-4 py-1.5 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터 정밀 분석</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setMovingItemId(isMoving ? null : sub.id)} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
+                  <button onClick={() => onDeleteSubject?.(sub.id)} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 transition-all">✕</button>
+                </div>
+              </div>
+
+              {/* 과목별 모든 지표 노출 (공식 3종 + 기존 5종) */}
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 p-8 bg-slate-50 rounded-[3rem] border border-slate-100">
+                 <StatBox label="예측(b)" value={sub.formula.predicted.toFixed(1)} unit="P" color="text-indigo-600" highlight />
+                 <StatBox label="부하(L)" value={sub.formula.impact.toFixed(2)} unit="" color="text-rose-600" highlight />
+                 <StatBox label="복습량" value={sub.formula.reviewCount.toFixed(1)} unit="회" color="text-emerald-600" highlight />
+                 <StatBox label="효율(m/p)" value={sub.stats.averageTimePerPage.toFixed(1)} unit="" color="text-indigo-400" />
+                 <StatBox label="편차(σ)" value={sub.stats.standardDeviation.toFixed(1)} unit="" color="text-blue-400" />
+                 <StatBox label="잔여(P)" value={sub.remainingPages.toString()} unit="P" color="text-amber-500" />
+                 <StatBox label="일일 권장" value={sub.recommendedDailyPages.toString()} unit="P" color="text-slate-800" />
+                 <StatBox label="필요 시간" value={formatTime(sub.dailyTimeNeeded)} unit="" color="text-slate-900" />
+              </div>
+
+              <div className="space-y-4 px-2">
+                 <div className="flex justify-between items-end">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({progressPercent}%)</p>
+                    <p className="text-xl font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                 </div>
+                 <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner">
+                    <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-xl" style={{ width: `${progressPercent}%` }}></div>
+                 </div>
+              </div>
+
+              {isMoving && (
+                <div className="mt-4 bg-slate-900 p-8 rounded-[3rem] border border-slate-800 animate-in slide-in-from-top-4">
+                  <p className="text-[10px] font-black text-slate-500 uppercase mb-6 px-2">📄 이 과목을 어느 폴더로 옮길까요?</p>
+                  <div className="flex flex-wrap gap-4">
+                     <button onClick={() => { onUpdateSubject?.({...sub, tagIds: []}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">홈(Home/Root)</button>
+                     {tagDefinitions.map(t => (
+                       <button key={t.id} onClick={() => { onUpdateSubject?.({...sub, tagIds: [t.id]}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">📂 {t.name}</button>
+                     ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
-    <div className="space-y-8">
-      {/* 1. 태그 라이브러리 */}
-      <section className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm">
-        <div className="flex justify-between items-center mb-6 px-1">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-5 bg-indigo-600 rounded-full"></span>
-            <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">태그 라이브러리</h3>
-          </div>
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setIsTagAssignMode(!isTagAssignMode)}
-              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all border-2 ${
-                isTagAssignMode 
-                  ? 'bg-indigo-600 text-white border-indigo-600' 
-                  : 'bg-white text-slate-400 border-slate-100 shadow-sm'
-              }`}
-            >
-              <span className={`text-sm font-black transition-transform ${isTagAssignMode ? 'rotate-90' : 'rotate-0'}`}>❯</span>
-            </button>
-            <button 
-              onClick={() => {
-                const newId = Math.random().toString(36).substr(2, 9);
-                const newTag: TagDefinition = { id: newId, name: '', color: COLORS[tagDefinitions.length % COLORS.length], isVisible: true };
-                if (onUpdateTags) onUpdateTags([...tagDefinitions, newTag]);
-                setTagIdBeingRenamed(newId);
-                setIsTagAssignMode(true);
-              }}
-              className="text-xs font-black text-indigo-600 bg-indigo-50 px-4 py-2.5 rounded-xl hover:bg-indigo-100 transition-all border border-indigo-100"
-            >
-              ＋ 태그 추가
-            </button>
-          </div>
+    <div className="space-y-12 animate-fade-in">
+      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-12 rounded-[4rem] border border-slate-200 shadow-sm gap-8 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none text-slate-200"><span className="text-[14rem] font-black">CORE</span></div>
+        <div className="relative z-10">
+          <h3 className="text-5xl font-black text-slate-900 flex items-center gap-6">
+            <span className="w-5 h-14 bg-indigo-600 rounded-full"></span>
+            학습 탐색기
+          </h3>
+          <p className="text-sm font-black text-slate-400 mt-4 uppercase tracking-[0.3em]">수치 적분 모델 및 통계 지표 기반 통합 분석 엔진</p>
         </div>
+        <button 
+          onClick={() => {
+            const newId = Math.random().toString(36).substr(2, 9);
+            onUpdateTags?.([...tagDefinitions, { id: newId, name: '새 폴더', color: COLORS[tagDefinitions.length % COLORS.length], isVisible: true }]);
+            setEditingId(newId);
+          }}
+          className="relative z-10 bg-slate-900 text-white px-16 py-7 rounded-[2.5rem] font-black text-sm hover:bg-indigo-600 transition-all shadow-2xl active:scale-95"
+        >
+          ＋ 새 분석 그룹 추가
+        </button>
+      </div>
 
-        <div className="flex flex-wrap gap-3">
-          {tagDefinitions.map(tag => {
-            const isEditingName = tagIdBeingRenamed === tag.id;
-            return (
-              <div 
-                key={tag.id} 
-                onClick={() => !isEditingName && handleUpdateTagDef(tag.id, { isVisible: !tag.isVisible })}
-                className={`flex items-center gap-3 px-4 py-3 rounded-2xl border-2 cursor-pointer transition-all select-none ${
-                  tag.isVisible ? 'bg-white shadow-sm' : 'bg-slate-100 opacity-40 border-slate-200 grayscale'
-                }`}
-                style={{ borderColor: tag.isVisible ? tag.color : undefined }}
-              >
-                {isEditingName ? (
-                  <input 
-                    autoFocus
-                    value={tag.name}
-                    onChange={e => handleUpdateTagDef(tag.id, { name: e.target.value })}
-                    onBlur={() => setTagIdBeingRenamed(null)}
-                    onKeyDown={e => e.key === 'Enter' && setTagIdBeingRenamed(null)}
-                    onClick={e => e.stopPropagation()}
-                    className="text-xs font-black outline-none bg-slate-50 px-2 py-1 rounded-md w-24 border border-indigo-200"
-                  />
-                ) : (
-                  <span className="text-xs font-black text-slate-700">{tag.name || '이름 없음'}</span>
-                )}
-                <div className="flex items-center gap-1 border-l pl-2 border-slate-100">
-                  <button onClick={(e) => { e.stopPropagation(); setTagIdBeingRenamed(isEditingName ? null : tag.id); }} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-300 hover:text-indigo-600">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                  </button>
-                  <button onClick={(e) => { e.stopPropagation(); handleDeleteTagDef(tag.id); }} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-300 hover:text-rose-500"><span className="text-xs font-bold">✕</span></button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* 2. 과목 카드 섹션 */}
-      <section>
-        <h3 className="text-lg font-bold text-slate-800 mb-6 px-1 flex items-center gap-2">
-          <span className="w-2 h-6 bg-blue-600 rounded-full"></span>
-          과목별 상세 분석 및 관리
-        </h3>
+      <div className="bg-slate-200/30 p-6 md:p-12 rounded-[5rem] border-4 border-dashed border-slate-300/50 min-h-[900px]">
+        <RenderTree />
         
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {filteredSubjects.map(sub => {
-            const mainTag = tagDefinitions.find(t => sub.tagIds?.includes(t.id));
-            const borderColor = mainTag ? mainTag.color : '#e2e8f0';
-
-            return (
-              <div 
-                key={sub.id} 
-                className={`bg-white rounded-[2.5rem] border-4 transition-all flex flex-col overflow-hidden hover:shadow-xl ${
-                  editingId === sub.id ? 'shadow-2xl scale-[1.02]' : 'shadow-sm'
-                }`}
-                style={{ borderColor: borderColor }}
-              >
-                {/* 카드 헤더 */}
-                <div className={`p-6 border-b flex flex-col gap-4 ${editingId === sub.id ? 'bg-indigo-50/50' : 'bg-slate-50/30'}`}>
-                  {confirmDeleteId === sub.id ? (
-                    <div className="flex items-center justify-between w-full animate-in slide-in-from-right-2">
-                      <span className="text-xs font-black text-rose-600">과목 삭제 확인</span>
-                      <div className="flex gap-2">
-                        <button onClick={() => setConfirmDeleteId(null)} className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-[10px] font-bold text-slate-500">취소</button>
-                        <button onClick={() => onDeleteSubject && onDeleteSubject(sub.id)} className="px-3 py-1.5 bg-rose-600 rounded-xl text-[10px] font-bold text-white">삭제</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-3">
-                          <h4 className="text-lg font-black text-slate-800">{sub.name}</h4>
-                          <button onClick={() => startEditing(sub)} className="text-slate-300 hover:text-indigo-600 transition-colors">
-                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : 'Day'}</span>
-                          <button onClick={() => setConfirmDeleteId(sub.id)} className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-rose-500 hover:text-white transition-all text-xs font-bold">✕</button>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 min-h-[26px]">
-                        {isTagAssignMode ? (
-                          tagDefinitions.map(tagDef => {
-                            const isSelected = sub.tagIds?.includes(tagDef.id);
-                            return (
-                              <button key={tagDef.id} onClick={() => toggleSubjectTag(sub, tagDef.id)} className={`text-[9px] font-black px-2.5 py-1 rounded-full border transition-all ${isSelected ? 'bg-white shadow-sm border-slate-200' : 'bg-transparent border-dashed border-slate-200 text-slate-300'}`} style={{ color: isSelected ? tagDef.color : undefined }}>{tagDef.name || '무제'}</button>
-                            );
-                          })
-                        ) : (
-                          tagDefinitions.filter(t => sub.tagIds?.includes(t.id)).map(tag => (
-                            <span key={tag.id} className="text-[9px] font-black px-2 py-0.5 rounded-md border border-slate-100 bg-white shadow-sm" style={{ color: tag.color }}># {tag.name || '무제'}</span>
-                          ))
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* 카드 본문 (수정/통계) */}
-                <div className="p-8 space-y-6 flex-grow">
-                  {editingId === sub.id ? (
-                    <div className="space-y-5 animate-in fade-in duration-200">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">총 페이지</label>
-                          <input type="number" value={editPages} onChange={e => handleEditPagesChange(Number(e.target.value), sub)} className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-indigo-500 rounded-2xl font-black outline-none transition-all" />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 text-indigo-500">하루 목표량 (P)</label>
-                          <input type="number" value={editDailyGoal} onChange={e => handleEditDailyGoalChange(Number(e.target.value), sub)} className="w-full p-4 bg-indigo-50/50 border-2 border-transparent focus:border-indigo-500 rounded-2xl font-black outline-none transition-all text-indigo-700" />
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">목표 완료 날짜</label>
-                        <input type="date" value={editDate} onChange={e => handleEditDateChange(e.target.value, sub)} className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-indigo-500 rounded-2xl font-black outline-none transition-all" />
-                      </div>
-                      <p className="text-[10px] text-slate-400 text-center font-bold px-1">
-                        💡 하루 목표량을 바꾸면 날짜가, 날짜를 바꾸면 목표량이 자동으로 계산됩니다.
-                      </p>
-                      <div className="flex gap-2 pt-2">
-                        <button onClick={() => setEditingId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-500">취소</button>
-                        <button onClick={() => handleSave(sub)} className="flex-[2] py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg">저장</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                        <div className="space-y-0.5"><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">평균 효율</p><p className="text-lg font-black text-slate-800 leading-tight">{sub.stats.averageTimePerPage > 0 ? `${sub.stats.averageTimePerPage.toFixed(1)}m/p` : '-'}</p></div>
-                        <div className="space-y-0.5"><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight text-blue-500">표준 편차</p><p className="text-lg font-black text-blue-600 leading-tight">{sub.stats.standardDeviation > 0 ? `±${sub.stats.standardDeviation.toFixed(1)}` : '-'}</p></div>
-                        <div className="space-y-0.5"><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight text-amber-500">잔여 분량</p><p className="text-lg font-black text-amber-600 leading-tight">{sub.remainingPages}P</p></div>
-                        <div className="space-y-0.5"><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight text-indigo-500">일일 권장량</p><p className="text-lg font-black text-indigo-600 leading-tight">{sub.recommendedDailyPages}P/일</p></div>
-                      </div>
-                      <div className="p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100 mt-2">
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">하루 권장 학습 시간</p>
-                        <div className="flex justify-between items-end">
-                           <p className="text-2xl font-black text-indigo-900">{sub.stats.averageTimePerPage > 0 ? formatTime(sub.dailyTimeNeeded) : '데이터 부족'}</p>
-                           <p className="text-[10px] font-bold text-indigo-400 pb-1 italic">D-{sub.diffDays} 기준</p>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+        {subjects.length === 0 && tagDefinitions.length === 0 && (
+          <div className="py-72 text-center opacity-10 grayscale scale-150">
+            <p className="text-[100px] mb-8">🔍</p>
+            <p className="text-xl font-black uppercase tracking-widest">데이터 없음</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
+
+const StatBox = ({ label, value, unit, color, isDark, highlight }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean }) => (
+  <div className={`flex flex-col p-4 rounded-2xl transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-md border border-slate-100 scale-105 z-10') : 'opacity-90'}`}>
+    <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1.5 tracking-tighter ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
+    <p className={`text-xl md:text-2xl font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
+      {value}<span className="text-[10px] font-bold ml-1 opacity-40">{unit}</span>
+    </p>
+  </div>
+);
