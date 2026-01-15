@@ -2,71 +2,73 @@
 import { PredictionInputs, StudyLog } from '../types';
 
 /**
- * [제공된 파이썬 수식 정밀 이식]
- * 그래프 길이 분석 (시험 점수 · 시간 절약 · 공부량 분석)
- * h1: 이전 점수, h2: 점수 변화량, x: 공부량(b), t_study: 공부 시간, t_test: 시험 시간, t_rec: 권장 시간
+ * 필요 복습 횟수 계산 (단순화된 효율 지표)
+ * 수식: (tTest / tRec) ^ 2.5
  */
-export const calculateGraphLengthAnalysis = (inputs: PredictionInputs) => {
-  const { h1, h2, b: x, tStudy, tTest, tRec } = inputs;
+export const calculateRequiredReviewCount = (tTest: number, tRec: number) => {
+  if (tRec <= 0 || tTest <= 0) return 0;
+  return Math.pow(tTest / tRec, 2.5);
+};
 
-  // 필수 조건 체크 (분모가 0이 되거나 데이터가 부적절한 경우 방지)
-  if (h1 <= 0 || x <= 0 || tRec <= 0) return { total: 0, C: 0 };
+/**
+ * 멘탈 부하량(Mental Burden) 계산 - 복습 중요도 지표
+ * 제공된 파이썬 수식을 수치 적분을 통해 구현
+ */
+export const calculateMentalBurden = (h1: number, h2: number, x: number, tStudy: number, tTest: number, tRec: number) => {
+  if (h1 <= 0 || x <= 0 || tRec <= 0 || h2 <= 0) return { total: 0, init: 0, length: 0 };
 
   try {
-    // 1. 상수 C (기울기/증폭 계수) 계산
-    // volume_ratio = ((h1 + h2)**3) / ((h1 + h2)**3 - h1**3)
-    const h_sum_cube = Math.pow(h1 + h2, 3);
-    const h1_cube = Math.pow(h1, 3);
-    const denominator = h_sum_cube - h1_cube;
-    
-    if (denominator === 0) return { total: 0, C: 0 };
+    // 1. 상수 C (학습 밀도 계수) 계산
+    const volumeNumerator = Math.pow(h1 + h2, 3);
+    const volumeDenominator = Math.pow(h1 + h2, 3) - Math.pow(h1, 3);
+    const volumeRatio = volumeNumerator / volumeDenominator;
+    const efficiency = tStudy / x;
+    const C = volumeRatio * efficiency;
 
-    const volume_ratio = h_sum_cube / denominator;
-    const efficiency = tStudy / x; // t_study / x
-    const C = volume_ratio * efficiency;
+    // 2. Part A: 초기 부하 (A=2일 때의 값)
+    const initialValue = C * Math.pow(2, 0.4);
 
-    // 2. x축 구간 설정
-    // x_start = 2.0
-    // x_end = (k**2.5) + 1  (k = t_test / t_rec)
-    const k = tTest / tRec;
-    const x_start = 2.0;
-    const x_end = Math.pow(k, 2.5) + 1;
+    // 3. Part B: 그래프의 길이 (인내의 과정)
+    const A_start = 2.0;
+    const timeRatio = tTest / tRec;
+    const A_end = Math.pow(timeRatio, 2.5);
 
-    // 구간이 역전되거나 없을 때 (수식상의 예외 처리)
-    if (x_end <= x_start) {
-      return { total: 0, C };
+    let arcLength = 0;
+    if (A_end > A_start) {
+      // 수치 적분 (사다리꼴 공식 적용, 50단계)
+      const steps = 50;
+      const h = (A_end - A_start) / steps;
+      
+      const f = (A: number) => {
+        const dy_dA = 0.4 * C * Math.pow(A, -0.6);
+        return Math.sqrt(1 + Math.pow(dy_dA, 2));
+      };
+
+      let sum = 0.5 * (f(A_start) + f(A_end));
+      for (let i = 1; i < steps; i++) {
+        sum += f(A_start + i * h);
+      }
+      arcLength = sum * h;
     }
 
-    // 3. 적분할 함수 정의
-    // y = C * x^0.4
-    // dy_dx = 0.4 * C * x^(-0.6)
-    // integrand = sqrt(1 + (dy/dx)^2)
-    const integrand = (val_x: number) => {
-      const dy_dx = 0.4 * C * Math.pow(val_x, -0.6);
-      return Math.sqrt(1 + Math.pow(dy_dx, 2));
+    return {
+      total: initialValue + arcLength,
+      init: initialValue,
+      length: arcLength
     };
-
-    // 4. 수치 적분 (사다리꼴 공식 적용, 2000개 구간으로 정밀도 확보)
-    const n = 2000;
-    const length = trapezoidalIntegration(integrand, x_start, x_end, n);
-    
-    return { total: length, C };
   } catch (e) {
-    console.error("Analysis Integration Error:", e);
-    return { total: 0, C: 0 };
+    return { total: 0, init: 0, length: 0 };
   }
 };
 
 /**
  * 학습량 예측 (Cubic 모델)
- * 수식: (b + b / (((h1 + h2) / h1)^3 - 1)) * (((h1 + h2 + h3) / (h1 + h2))^3 - 1)
  */
 export const calculateStudyBurdenV2 = (inputs: PredictionInputs) => {
   const { h1, h2, b, h3 } = inputs;
   if (h1 <= 0 || b <= 0 || h2 <= 0) return { total: 0 };
 
   try {
-    // 파이썬 수식의 구조를 그대로 반영
     const ratio1 = Math.pow((h1 + h2) / h1, 3);
     const term1 = b + (b / (ratio1 - 1));
     const ratio2 = Math.pow((h1 + h2 + h3) / (h1 + h2), 3);
@@ -77,18 +79,6 @@ export const calculateStudyBurdenV2 = (inputs: PredictionInputs) => {
   } catch (e) {
     return { total: 0 };
   }
-};
-
-/**
- * 수치 적분 도우미 (사다리꼴 공식)
- */
-const trapezoidalIntegration = (f: (x: number) => number, a: number, b: number, n: number) => {
-  const h = (b - a) / n;
-  let s = (f(a) + f(b)) / 2;
-  for (let i = 1; i < n; i++) {
-    s += f(a + i * h);
-  }
-  return s * h;
 };
 
 export const calculateStats = (logs: StudyLog[], remainingPages: number) => {
