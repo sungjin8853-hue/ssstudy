@@ -70,14 +70,7 @@ const App: React.FC = () => {
 
   const handleAddSubject = (s: Subject) => {
     setSubjects(prev => [...prev, s]);
-    const newCategory: TestCategory = {
-      id: `cat-${s.id}`,
-      name: `${s.name} 테스트 공간`,
-      subjectId: s.id,
-      difficultySpaces: []
-    };
-    setTestCategories(prev => [...prev, newCategory]);
-    setDashboardActionTab('logger'); // 계획 추가 후 로거로 전환
+    setDashboardActionTab('logger');
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
@@ -109,13 +102,14 @@ const App: React.FC = () => {
     setTestCategories(prev => prev.filter(c => c.id !== id));
   };
 
-  const handleAddDifficultySpace = (categoryId: string, name: string) => {
+  const handleAddDifficultySpace = (categoryId: string, name: string, subjectIds: string[]) => {
     setTestCategories(prev => prev.map(cat => {
       if (cat.id === categoryId) {
         const newSpace: TestDifficultySpace = {
           id: Math.random().toString(36).substr(2, 9),
           name,
-          records: []
+          records: [],
+          subjectIds: subjectIds
         };
         return { ...cat, difficultySpaces: [...cat.difficultySpaces, newSpace] };
       }
@@ -136,9 +130,10 @@ const App: React.FC = () => {
   const handleAddRecord = (categoryId: string, spaceId: string, record: TestRecord) => {
     setTestCategories(prev => prev.map(cat => {
       if (cat.id === categoryId) {
-        if (cat.subjectId) {
+        const targetSubIds = record.subjectIds || [];
+        if (targetSubIds.length > 0) {
           setSubjects(sPrev => sPrev.map(s => 
-            s.id === cat.subjectId ? { ...s, completedPages: s.completedPages + record.b } : s
+            targetSubIds.includes(s.id) ? { ...s, completedPages: s.completedPages + record.b } : s
           ));
         }
         
@@ -160,9 +155,10 @@ const App: React.FC = () => {
         const space = cat.difficultySpaces.find(s => s.id === spaceId);
         const recordToDelete = space?.records.find(r => r.id === recordId);
         
-        if (cat.subjectId && recordToDelete) {
+        const targetSubIds = recordToDelete?.subjectIds || [];
+        if (targetSubIds.length > 0 && recordToDelete) {
           setSubjects(sPrev => sPrev.map(s => 
-            s.id === cat.subjectId ? { ...s, completedPages: Math.max(0, s.completedPages - recordToDelete.b) } : s
+            targetSubIds.includes(s.id) ? { ...s, completedPages: Math.max(0, s.completedPages - recordToDelete.b) } : s
           ));
         }
 
@@ -257,6 +253,7 @@ const App: React.FC = () => {
               <Analytics 
                 subjects={subjects} 
                 logs={logs} 
+                testCategories={testCategories}
                 tagDefinitions={tagDefinitions}
                 onUpdateSubject={handleUpdateSubject} 
                 onDeleteSubject={handleDeleteSubject} 
@@ -264,7 +261,6 @@ const App: React.FC = () => {
               />
               <TodaySummary logs={logs} subjects={subjects} onUpdateLog={handleUpdateLog} />
               
-              {/* 통합 액션 허브 (Logger + Planner) */}
               <div className="bg-white rounded-[3.5rem] shadow-sm border border-slate-200 overflow-hidden animate-fade-in">
                 <div className="flex bg-slate-50 p-3 m-4 rounded-[2rem] border border-slate-100">
                   <button 
@@ -301,6 +297,7 @@ const App: React.FC = () => {
               <TestManager 
                 testCategories={testCategories} 
                 logs={logs}
+                subjects={subjects}
                 onAddCategory={handleAddCategory}
                 onDeleteCategory={handleDeleteCategory}
                 onAddDifficultySpace={handleAddDifficultySpace}
