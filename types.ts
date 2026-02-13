@@ -48,7 +48,12 @@ export interface StudyLog {
   timeSpentMinutes: number;
   timestamp: string;
   photoBase64?: string;
-  isReviewed?: boolean;
+  
+  // 복습 관련 필드 확장
+  isReviewed?: boolean; // (Legacy) 단순 복습 여부
+  reviewStep?: number;  // 현재 복습 단계 (0부터 시작)
+  nextReviewDate?: string; // 다음 복습 예정 시간 (ISO String)
+  isCondensed?: boolean;   // 축약(졸업) 여부 - true면 복습 목록에서 제외
 }
 
 export interface PredictionInputs {
