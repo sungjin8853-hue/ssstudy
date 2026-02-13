@@ -1,53 +1,49 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { StudyLog, Subject } from '../types';
 
 interface Props {
   logs: StudyLog[];
   subjects: Subject[];
-  onToggleReview: (logId: string) => void;
+  onReviewAction: (logId: string, action: 'complete' | 'condense') => void;
 }
 
-export const ReviewManager: React.FC<Props> = ({ logs, subjects, onToggleReview }) => {
+export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction }) => {
   const [activeReviewLog, setActiveReviewLog] = useState<StudyLog | null>(null);
   const [timer, setTimer] = useState(0);
 
-  // 기억도 계산 함수 (단순화된 에빙하우스 모델)
-  // R = e^(-t/S) -> t: 경과일, S: 강도(복습 시 증가)
-  const calculateRetention = (timestamp: string, isReviewed: boolean) => {
-    const hoursSince = (new Date().getTime() - new Date(timestamp).getTime()) / (1000 * 60 * 60);
-    const daysSince = hoursSince / 24;
-    // 복습을 한 경우 기억 지속 시간(S)을 2배로 가정 (간단한 모델)
-    const stability = isReviewed ? 14 : 4; 
-    const retention = Math.exp(-daysSince / stability);
-    return Math.max(0, Math.min(100, Math.round(retention * 100)));
-  };
-
-  // 복습 추천: 임계 주기(1,3,7,14,30일)에 해당하며 '가장 오래된 것'부터 정렬
-  const recommendations = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  // 현재 시각 기준, 복습이 필요한 항목 필터링 (condensed 제외)
+  // 정렬: 가장 오래 기다린(Next Review Date가 과거인) 순서 -> Oldest First
+  const dueReviews = useMemo(() => {
+    const now = new Date().getTime();
     return logs
+      .filter(log => !log.isCondensed) // 축약된 것 제외
       .filter(log => {
-        const logDate = new Date(log.timestamp);
-        logDate.setHours(0, 0, 0, 0);
-        const diffDays = Math.floor((today.getTime() - logDate.getTime()) / (1000 * 60 * 60 * 24));
-        // 특정 주기에 도달했거나, 기억도가 40% 이하로 떨어진 미복습 항목들
-        const retention = calculateRetention(log.timestamp, !!log.isReviewed);
-        const isCycleDay = [1, 3, 7, 14, 30].includes(diffDays);
-        return (isCycleDay || retention < 40) && !log.isReviewed;
+        // nextReviewDate가 없으면(legacy) 즉시 대상으로 간주
+        const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
+        return nextReview <= now;
       })
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()); // 오래된 것 우선
+      .sort((a, b) => {
+        // Next Review Date 오름차순 (가장 과거인 것부터 = 가장 급한 것)
+        const dateA = a.nextReviewDate ? new Date(a.nextReviewDate).getTime() : 0;
+        const dateB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
+        return dateA - dateB;
+      });
   }, [logs]);
 
-  // 아카이브: 기억도가 낮은(망각이 많이 진행된) 순서로 정렬하여 직관성 제공
-  const archiveLogs = useMemo(() => {
-    return [...logs].sort((a, b) => {
-      const retA = calculateRetention(a.timestamp, !!a.isReviewed);
-      const retB = calculateRetention(b.timestamp, !!b.isReviewed);
-      return retA - retB; // 기억도 낮은 순(복습이 급한 순)
-    }).slice(0, 24);
+  // 대기 중인(미래의) 복습 목록
+  const upcomingReviews = useMemo(() => {
+    const now = new Date().getTime();
+    return logs
+      .filter(log => !log.isCondensed)
+      .filter(log => {
+        const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
+        return nextReview > now;
+      })
+      .sort((a, b) => {
+        const dateA = a.nextReviewDate ? new Date(a.nextReviewDate).getTime() : 0;
+        const dateB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
+        return dateA - dateB;
+      });
   }, [logs]);
 
   const startReviewSession = (log: StudyLog) => {
@@ -57,10 +53,17 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onToggleReview 
 
   const finishReviewSession = () => {
     if (activeReviewLog) {
-      onToggleReview(activeReviewLog.id);
+      onReviewAction(activeReviewLog.id, 'complete');
       setActiveReviewLog(null);
     }
   };
+
+  const handleCondense = (logId: string) => {
+      if(window.confirm('이 내용을 "축약(졸업)" 처리하시겠습니까?\n더 이상 복습 목록에 나타나지 않습니다.')) {
+          onReviewAction(logId, 'condense');
+          setActiveReviewLog(null); // 혹시 열려있다면 닫기
+      }
+  }
 
   useEffect(() => {
     let interval: number;
@@ -78,6 +81,18 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onToggleReview 
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  const getNextIntervalLabel = (step?: number) => {
+      const s = step || 0;
+      // Step 0(2시간 후 복습)을 수행 중 -> 다음은 1일 후
+      if (s === 0) return "1일 후";
+      if (s === 1) return "4일 후";
+      if (s === 2) return "7일 후";
+      if (s === 3) return "14일 후";
+      if (s === 4) return "28일 후";
+      if (s === 5) return "56일 후";
+      return "장기 기억";
+  }
+
   return (
     <div className="space-y-10 relative">
       {/* 복습 세션 오버레이 */}
@@ -87,7 +102,10 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onToggleReview 
             <div className="flex justify-between items-center text-white">
               <div>
                 <h4 className="text-2xl font-black">{subjects.find(s => s.id === activeReviewLog.subjectId)?.name} 복습 중</h4>
-                <p className="text-slate-400 text-sm">{new Date(activeReviewLog.timestamp).toLocaleDateString()} 학습분</p>
+                <div className="flex items-center gap-3 mt-1">
+                   <p className="text-slate-400 text-sm">{new Date(activeReviewLog.timestamp).toLocaleDateString()} 학습분</p>
+                   <span className="px-2 py-0.5 bg-indigo-500 rounded text-[10px] font-bold text-white">현재 단계: {activeReviewLog.reviewStep || 0}</span>
+                </div>
               </div>
               <div className="text-right">
                 <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest">진행 시간</p>
@@ -111,116 +129,106 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onToggleReview 
             </div>
 
             <div className="flex gap-4">
-              <button onClick={() => setActiveReviewLog(null)} className="flex-1 py-4 rounded-2xl bg-slate-700 text-white font-bold hover:bg-slate-600 transition-colors">중단</button>
-              <button onClick={finishReviewSession} className="flex-[2] py-4 rounded-2xl bg-indigo-600 text-white font-bold text-lg hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-900/20">복습 완료</button>
+              <button onClick={() => setActiveReviewLog(null)} className="flex-1 py-4 rounded-2xl bg-slate-700 text-white font-bold hover:bg-slate-600 transition-colors">잠시 중단</button>
+              <button onClick={() => handleCondense(activeReviewLog.id)} className="flex-1 py-4 rounded-2xl bg-slate-100 text-slate-900 font-bold hover:bg-white transition-colors">축약 (졸업)</button>
+              <button onClick={finishReviewSession} className="flex-[2] py-4 rounded-2xl bg-indigo-600 text-white font-bold text-lg hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-900/20">
+                  복습 완료 ({getNextIntervalLabel(activeReviewLog.reviewStep)})
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 1. 복습 추천 섹션 (오래된 것 중심) */}
+      {/* 1. 오늘 복습해야 할 내용 (Priority Queue) */}
       <section>
-        <div className="flex justify-between items-end mb-4 px-1">
+        <div className="flex justify-between items-end mb-6 px-2">
           <div>
-            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              <span className="p-1.5 bg-orange-100 text-orange-600 rounded-lg text-sm">🔥</span> 
-              우선 순위 복습 추천
+            <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+              <span className="p-2 bg-rose-100 text-rose-600 rounded-xl text-lg">⚡</span> 
+              오늘의 복습 큐 (Queue)
             </h3>
-            <p className="text-xs text-slate-400 mt-1">망각이 가장 많이 진행된 오래된 학습부터 보여줍니다.</p>
+            <p className="text-xs text-slate-400 mt-2 font-bold">가장 오래 기다린(시급한) 항목부터 순서대로 표시됩니다.</p>
           </div>
-          <span className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-md">{recommendations.length}개 대기 중</span>
+          <span className="text-sm font-black text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg">{dueReviews.length}개 대기 중</span>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {recommendations.length > 0 ? recommendations.map(log => (
-            <ReviewCard 
-              key={log.id} 
-              log={log} 
-              retention={calculateRetention(log.timestamp, !!log.isReviewed)}
-              subjectName={subjects.find(s => s.id === log.subjectId)?.name || '과목 없음'} 
-              onStartReview={() => startReviewSession(log)}
-            />
+        <div className="space-y-4">
+          {dueReviews.length > 0 ? dueReviews.map((log, idx) => (
+            <div key={log.id} className="bg-white p-6 rounded-[2rem] border-2 border-rose-100 hover:border-rose-300 transition-all shadow-sm flex flex-col md:flex-row md:items-center gap-6 group">
+                <div className="flex items-center gap-4 flex-[2]">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center font-black text-xl shadow-inner">
+                        {idx + 1}
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2 mb-1">
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-bold">Step {log.reviewStep || 0}</span>
+                            <span className="text-[10px] text-slate-400">{new Date(log.timestamp).toLocaleDateString()} 학습</span>
+                        </div>
+                        <h4 className="text-xl font-black text-slate-800">{subjects.find(s => s.id === log.subjectId)?.name || '과목 없음'}</h4>
+                    </div>
+                </div>
+                
+                <div className="flex items-center gap-3 flex-1 justify-end">
+                    <button 
+                        onClick={() => handleCondense(log.id)}
+                        className="px-5 py-3 rounded-xl bg-slate-100 text-slate-500 font-bold text-xs hover:bg-slate-200 transition-all"
+                    >
+                        축약 (졸업)
+                    </button>
+                    <button 
+                        onClick={() => startReviewSession(log)}
+                        className="flex-1 md:flex-none px-8 py-3 rounded-xl bg-rose-600 text-white font-black text-sm hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95"
+                    >
+                        지금 복습하기
+                    </button>
+                </div>
+            </div>
           )) : (
-            <div className="col-span-full py-12 text-center bg-white rounded-2xl border-2 border-dashed border-slate-100 text-slate-400 text-sm">
-              <p className="text-2xl mb-2">🎉</p>
-              완벽합니다! 지금 당장 급한 복습 항목이 없습니다.
+            <div className="py-20 text-center bg-white rounded-[2.5rem] border-2 border-dashed border-slate-200">
+              <span className="text-4xl block mb-4">🎉</span>
+              <h4 className="text-lg font-black text-slate-700">현재 대기 중인 복습이 없습니다!</h4>
+              <p className="text-xs text-slate-400 mt-2">모든 복습을 완료했거나, 아직 도래하지 않았습니다.</p>
             </div>
           )}
         </div>
       </section>
 
-      {/* 2. 전체 학습 아카이브 (기억도 낮은 순 정렬) */}
-      <section>
-        <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2 px-1">
-          <span className="p-1.5 bg-blue-100 text-blue-600 rounded-lg text-sm">🧠</span> 
-          망각 진행도 기반 아카이브
+      {/* 2. 다가오는 복습 (Upcoming) */}
+      <section className="opacity-80 hover:opacity-100 transition-opacity">
+        <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2 px-2 mt-12">
+          <span className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg text-sm">⏳</span> 
+          다가오는 복습 일정
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {archiveLogs.map(log => {
-            const retention = calculateRetention(log.timestamp, !!log.isReviewed);
-            return (
-              <div key={log.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col group hover:shadow-md transition-all">
-                <div className="relative h-28 w-full overflow-hidden bg-slate-50">
-                  {log.photoBase64 ? (
-                    <img src={log.photoBase64} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="Note" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-300 text-[10px]">이미지 없음</div>
-                  )}
-                  <div className="absolute inset-0 bg-slate-900/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button onClick={() => startReviewSession(log)} className="bg-white text-slate-900 text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg">복습하기</button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {upcomingReviews.map(log => {
+             const timeLeft = log.nextReviewDate 
+                ? Math.ceil((new Date(log.nextReviewDate).getTime() - new Date().getTime()) / (1000 * 60 * 60)) 
+                : 0;
+             const timeLeftStr = timeLeft > 24 ? `${Math.ceil(timeLeft/24)}일 후` : `${timeLeft}시간 후`;
+
+             return (
+              <div key={log.id} className="bg-white p-5 rounded-2xl border border-slate-200 flex flex-col justify-between h-32 relative overflow-hidden group">
+                  <div className="flex justify-between items-start z-10">
+                      <div>
+                          <p className="text-[10px] font-bold text-slate-400">Step {log.reviewStep || 0}</p>
+                          <p className="font-bold text-slate-800 mt-1">{subjects.find(s => s.id === log.subjectId)?.name}</p>
+                      </div>
+                      <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-black">{timeLeftStr}</span>
                   </div>
-                  {/* 기억도 뱃지 */}
-                  <div className={`absolute top-2 right-2 px-1.5 py-0.5 rounded text-[9px] font-bold text-white shadow-sm ${retention < 40 ? 'bg-red-500' : retention < 70 ? 'bg-orange-500' : 'bg-green-500'}`}>
-                    기억도 {retention}%
+                  <div className="flex justify-between items-end z-10">
+                      <p className="text-[10px] text-slate-400">{new Date(log.timestamp).toLocaleDateString()}</p>
+                      <button onClick={() => handleCondense(log.id)} className="text-[10px] text-slate-300 hover:text-rose-500 transition-colors">축약하기</button>
                   </div>
-                </div>
-                <div className="p-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <p className="font-bold text-slate-800 text-xs truncate flex-grow mr-2">{subjects.find(s => s.id === log.subjectId)?.name}</p>
-                    <span className="text-[9px] text-slate-400 whitespace-nowrap">{new Date(log.timestamp).toLocaleDateString()}</span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-1 rounded-full mt-2 overflow-hidden">
-                    <div className={`h-full transition-all duration-1000 ${retention < 40 ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${retention}%` }}></div>
-                  </div>
-                </div>
+                  {/* Progress Bar Background visual */}
+                  <div className="absolute bottom-0 left-0 h-1 bg-indigo-500 w-full opacity-10"></div>
               </div>
-            );
+             );
           })}
         </div>
+        {upcomingReviews.length === 0 && (
+            <p className="text-center text-slate-400 text-xs italic py-8">예정된 복습 일정이 없습니다.</p>
+        )}
       </section>
-    </div>
-  );
-};
-
-const ReviewCard: React.FC<{ log: StudyLog; subjectName: string; retention: number; onStartReview: () => void }> = ({ log, subjectName, retention, onStartReview }) => {
-  const diffDays = Math.floor((new Date().getTime() - new Date(log.timestamp).getTime()) / (1000 * 60 * 60 * 24));
-  
-  return (
-    <div className="bg-white p-5 rounded-2xl border-2 border-slate-100 flex items-center gap-4 shadow-sm hover:border-orange-300 transition-all group relative overflow-hidden">
-      {/* 배경 기억도 게이지 (희미하게) */}
-      <div className="absolute left-0 bottom-0 top-0 w-1 bg-orange-500 opacity-20 group-hover:opacity-100 transition-opacity" style={{ height: '100%' }}></div>
-      
-      <div className="flex-grow">
-        <div className="flex items-center gap-2 mb-2">
-          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${diffDays > 7 ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'}`}>
-            {diffDays}일째 방치 중
-          </span>
-          <span className="text-[10px] font-bold text-slate-400">학습일: {new Date(log.timestamp).toLocaleDateString()}</span>
-        </div>
-        <p className="font-black text-slate-800 text-xl mb-1">{subjectName}</p>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium text-slate-500">예상 기억 유지력:</span>
-          <span className={`text-xs font-black ${retention < 30 ? 'text-red-500' : 'text-orange-600'}`}>{retention}%</span>
-        </div>
-      </div>
-
-      <button 
-        onClick={onStartReview}
-        className="w-16 h-16 rounded-2xl bg-slate-900 text-white flex flex-col items-center justify-center hover:bg-orange-600 transition-all shadow-lg group-hover:scale-110"
-      >
-        <span className="text-xl">🚀</span>
-        <span className="text-[10px] font-black mt-1">복습</span>
-      </button>
     </div>
   );
 };
