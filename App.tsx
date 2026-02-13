@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord, TagDefinition } from './types';
 import { SubjectPlanner } from './components/SubjectPlanner';
@@ -19,6 +18,14 @@ const App: React.FC = () => {
   const [dashboardActionTab, setDashboardActionTab] = useState<'logger' | 'planner'>('logger');
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
 
+  // 커스텀 확인 모달 상태
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    message: string;
+    subMessage?: string;
+    onConfirm: () => void;
+  }>({ isOpen: false, message: '', onConfirm: () => {} });
+
   const todayStr = useMemo(() => {
     const d = new Date();
     const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
@@ -35,7 +42,17 @@ const App: React.FC = () => {
       
       if (savedSubs) setSubjects(JSON.parse(savedSubs) || []);
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
-      if (savedLogs) setLogs(JSON.parse(savedLogs) || []);
+      if (savedLogs) {
+        // 레거시 데이터 마이그레이션: nextReviewDate가 없으면 timestamp로 초기화
+        const loadedLogs: StudyLog[] = JSON.parse(savedLogs) || [];
+        const migratedLogs = loadedLogs.map(log => ({
+          ...log,
+          reviewStep: log.reviewStep ?? 0,
+          nextReviewDate: log.nextReviewDate ?? log.timestamp, // 과거 기록은 이미 복습 시점이 도래한 것으로 간주
+          isCondensed: log.isCondensed ?? false
+        }));
+        setLogs(migratedLogs);
+      }
       if (savedTags) setTagDefinitions(JSON.parse(savedTags) || []);
     } catch (e) {
       console.error("Failed to load data from localStorage", e);
@@ -68,6 +85,19 @@ const App: React.FC = () => {
     fetchAiTip();
   }, []);
 
+  // 확인 모달 열기 함수
+  const openConfirm = (message: string, subMessage: string, onConfirm: () => void) => {
+    setConfirmModal({
+      isOpen: true,
+      message,
+      subMessage,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
+
   const handleAddSubject = (s: Subject) => {
     setSubjects(prev => [...prev, s]);
     setDashboardActionTab('logger');
@@ -78,13 +108,40 @@ const App: React.FC = () => {
   };
 
   const handleDeleteSubject = (id: string) => {
-    setSubjects(prev => prev.filter(s => s.id !== id));
-    setLogs(prev => prev.filter(l => l.subjectId !== id));
-    setTestCategories(prev => prev.filter(c => c.subjectId !== id));
+    openConfirm(
+      '과목을 삭제하시겠습니까?',
+      '이 과목에 연결된 모든 학습 기록과 통계가 영구적으로 사라집니다.',
+      () => {
+        setSubjects(prev => prev.filter(s => s.id !== id));
+        setLogs(prev => prev.filter(l => l.subjectId !== id));
+        setTestCategories(prev => prev.filter(c => c.subjectId !== id));
+      }
+    );
   };
 
   const handleUpdateTags = (tags: TagDefinition[]) => {
     setTagDefinitions(tags);
+  };
+
+  const handleDeleteFolder = (folderId: string) => {
+    openConfirm(
+      '폴더를 삭제하시겠습니까?',
+      '폴더 안의 과목들은 삭제되지 않고 최상위 목록(Root)으로 이동합니다.',
+      () => {
+        const getTargetFolderIds = (rootId: string, allTags: TagDefinition[]): string[] => {
+            const children = allTags.filter(t => t.parentId === rootId);
+            const childIds = children.flatMap(c => getTargetFolderIds(c.id, allTags));
+            return [rootId, ...childIds];
+        };
+        const foldersToRemove = getTargetFolderIds(folderId, tagDefinitions);
+        setTagDefinitions(prev => [...prev.filter(t => !foldersToRemove.includes(t.id))]);
+        setSubjects(prev => prev.map(sub => {
+            if (!sub.tagIds || sub.tagIds.length === 0) return sub;
+            const newTagIds = sub.tagIds.filter(tid => !foldersToRemove.includes(tid));
+            return { ...sub, tagIds: newTagIds };
+        }));
+      }
+    );
   };
 
   const handleAddCategory = (name: string, subjectId?: string) => {
@@ -98,8 +155,9 @@ const App: React.FC = () => {
   };
 
   const handleDeleteCategory = (id: string) => {
-    if (!confirm('이 시험 공간을 삭제하시겠습니까?')) return;
-    setTestCategories(prev => prev.filter(c => c.id !== id));
+    openConfirm('시험 공간을 삭제하시겠습니까?', '내부의 모든 테스트 기록이 함께 삭제됩니다.', () => {
+      setTestCategories(prev => prev.filter(c => c.id !== id));
+    });
   };
 
   const handleAddDifficultySpace = (categoryId: string, name: string, subjectIds: string[]) => {
@@ -118,13 +176,14 @@ const App: React.FC = () => {
   };
 
   const handleDeleteDifficultySpace = (categoryId: string, spaceId: string) => {
-    if (!confirm('이 난이도 공간을 삭제하시겠습니까?')) return;
-    setTestCategories(prev => prev.map(cat => {
-      if (cat.id === categoryId) {
-        return { ...cat, difficultySpaces: cat.difficultySpaces.filter(s => s.id !== spaceId) };
-      }
-      return cat;
-    }));
+    openConfirm('난이도 공간을 삭제하시겠습니까?', '해당 공간의 모든 기록이 사라집니다.', () => {
+      setTestCategories(prev => prev.map(cat => {
+        if (cat.id === categoryId) {
+          return { ...cat, difficultySpaces: cat.difficultySpaces.filter(s => s.id !== spaceId) };
+        }
+        return cat;
+      }));
+    });
   };
 
   const handleAddRecord = (categoryId: string, spaceId: string, record: TestRecord) => {
@@ -175,7 +234,15 @@ const App: React.FC = () => {
   };
   
   const handleLogSession = (log: StudyLog) => {
-    setLogs(prev => [...prev, log]);
+    // 새 로그 생성 시: 즉시 복습이 아닌 2시간 뒤부터 시작
+    const newLog: StudyLog = {
+        ...log,
+        reviewStep: 0,
+        // 현재 시간 + 2시간
+        nextReviewDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        isCondensed: false
+    };
+    setLogs(prev => [...prev, newLog]);
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
         return { ...sub, completedPages: sub.completedPages + log.pagesRead };
@@ -201,14 +268,73 @@ const App: React.FC = () => {
     }
   };
 
-  const handleToggleReview = (logId: string) => {
-    setLogs(prev => prev.map(log => 
-      log.id === logId ? { ...log, isReviewed: !log.isReviewed } : log
-    ));
+  // 복습 액션 처리 (완료 또는 축약)
+  const handleReviewAction = (logId: string, action: 'complete' | 'condense') => {
+    setLogs(prev => prev.map(log => {
+        if (log.id !== logId) return log;
+
+        if (action === 'condense') {
+            return { ...log, isCondensed: true };
+        }
+
+        // 복습 완료 시 다음 주기 계산
+        // 주기: 2시간(초기) -> 1일 -> 4일 -> 7일 -> 14일 -> 28일 -> (이후 2배씩)
+        const currentStep = log.reviewStep || 0;
+        let nextInterval = 0;
+
+        // currentStep은 "현재 완료한 단계"가 아니라 "도래한 단계"
+        // 즉, Step 0은 "2시간 후" 복습을 의미함.
+        // Step 0을 완료하면 다음은 "1일 후"여야 함.
+        
+        if (currentStep === 0) nextInterval = 1 * 24 * 60 * 60 * 1000; // 1일
+        else if (currentStep === 1) nextInterval = 4 * 24 * 60 * 60 * 1000; // 4일
+        else if (currentStep === 2) nextInterval = 7 * 24 * 60 * 60 * 1000; // 7일
+        else if (currentStep === 3) nextInterval = 14 * 24 * 60 * 60 * 1000; // 14일
+        else if (currentStep === 4) nextInterval = 28 * 24 * 60 * 60 * 1000; // 28일
+        else {
+            // Step 5 완료 시 (28일 지난 시점) -> 다음은 56일
+            // 28 * 2^(step-4)
+            const multiplier = Math.pow(2, currentStep - 4);
+            nextInterval = 28 * 24 * 60 * 60 * 1000 * multiplier;
+        }
+
+        const nextDate = new Date(Date.now() + nextInterval);
+
+        return {
+            ...log,
+            isReviewed: true, // 레거시 호환용
+            reviewStep: currentStep + 1,
+            nextReviewDate: nextDate.toISOString()
+        };
+    }));
   };
 
   return (
     <div className="min-h-screen pb-20 md:pb-0 md:pl-64 bg-slate-50">
+      {/* 커스텀 확인 모달 */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-[2.5rem] p-10 max-w-sm w-full shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
+            <h3 className="text-2xl font-black text-slate-900 mb-4 leading-tight">{confirmModal.message}</h3>
+            {confirmModal.subMessage && <p className="text-slate-500 font-medium mb-8 leading-relaxed">{confirmModal.subMessage}</p>}
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))} 
+                className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-black transition-colors"
+              >
+                취소
+              </button>
+              <button 
+                onClick={confirmModal.onConfirm} 
+                className="flex-1 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black shadow-lg shadow-rose-200 transition-colors"
+              >
+                삭제하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <nav className="hidden md:flex flex-col w-64 bg-white h-screen border-r border-slate-200 fixed left-0 top-0 p-6 z-40">
         <div className="mb-10 flex items-center gap-3">
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-xl font-bold">W</div>
@@ -258,6 +384,7 @@ const App: React.FC = () => {
                 onUpdateSubject={handleUpdateSubject} 
                 onDeleteSubject={handleDeleteSubject} 
                 onUpdateTags={handleUpdateTags}
+                onDeleteFolder={handleDeleteFolder}
               />
               <TodaySummary logs={logs} subjects={subjects} onUpdateLog={handleUpdateLog} />
               
@@ -309,7 +436,7 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
-          {activeTab === 'review' && <ReviewManager logs={logs} subjects={subjects} onToggleReview={handleToggleReview} />}
+          {activeTab === 'review' && <ReviewManager logs={logs} subjects={subjects} onReviewAction={handleReviewAction} />}
         </div>
       </main>
     </div>
