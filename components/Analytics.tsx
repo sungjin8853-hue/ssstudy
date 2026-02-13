@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import { Subject, StudyLog, TagDefinition, TestCategory, TestRecord } from '../types';
 import { calculateStats, calculateRequiredReviewCount, calculateMentalBurden, calculateStudyBurdenV2 } from '../utils/math';
@@ -11,6 +10,7 @@ interface Props {
   onUpdateSubject?: (updated: Subject) => void;
   onDeleteSubject?: (id: string) => void;
   onUpdateTags?: (tags: TagDefinition[]) => void;
+  onDeleteFolder?: (folderId: string) => void;
 }
 
 const COLORS = [
@@ -25,11 +25,15 @@ export const Analytics: React.FC<Props> = ({
   tagDefinitions,
   onUpdateSubject, 
   onDeleteSubject,
-  onUpdateTags
+  onUpdateTags,
+  onDeleteFolder
 }) => {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
+  
+  // 수정 폼 상태 확장 (이름, 총페이지, 목표날짜)
+  const [editForm, setEditForm] = useState<{name: string, totalPages: number, targetDate: string} | null>(null);
 
   const toggleFolder = (id: string) => {
     const next = new Set(expandedFolderIds);
@@ -160,14 +164,23 @@ export const Analytics: React.FC<Props> = ({
                       <p className={`text-[10px] font-black uppercase mt-2 tracking-[0.2em] ${isExpanded ? 'text-indigo-300' : 'text-slate-400'}`}>{stats.count}개 분석 통합 리포트</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button onClick={() => setMovingItemId(isMoving ? null : folder.id)} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
-                    <button onClick={() => setEditingId(folder.id)} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all">✎</button>
-                    <button onClick={() => onUpdateTags?.(tagDefinitions.filter(t => t.id !== folder.id))} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 transition-all">✕</button>
+                  <div className="flex items-center gap-3 relative z-30">
+                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMovingItemId(isMoving ? null : folder.id); }} onMouseDown={e => e.stopPropagation()} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all cursor-pointer ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
+                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingId(folder.id); }} onMouseDown={e => e.stopPropagation()} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer">✎</button>
+                    <button 
+                        onClick={(e) => { 
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (onDeleteFolder) onDeleteFolder(folder.id);
+                        }}
+                        onMouseDown={e => e.stopPropagation()}
+                        className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                    >
+                        ✕
+                    </button>
                   </div>
                 </div>
 
-                {/* 폴더 통합 데이터 대시보드 (공식 + 기존지표 통합) */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
                    <StatBox label="예측(b)" value={stats.sumPred.toFixed(1)} unit="P" color="text-indigo-400" highlight isDark={isExpanded} />
                    <StatBox label="부하(L)" value={stats.sumImp.toFixed(2)} unit="" color="text-rose-400" highlight isDark={isExpanded} />
@@ -189,12 +202,12 @@ export const Analytics: React.FC<Props> = ({
                 </div>
 
                 {isMoving && (
-                  <div className="mt-4 bg-white/5 p-6 rounded-[2.5rem] border border-white/10 animate-fade-in">
+                  <div className="mt-4 bg-white/5 p-6 rounded-[2.5rem] border border-white/10 animate-fade-in relative z-30">
                     <p className="text-[10px] font-black text-indigo-400 uppercase mb-4 px-2">📂 이 폴더를 어디로 이동할까요?</p>
                     <div className="flex flex-wrap gap-3">
-                       <button onClick={() => { onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, parentId: undefined} : t)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">최상위(Root)</button>
+                       <button onClick={(e) => { e.stopPropagation(); onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, parentId: undefined} : t)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">최상위(Root)</button>
                        {tagDefinitions.filter(t => t.id !== folder.id).map(t => (
-                         <button key={t.id} onClick={() => { onUpdateTags?.(tagDefinitions.map(tg => tg.id === folder.id ? {...tg, parentId: t.id} : tg)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">📂 {t.name}</button>
+                         <button key={t.id} onClick={(e) => { e.stopPropagation(); onUpdateTags?.(tagDefinitions.map(tg => tg.id === folder.id ? {...tg, parentId: t.id} : tg)); setMovingItemId(null); }} className="px-6 py-3 bg-white text-slate-900 rounded-2xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">📂 {t.name}</button>
                        ))}
                     </div>
                   </div>
@@ -207,30 +220,98 @@ export const Analytics: React.FC<Props> = ({
 
         {subjs.map(sub => {
           const isMoving = movingItemId === sub.id;
+          const isEditing = editingId === sub.id;
           const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
 
           return (
             <div key={sub.id} className="flex flex-col gap-8 p-12 bg-white border-2 border-slate-100 rounded-[4rem] hover:shadow-2xl hover:border-indigo-400 transition-all group/subj relative overflow-hidden">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-6">
-                  <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all shadow-sm">
+                <div className="flex items-center gap-6 flex-grow">
+                  <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all shadow-sm flex-shrink-0">
                     <span className="text-4xl">📄</span>
                   </div>
-                  <div>
-                    <h4 className="text-3xl font-black text-slate-900">{sub.name}</h4>
-                    <div className="flex items-center gap-4 mt-3">
-                      <span className={`text-[10px] font-black px-4 py-1.5 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터 정밀 분석</span>
-                    </div>
+                  <div className="w-full">
+                    {isEditing ? (
+                       <input 
+                           value={editForm?.name || ''} 
+                           onChange={e => setEditForm(prev => prev ? {...prev, name: e.target.value} : null)}
+                           className="text-2xl md:text-3xl font-black text-slate-900 bg-slate-50 border-b-2 border-indigo-500 outline-none w-full py-1"
+                           autoFocus
+                           placeholder="과목명"
+                       />
+                    ) : (
+                       <h4 className="text-2xl md:text-3xl font-black text-slate-900">{sub.name}</h4>
+                    )}
+                    {isEditing ? (
+                       <div className="mt-2 flex items-center gap-2">
+                           <span className="text-xs font-bold text-indigo-400">목표일:</span>
+                           <input
+                               type="date"
+                               value={editForm?.targetDate || ''}
+                               onChange={e => setEditForm(prev => prev ? {...prev, targetDate: e.target.value} : null)}
+                               className="bg-slate-100 border-b-2 border-indigo-300 text-slate-800 font-bold text-sm py-1 px-2 outline-none rounded-lg"
+                           />
+                       </div>
+                    ) : (
+                        <div className="flex items-center gap-4 mt-3">
+                          <span className={`text-[10px] font-black px-4 py-1.5 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden md:inline">실시간 학습 데이터 정밀 분석</span>
+                        </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setMovingItemId(isMoving ? null : sub.id)} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
-                  <button onClick={() => onDeleteSubject?.(sub.id)} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 transition-all">✕</button>
+                <div className="flex items-center gap-3 relative z-30 flex-shrink-0">
+                  {isEditing ? (
+                     <button 
+                        onClick={(e) => { 
+                            e.preventDefault();
+                            e.stopPropagation(); 
+                            if (onUpdateSubject && editForm) {
+                                onUpdateSubject({ 
+                                    ...sub, 
+                                    name: editForm.name, 
+                                    totalPages: Number(editForm.totalPages),
+                                    targetDate: editForm.targetDate
+                                });
+                            }
+                            setEditingId(null);
+                            setEditForm(null);
+                        }} 
+                        className="w-12 h-12 flex items-center justify-center rounded-2xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all cursor-pointer shadow-lg active:scale-95"
+                     >
+                        ✓
+                     </button>
+                  ) : (
+                    <>
+                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMovingItemId(isMoving ? null : sub.id); }} onMouseDown={e => e.stopPropagation()} className={`w-12 h-12 flex items-center justify-center rounded-2xl transition-all cursor-pointer ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
+                      <button 
+                          onClick={(e) => { 
+                            e.preventDefault(); 
+                            e.stopPropagation(); 
+                            setEditingId(sub.id);
+                            setEditForm({ name: sub.name, totalPages: sub.totalPages, targetDate: sub.targetDate });
+                          }} 
+                          onMouseDown={e => e.stopPropagation()}
+                          className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer"
+                      >
+                          ✎
+                      </button>
+                      <button 
+                          onClick={(e) => { 
+                            e.preventDefault(); 
+                            e.stopPropagation(); 
+                            if (onDeleteSubject) onDeleteSubject(sub.id); 
+                          }} 
+                          onMouseDown={e => e.stopPropagation()}
+                          className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                      >
+                          ✕
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              {/* 과목별 모든 지표 노출 (공식 3종 + 기존 5종) */}
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 p-8 bg-slate-50 rounded-[3rem] border border-slate-100">
                  <StatBox label="예측(b)" value={sub.formula.predicted.toFixed(1)} unit="P" color="text-indigo-600" highlight />
                  <StatBox label="부하(L)" value={sub.formula.impact.toFixed(2)} unit="" color="text-rose-600" highlight />
@@ -245,7 +326,20 @@ export const Analytics: React.FC<Props> = ({
               <div className="space-y-4 px-2">
                  <div className="flex justify-between items-end">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({progressPercent}%)</p>
-                    <p className="text-xl font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                    {isEditing ? (
+                        <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1 rounded-xl">
+                            <span className="text-xs font-bold text-indigo-400">목표 P 수정:</span>
+                            <input 
+                                type="number"
+                                value={editForm?.totalPages || 0}
+                                onChange={e => setEditForm(prev => prev ? {...prev, totalPages: Number(e.target.value)} : null)}
+                                className="w-20 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
+                            />
+                            <span className="text-xs font-black text-indigo-400">Page</span>
+                        </div>
+                    ) : (
+                        <p className="text-xl font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                    )}
                  </div>
                  <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner">
                     <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-xl" style={{ width: `${progressPercent}%` }}></div>
@@ -253,12 +347,12 @@ export const Analytics: React.FC<Props> = ({
               </div>
 
               {isMoving && (
-                <div className="mt-4 bg-slate-900 p-8 rounded-[3rem] border border-slate-800 animate-in slide-in-from-top-4">
+                <div className="mt-4 bg-slate-900 p-8 rounded-[3rem] border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
                   <p className="text-[10px] font-black text-slate-500 uppercase mb-6 px-2">📄 이 과목을 어느 폴더로 옮길까요?</p>
                   <div className="flex flex-wrap gap-4">
-                     <button onClick={() => { onUpdateSubject?.({...sub, tagIds: []}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">홈(Home/Root)</button>
+                     <button onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: []}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">홈(Home/Root)</button>
                      {tagDefinitions.map(t => (
-                       <button key={t.id} onClick={() => { onUpdateSubject?.({...sub, tagIds: [t.id]}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">📂 {t.name}</button>
+                       <button key={t.id} onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: [t.id]}); setMovingItemId(null); }} className="px-8 py-4 bg-slate-800 hover:bg-indigo-600 text-white rounded-2xl font-black text-xs shadow-lg transition-all border border-slate-700">📂 {t.name}</button>
                      ))}
                   </div>
                 </div>
