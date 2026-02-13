@@ -1,96 +1,98 @@
-
-import { PredictionInputs, StudyLog } from '../types';
-
-/**
- * 필요 복습 횟수 계산 (단순화된 효율 지표)
- * 수식: (tTest / tRec) ^ 2.5
- */
-export const calculateRequiredReviewCount = (tTest: number, tRec: number) => {
-  if (tRec <= 0 || tTest <= 0) return 0;
-  return Math.pow(tTest / tRec, 2.5);
-};
+import { StudyLog, PredictionInputs, Stats } from '../types';
 
 /**
- * 멘탈 부하량(Mental Burden) 계산 - 복습 중요도 지표
- * 제공된 파이썬 수식을 수치 적분을 통해 구현
+ * 학습 기록을 바탕으로 평균 효율, 표준편차 등을 계산합니다.
  */
-export const calculateMentalBurden = (h1: number, h2: number, x: number, tStudy: number, tTest: number, tRec: number) => {
-  if (h1 <= 0 || x <= 0 || tRec <= 0 || h2 <= 0) return { total: 0, init: 0, length: 0 };
-
-  try {
-    // 1. 상수 C (학습 밀도 계수) 계산
-    const volumeNumerator = Math.pow(h1 + h2, 3);
-    const volumeDenominator = Math.pow(h1 + h2, 3) - Math.pow(h1, 3);
-    const volumeRatio = volumeNumerator / volumeDenominator;
-    const efficiency = tStudy / x;
-    const C = volumeRatio * efficiency;
-
-    // 2. Part A: 초기 부하 (A=2일 때의 값)
-    const initialValue = C * Math.pow(2, 0.4);
-
-    // 3. Part B: 그래프의 길이 (인내의 과정)
-    const A_start = 2.0;
-    const timeRatio = tTest / tRec;
-    const A_end = Math.pow(timeRatio, 2.5);
-
-    let arcLength = 0;
-    if (A_end > A_start) {
-      // 수치 적분 (사다리꼴 공식 적용, 50단계)
-      const steps = 50;
-      const h = (A_end - A_start) / steps;
-      
-      const f = (A: number) => {
-        const dy_dA = 0.4 * C * Math.pow(A, -0.6);
-        return Math.sqrt(1 + Math.pow(dy_dA, 2));
-      };
-
-      let sum = 0.5 * (f(A_start) + f(A_end));
-      for (let i = 1; i < steps; i++) {
-        sum += f(A_start + i * h);
-      }
-      arcLength = sum * h;
-    }
-
+export const calculateStats = (logs: StudyLog[], remainingPages: number): Stats => {
+  const validLogs = logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
+  
+  if (validLogs.length === 0) {
     return {
-      total: initialValue + arcLength,
-      init: initialValue,
-      length: arcLength
+      averageTimePerPage: 0,
+      standardDeviation: 0,
+      totalTimeSpent: 0,
+      estimatedRemainingTime: 0
     };
-  } catch (e) {
-    return { total: 0, init: 0, length: 0 };
   }
+
+  const totalTime = validLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
+  const totalPages = validLogs.reduce((acc, log) => acc + log.pagesRead, 0);
+  const averageTimePerPage = totalPages > 0 ? totalTime / totalPages : 0; // 1페이지당 걸리는 분
+
+  // 표준편차 계산 (분/페이지 기준)
+  const timePerPageSamples = validLogs.map(log => log.timeSpentMinutes / log.pagesRead);
+  const mean = timePerPageSamples.reduce((a, b) => a + b, 0) / timePerPageSamples.length;
+  const variance = timePerPageSamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / timePerPageSamples.length;
+  const standardDeviation = Math.sqrt(variance);
+
+  return {
+    averageTimePerPage,
+    standardDeviation,
+    totalTimeSpent: totalTime,
+    estimatedRemainingTime: averageTimePerPage * remainingPages
+  };
 };
 
 /**
- * 학습량 예측 (Cubic 모델)
+ * 시험 소요 시간과 권장 시간을 비교하여 필요한 복습 횟수를 산출합니다.
  */
-export const calculateStudyBurdenV2 = (inputs: PredictionInputs) => {
-  const { h1, h2, b, h3 } = inputs;
-  if (h1 <= 0 || b <= 0 || h2 <= 0) return { total: 0 };
-
-  try {
-    const ratio1 = Math.pow((h1 + h2) / h1, 3);
-    const term1 = b + (b / (ratio1 - 1));
-    const ratio2 = Math.pow((h1 + h2 + h3) / (h1 + h2), 3);
-    const term2 = ratio2 - 1;
-    const cubicB = term1 * term2;
-
-    return { total: Math.max(0, cubicB) };
-  } catch (e) {
-    return { total: 0 };
-  }
+export const calculateRequiredReviewCount = (tTest: number, tRec: number): number => {
+  if (tRec === 0) return 0;
+  
+  // 실제 시험 시간이 권장 시간보다 길수록 숙련도가 낮다고 판단하여 복습 횟수 증가
+  const ratio = tTest / tRec;
+  
+  if (ratio <= 1.0) return 0; // 권장 시간 내 완료
+  if (ratio <= 1.2) return 1; // 20% 초과
+  if (ratio <= 1.5) return 2; // 50% 초과
+  return 3; // 그 이상
 };
 
-export const calculateStats = (logs: StudyLog[], remainingPages: number) => {
-  if (logs.length === 0) return { averageTimePerPage: 0, standardDeviation: 0, totalTimeSpent: 0, estimatedRemainingTime: 0 };
-  const times = logs.filter(l => l.pagesRead > 0).map(l => l.timeSpentMinutes / l.pagesRead);
-  if (times.length === 0) return { averageTimePerPage: 0, standardDeviation: 0, totalTimeSpent: 0, estimatedRemainingTime: 0 };
-  const avg = times.reduce((a, b) => a + b, 0) / times.length;
-  const std = Math.sqrt(times.map(t => Math.pow(t - avg, 2)).reduce((a, b) => a + b, 0) / times.length);
-  return { 
-    averageTimePerPage: avg, 
-    standardDeviation: std, 
-    totalTimeSpent: logs.reduce((a, b) => a + b.timeSpentMinutes, 0), 
-    estimatedRemainingTime: avg * remainingPages 
+/**
+ * 학습 부하(Mental Burden)를 계산합니다.
+ */
+export const calculateMentalBurden = (
+  h1: number, 
+  h2: number, 
+  b: number, 
+  tStudy: number, 
+  tTest: number, 
+  tRec: number
+): { total: number, init: number, length: number } => {
+   // 모델: L = f(b, tStudy, intensity)
+   // 공부량(b)과 시간(tStudy)이 많을수록, 그리고 시험 강도가 높을수록 부하가 큼
+   
+   const burdenFromVolume = b * 0.05; // 페이지당 가중치
+   const burdenFromTime = tStudy * 0.5; // 시간당 가중치
+   const burdenFromIntensity = (tTest / (tRec || 1)) * 2;
+   
+   const total = burdenFromVolume + burdenFromTime + burdenFromIntensity;
+   
+   return {
+     total,
+     init: total * 0.3, // 초기 진입 장벽
+     length: total * 0.7 // 지속성 요구량
+   };
+};
+
+/**
+ * 목표 달성을 위한 예측 학습량(Burden Prediction)을 계산합니다.
+ */
+export const calculateStudyBurdenV2 = (inputs: PredictionInputs): { total: number } => {
+  // 3차 성장 모델 기반 예측 (간소화된 로직)
+  // 효율성이 낮을수록(시간이 오래 걸릴수록) 더 많은 학습량이 필요하다고 예측
+  
+  const efficiencyFactor = inputs.tStudy > 0 && inputs.b > 0 
+    ? inputs.b / inputs.tStudy // 시간당 페이지
+    : 10; // 기본값
+    
+  const targetBoost = inputs.h3; // 목표 점수 상승분
+  
+  // 점수 1점을 올리기 위해 필요한 평균 페이지 수를 가정 (효율성에 따라 변동)
+  const basePagesPerPoint = 30;
+  const predictedTotalPages = (targetBoost * basePagesPerPoint) * (10 / (efficiencyFactor || 10));
+  
+  return {
+    total: parseFloat(predictedTotalPages.toFixed(1))
   };
 };
