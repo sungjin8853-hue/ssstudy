@@ -240,7 +240,7 @@ const App: React.FC = () => {
         reviewStep: 0,
         // 현재 시간 + 2시간
         nextReviewDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-        isCondensed: false
+        isCondensed: log.isCondensed ?? false
     };
     setLogs(prev => [...prev, newLog]);
     setSubjects(prev => prev.map(sub => {
