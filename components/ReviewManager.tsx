@@ -103,7 +103,11 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
               <div>
                 <h4 className="text-2xl font-black">{subjects.find(s => s.id === activeReviewLog.subjectId)?.name} 복습 중</h4>
                 <div className="flex items-center gap-3 mt-1">
-                   <p className="text-slate-400 text-sm">{new Date(activeReviewLog.timestamp).toLocaleDateString()} 학습분</p>
+                   {activeReviewLog.startPage && activeReviewLog.endPage ? (
+                      <p className="text-indigo-400 font-black text-lg">p.{activeReviewLog.startPage} ~ p.{activeReviewLog.endPage}</p>
+                   ) : (
+                      <p className="text-slate-400 text-sm">{activeReviewLog.pagesRead}페이지 분량</p>
+                   )}
                    <span className="px-2 py-0.5 bg-indigo-500 rounded text-[10px] font-bold text-white">현재 단계: {activeReviewLog.reviewStep || 0}</span>
                 </div>
               </div>
@@ -165,6 +169,11 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
                             <span className="text-[10px] text-slate-400">{new Date(log.timestamp).toLocaleDateString()} 학습</span>
                         </div>
                         <h4 className="text-xl font-black text-slate-800">{subjects.find(s => s.id === log.subjectId)?.name || '과목 없음'}</h4>
+                        {log.startPage && log.endPage ? (
+                            <p className="text-rose-600 font-black mt-1">p.{log.startPage} ~ p.{log.endPage}</p>
+                        ) : (
+                            <p className="text-slate-400 font-bold mt-1 text-sm">{log.pagesRead} 페이지</p>
+                        )}
                     </div>
                 </div>
                 
@@ -207,7 +216,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
              const timeLeftStr = timeLeft > 24 ? `${Math.ceil(timeLeft/24)}일 후` : `${timeLeft}시간 후`;
 
              return (
-              <div key={log.id} className="bg-white p-5 rounded-2xl border border-slate-200 flex flex-col justify-between h-32 relative overflow-hidden group">
+              <div key={log.id} className="bg-white p-5 rounded-2xl border border-slate-200 flex flex-col justify-between h-36 relative overflow-hidden group">
                   <div className="flex justify-between items-start z-10">
                       <div>
                           <p className="text-[10px] font-bold text-slate-400">Step {log.reviewStep || 0}</p>
@@ -215,7 +224,16 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
                       </div>
                       <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-black">{timeLeftStr}</span>
                   </div>
-                  <div className="flex justify-between items-end z-10">
+                  
+                  <div className="z-10 mt-2">
+                      {log.startPage && log.endPage ? (
+                          <p className="text-indigo-900 font-black text-sm">p.{log.startPage} ~ p.{log.endPage}</p>
+                      ) : (
+                          <p className="text-slate-400 font-bold text-xs">{log.pagesRead} 페이지</p>
+                      )}
+                  </div>
+
+                  <div className="flex justify-between items-end z-10 mt-auto">
                       <p className="text-[10px] text-slate-400">{new Date(log.timestamp).toLocaleDateString()}</p>
                       <button onClick={() => handleCondense(log.id)} className="text-[10px] text-slate-300 hover:text-rose-500 transition-colors">축약하기</button>
                   </div>
