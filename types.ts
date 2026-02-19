@@ -45,6 +45,8 @@ export interface StudyLog {
   id: string;
   subjectId: string;
   pagesRead: number;
+  startPage?: number; // 시작 페이지
+  endPage?: number;   // 종료 페이지
   timeSpentMinutes: number;
   timestamp: string;
   photoBase64?: string;
