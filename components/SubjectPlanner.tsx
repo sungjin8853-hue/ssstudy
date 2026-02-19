@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Subject } from '../types';
 
@@ -8,6 +7,7 @@ interface Props {
 
 export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [name, setName] = useState('');
+  const [currentPages, setCurrentPages] = useState(0);
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
 
@@ -17,10 +17,12 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
       id: Math.random().toString(36).substr(2, 9),
       name,
       totalPages: pages,
-      completedPages: 0,
+      completedPages: currentPages,
       targetDate: date,
     });
     setName('');
+    setPages(100);
+    setCurrentPages(0);
     setDate('');
   };
 
@@ -42,7 +44,16 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all"
             />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">현재 완료 페이지</label>
+              <input 
+                type="number"
+                value={currentPages}
+                onChange={e => setCurrentPages(Number(e.target.value))}
+                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
+              />
+            </div>
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">총 목표 페이지</label>
               <input 
