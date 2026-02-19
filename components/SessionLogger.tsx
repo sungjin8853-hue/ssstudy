@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Subject, StudyLog } from '../types';
 
@@ -13,8 +12,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState(subjects[0]?.id || '');
   
-  const [tens, setTens] = useState(0);
-  const [ones, setOnes] = useState(0);
+  // 페이지 범위 입력 상태
+  const [startPage, setStartPage] = useState<string>('');
+  const [readAmount, setReadAmount] = useState<string>(''); // 학습한 페이지 수(양)
+  
+  // 복습 제외 여부 상태
+  const [skipReview, setSkipReview] = useState(false);
+
   const [minutes, setMinutes] = useState(0);
   const [photo, setPhoto] = useState<string | undefined>(undefined);
   const [seconds, setSeconds] = useState(0);
@@ -70,11 +74,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
     accumulatedSecondsRef.current = 0;
     startTimeRef.current = null;
     setIsTimerRunning(false);
-    setTens(0);
-    setOnes(0);
+    setStartPage('');
+    setReadAmount('');
     setPhoto(undefined);
     setIsCameraOpen(false);
     setIsConfirmingCancel(false);
+    setSkipReview(false);
   };
 
   const handleStartMeasurement = () => {
@@ -84,6 +89,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
     }
     setStep('timer');
     setIsTimerRunning(true);
+  };
+  
+  const handleTimerComplete = () => {
+      const subj = subjects.find(s => s.id === subjectId);
+      if (subj) {
+          // 시작 페이지 자동 설정 (기존 완료 페이지 + 1)
+          setStartPage((subj.completedPages + 1).toString());
+      }
+      setStep('pages');
   };
 
   const startCamera = async () => {
@@ -120,24 +134,36 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
   };
 
   const handleFinalSave = () => {
-    const totalPages = (tens * 10) + ones;
-    if (totalPages <= 0) {
-      alert("공부한 페이지 수를 입력해주세요.");
+    const sPage = parseInt(startPage);
+    const amount = parseInt(readAmount);
+
+    if (isNaN(sPage) || isNaN(amount) || amount <= 0) {
+      alert("학습량(페이지 수)을 정확히 입력해주세요.");
       return;
     }
+
+    const ePage = sPage + amount - 1;
 
     onLogSession({
       id: Math.random().toString(36).substr(2, 9),
       subjectId,
-      pagesRead: totalPages,
+      pagesRead: amount,
+      startPage: sPage,
+      endPage: ePage,
       timeSpentMinutes: minutes,
       timestamp: new Date().toISOString(),
       photoBase64: photo,
-      isReviewed: false
+      isReviewed: false,
+      isCondensed: skipReview // 사용자가 선택한 복습 제외 여부 전달
     });
 
     resetAll();
   };
+  
+  // 현재 입력값에 따른 예상 종료 페이지 계산
+  const calculatedEndPage = (startPage && readAmount) 
+    ? parseInt(startPage) + parseInt(readAmount) - 1 
+    : null;
 
   if (step === 'idle') {
     return (
@@ -207,29 +233,82 @@ export const SessionLogger: React.FC<Props> = ({ subjects, onLogSession }) => {
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
               </button>
-              <button onClick={() => setStep('pages')} className="flex-1 py-6 bg-green-600 text-white rounded-3xl font-black text-xl shadow-2xl">완료</button>
+              
+              <button 
+                onClick={() => setSkipReview(!skipReview)}
+                className={`w-24 py-4 rounded-3xl font-black text-xs shadow-xl transition-all flex flex-col items-center justify-center gap-1 ${
+                  skipReview 
+                    ? 'bg-rose-100 text-rose-500 border-2 border-rose-500' 
+                    : 'bg-white text-slate-400 border-2 border-transparent'
+                }`}
+              >
+                <span className="text-xl">{skipReview ? '🚫' : '📥'}</span>
+                <span>{skipReview ? '복습 제외' : '복습 담기'}</span>
+              </button>
+              
+              <button onClick={handleTimerComplete} className="flex-1 py-6 bg-green-600 text-white rounded-3xl font-black text-xl shadow-2xl">완료</button>
             </div>
           </div>
         )}
 
         {step === 'pages' && (
           <div className="flex flex-col items-center">
-            <h3 className="text-4xl font-black text-slate-900 mb-12">학습량 입력</h3>
-            <div className="flex items-center gap-8 mb-16">
-              {[tens, ones].map((val, i) => (
-                <div key={i} className="flex flex-col items-center gap-4">
-                  <button onClick={() => i === 0 ? setTens(prev => (prev + 1) % 10) : setOnes(prev => (prev + 1) % 10)} className="w-16 h-16 bg-slate-50 rounded-2xl text-xl">▲</button>
-                  <div className="text-7xl font-black text-slate-900 w-20 text-center">{i === 0 ? tens : ones}</div>
-                  <button onClick={() => i === 0 ? setTens(prev => (prev - 1 + 10) % 10) : setOnes(prev => (prev - 1 + 10) % 10)} className="w-16 h-16 bg-slate-50 rounded-2xl text-xl">▼</button>
+            <h3 className="text-3xl font-black text-slate-900 mb-8">학습량 입력</h3>
+            
+            <div className="flex flex-col gap-6 mb-8 w-full bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100">
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">오늘 학습한 페이지 수 (양)</label>
+                    <input 
+                        type="number" 
+                        value={readAmount} 
+                        onChange={e => setReadAmount(e.target.value)} 
+                        placeholder="0"
+                        autoFocus
+                        className="w-full p-6 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-3xl font-black text-4xl text-center outline-none transition-all shadow-sm text-indigo-900"
+                    />
                 </div>
-              ))}
+
+                <div className="w-full h-px bg-slate-200"></div>
+
+                <div className="flex items-center gap-4">
+                    <div className="flex-1 space-y-2 opacity-60">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">시작 페이지</label>
+                        <input 
+                            type="number" 
+                            value={startPage} 
+                            onChange={e => setStartPage(e.target.value)} 
+                            placeholder="0"
+                            className="w-full p-4 bg-slate-100 border-none rounded-2xl font-black text-xl text-center outline-none"
+                        />
+                    </div>
+                    <div className="text-slate-300 text-xl font-black mt-6">➜</div>
+                    <div className="flex-1 space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">종료 페이지 (자동)</label>
+                        <div className="w-full p-4 bg-indigo-50 border border-indigo-100 rounded-2xl font-black text-xl text-center text-indigo-600">
+                            {calculatedEndPage ? `p.${calculatedEndPage}` : '-'}
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div className="w-full p-8 bg-indigo-600 rounded-[2.5rem] text-white text-center font-black text-2xl mb-8">
-              총 {(tens * 10) + ones} 페이지
+
+            <div className="w-full p-6 bg-indigo-600 rounded-[2.5rem] text-white text-center mb-8 shadow-xl">
+              <p className="text-[10px] font-black text-indigo-300 uppercase mb-2">CALCULATED RANGE</p>
+              {startPage && calculatedEndPage ? (
+                  <p className="font-black text-2xl">p.{startPage} ~ p.{calculatedEndPage}</p>
+              ) : (
+                  <p className="font-black text-2xl opacity-50">범위 자동 계산 중...</p>
+              )}
             </div>
+
             <div className="flex gap-4 w-full">
               <button onClick={() => setStep('timer')} className="flex-1 py-5 bg-slate-100 text-slate-500 rounded-2xl font-black">뒤로</button>
-              <button onClick={() => setStep('photo')} className="flex-[2] py-5 bg-slate-900 text-white rounded-2xl font-black">다음 단계</button>
+              <button 
+                onClick={() => setStep('photo')} 
+                disabled={!readAmount || Number(readAmount) <= 0}
+                className="flex-[2] py-5 bg-slate-900 text-white rounded-2xl font-black disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                다음 단계
+              </button>
             </div>
           </div>
         )}
