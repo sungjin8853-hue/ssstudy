@@ -1,11 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Subject, StudyLog, TagDefinition, TestCategory, TestRecord } from '../types';
-import { calculateStats, calculateRequiredReviewCount, calculateMentalBurden, calculateStudyBurdenV2 } from '../utils/math';
+import { Subject, StudyLog, TagDefinition } from '../types';
+import { calculateStats } from '../utils/math';
 
 interface Props {
   subjects: Subject[];
   logs: StudyLog[];
-  testCategories: TestCategory[];
   tagDefinitions: TagDefinition[];
   onUpdateSubject?: (updated: Subject) => void;
   onDeleteSubject?: (id: string) => void;
@@ -21,7 +20,6 @@ const COLORS = [
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
-  testCategories,
   tagDefinitions,
   onUpdateSubject, 
   onDeleteSubject,
@@ -33,7 +31,7 @@ export const Analytics: React.FC<Props> = ({
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
   
   // 수정 폼 상태 확장 (이름, 총페이지, 목표날짜)
-  const [editForm, setEditForm] = useState<{name: string, totalPages: number, targetDate: string} | null>(null);
+  const [editForm, setEditForm] = useState<{name: string, totalPages: number, targetDate: string, habitBadKeyword?: string, habitGoodKeyword?: string} | null>(null);
 
   const toggleFolder = (id: string) => {
     const next = new Set(expandedFolderIds);
@@ -46,49 +44,25 @@ export const Analytics: React.FC<Props> = ({
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const getFormulaInsights = (subId: string) => {
-      const allRecords: TestRecord[] = [];
-      testCategories.forEach(cat => cat.difficultySpaces.forEach(space => {
-        if (space.subjectIds?.includes(subId)) allRecords.push(...space.records);
-      }));
-      
-      if (allRecords.length === 0) return { impact: 0, predicted: 0, reviewCount: 0 };
-      
-      const sorted = [...allRecords].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      const last = sorted[sorted.length - 1];
-      const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
-      
-      let impact = 0, predicted = 0;
-      let reviewCount = calculateRequiredReviewCount(last.tTest, last.tRec);
-
-      if (prev) {
-        impact = calculateMentalBurden(prev.h1, Math.max(0.1, last.h1 - prev.h1), last.b, last.tStudy, last.tTest, last.tRec).total;
-        predicted = calculateStudyBurdenV2({ h1: prev.h1, h2: Math.max(0.1, last.h1 - prev.h1), b: last.b, h3: 10, tStudy: 0, tTest: 0, tRec: 0 }).total;
-      }
-      
-      return { impact, predicted, reviewCount };
-    };
-
     return subjects.map(sub => {
       const subLogs = logs.filter(l => l.subjectId === sub.id);
       const remaining = Math.max(0, sub.totalPages - sub.completedPages);
-      const stats = calculateStats(subLogs, remaining);
       const target = new Date(sub.targetDate);
       const diffDays = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      const formula = getFormulaInsights(sub.id);
+      const recommendedDailyPages = diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining;
+      const stats = calculateStats(subLogs, remaining, recommendedDailyPages);
 
       return {
         ...sub,
         stats,
         diffDays,
         remainingPages: remaining,
-        recommendedDailyPages: diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining,
-        dailyTimeNeeded: (diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining) * stats.averageTimePerPage,
-        totalTimeSpent: stats.totalTimeSpent,
-        formula
+        recommendedDailyPages,
+        dailyTimeNeeded: recommendedDailyPages * stats.averageTimePerPage,
+        totalTimeSpent: stats.totalTimeSpent
       };
     });
-  }, [subjects, logs, testCategories]);
+  }, [subjects, logs]);
 
   const getRecursiveData = (folderId: string) => {
     const findSubjIds = (fid: string): string[] => {
@@ -115,9 +89,6 @@ export const Analytics: React.FC<Props> = ({
       count,
       totalPages: uniqueSubjs.reduce((acc, cur) => acc + cur.totalPages, 0),
       completedPages: uniqueSubjs.reduce((acc, cur) => acc + cur.completedPages, 0),
-      sumImp: uniqueSubjs.reduce((acc, cur) => acc + cur.formula.impact, 0),
-      sumPred: uniqueSubjs.reduce((acc, cur) => acc + cur.formula.predicted, 0),
-      avgRev: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.formula.reviewCount, 0) / count : 0,
       avgEff: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / count : 0,
       avgStd: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.standardDeviation, 0) / count : 0,
       dailyTime: uniqueSubjs.reduce((acc, cur) => acc + cur.dailyTimeNeeded, 0),
@@ -126,10 +97,52 @@ export const Analytics: React.FC<Props> = ({
     };
   };
 
+  const totalFolderDailyTime = useMemo(() => {
+    const rootFolders = tagDefinitions.filter(folder => !folder.parentId);
+    return rootFolders.reduce((sum, folder) => sum + getRecursiveData(folder.id).dailyTime, 0);
+  }, [tagDefinitions, allSubjectStats]);
+
   const formatTime = (minutes: number) => {
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const completeHabit = (subject: Subject) => {
+    if (!subject.habit || subject.habit.completed || !onUpdateSubject) return;
+    onUpdateSubject({
+      ...subject,
+      habit: {
+        ...subject.habit,
+        completed: true,
+        updatedAt: new Date().toISOString()
+      }
+    });
+  };
+
+  const addHabit = (subject: Subject) => {
+    if (!onUpdateSubject) return;
+    const now = new Date().toISOString();
+    onUpdateSubject({
+      ...subject,
+      habit: {
+        id: Math.random().toString(36).substr(2, 9),
+        badKeyword: '새로 고칠 습관',
+        goodKeyword: subject.habit?.goodKeyword || '좋은 습관',
+        goodCount: 0,
+        totalChecks: 0,
+        createdAt: now,
+        updatedAt: now
+      }
+    });
+    setEditingId(subject.id);
+    setEditForm({
+      name: subject.name,
+      totalPages: subject.totalPages,
+      targetDate: subject.targetDate,
+      habitBadKeyword: '새로 고칠 습관',
+      habitGoodKeyword: subject.habit?.goodKeyword || '좋은 습관'
+    });
   };
 
   const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
@@ -181,9 +194,7 @@ export const Analytics: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-                   <StatBox label="예측(b)" value={stats.sumPred.toFixed(1)} unit="P" color="text-indigo-400" highlight isDark={isExpanded} />
-                   <StatBox label="부하(L)" value={stats.sumImp.toFixed(2)} unit="" color="text-rose-400" highlight isDark={isExpanded} />
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                    <StatBox label="평균 효율" value={stats.avgEff.toFixed(1)} unit="m/p" color="text-emerald-400" isDark={isExpanded} />
                    <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
                    <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
@@ -224,11 +235,11 @@ export const Analytics: React.FC<Props> = ({
           const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
 
           return (
-            <div key={sub.id} className="flex flex-col gap-8 p-12 bg-white border-2 border-slate-100 rounded-[4rem] hover:shadow-2xl hover:border-indigo-400 transition-all group/subj relative overflow-hidden">
+            <div key={sub.id} className="flex flex-col gap-5 p-6 md:p-8 bg-white border-2 border-slate-100 rounded-[2.5rem] hover:shadow-2xl hover:border-indigo-400 transition-all group/subj relative overflow-hidden">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-6 flex-grow">
-                  <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all shadow-sm flex-shrink-0">
-                    <span className="text-4xl">📄</span>
+                <div className="flex items-center gap-4 flex-grow">
+                  <div className="w-12 h-12 md:w-14 md:h-14 bg-slate-50 rounded-2xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all shadow-sm flex-shrink-0">
+                    <span className="text-2xl md:text-3xl">📄</span>
                   </div>
                   <div className="w-full">
                     {isEditing ? (
@@ -240,7 +251,7 @@ export const Analytics: React.FC<Props> = ({
                            placeholder="과목명"
                        />
                     ) : (
-                       <h4 className="text-2xl md:text-3xl font-black text-slate-900">{sub.name}</h4>
+                       <h4 className="text-xl md:text-2xl font-black text-slate-900">{sub.name}</h4>
                     )}
                     {isEditing ? (
                        <div className="mt-2 flex items-center gap-2">
@@ -253,8 +264,8 @@ export const Analytics: React.FC<Props> = ({
                            />
                        </div>
                     ) : (
-                        <div className="flex items-center gap-4 mt-3">
-                          <span className={`text-[10px] font-black px-4 py-1.5 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                         <div className="flex flex-wrap items-center gap-3 mt-2">
+                          <span className={`text-[9px] font-black px-3 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden md:inline">실시간 학습 데이터 정밀 분석</span>
                         </div>
                     )}
@@ -267,11 +278,20 @@ export const Analytics: React.FC<Props> = ({
                             e.preventDefault();
                             e.stopPropagation(); 
                             if (onUpdateSubject && editForm) {
+                                const nextHabit = sub.habit
+                                  ? {
+                                      ...sub.habit,
+                                      badKeyword: editForm.habitBadKeyword ?? sub.habit.badKeyword,
+                                      goodKeyword: editForm.habitGoodKeyword ?? sub.habit.goodKeyword,
+                                      updatedAt: new Date().toISOString()
+                                    }
+                                  : undefined;
                                 onUpdateSubject({ 
-                                    ...sub, 
+                                    ...sub,
                                     name: editForm.name, 
                                     totalPages: Number(editForm.totalPages),
-                                    targetDate: editForm.targetDate
+                                    targetDate: editForm.targetDate,
+                                    habit: nextHabit
                                 });
                             }
                             setEditingId(null);
@@ -289,7 +309,13 @@ export const Analytics: React.FC<Props> = ({
                             e.preventDefault(); 
                             e.stopPropagation(); 
                             setEditingId(sub.id);
-                            setEditForm({ name: sub.name, totalPages: sub.totalPages, targetDate: sub.targetDate });
+                            setEditForm({
+                              name: sub.name,
+                              totalPages: sub.totalPages,
+                              targetDate: sub.targetDate,
+                              habitBadKeyword: sub.habit?.badKeyword,
+                              habitGoodKeyword: sub.habit?.goodKeyword
+                            });
                           }} 
                           onMouseDown={e => e.stopPropagation()}
                           className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer"
@@ -312,10 +338,7 @@ export const Analytics: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 p-8 bg-slate-50 rounded-[3rem] border border-slate-100">
-                 <StatBox label="예측(b)" value={sub.formula.predicted.toFixed(1)} unit="P" color="text-indigo-600" highlight />
-                 <StatBox label="부하(L)" value={sub.formula.impact.toFixed(2)} unit="" color="text-rose-600" highlight />
-                 <StatBox label="복습량" value={sub.formula.reviewCount.toFixed(1)} unit="회" color="text-emerald-600" highlight />
+              <div className="grid grid-cols-3 gap-1.5 md:gap-2 p-2 md:p-3 bg-slate-50 rounded-2xl border border-slate-100 [&>*:nth-child(2)]:hidden [&>*:nth-child(3)]:hidden">
                  <StatBox label="효율(m/p)" value={sub.stats.averageTimePerPage.toFixed(1)} unit="" color="text-indigo-400" />
                  <StatBox label="편차(σ)" value={sub.stats.standardDeviation.toFixed(1)} unit="" color="text-blue-400" />
                  <StatBox label="잔여(P)" value={sub.remainingPages.toString()} unit="P" color="text-amber-500" />
@@ -323,7 +346,7 @@ export const Analytics: React.FC<Props> = ({
                  <StatBox label="필요 시간" value={formatTime(sub.dailyTimeNeeded)} unit="" color="text-slate-900" />
               </div>
 
-              <div className="space-y-4 px-2">
+              <div className="space-y-2 px-1">
                  <div className="flex justify-between items-end">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({progressPercent}%)</p>
                     {isEditing ? (
@@ -331,6 +354,7 @@ export const Analytics: React.FC<Props> = ({
                             <span className="text-xs font-bold text-indigo-400">목표 P 수정:</span>
                             <input 
                                 type="number"
+                                step="1"
                                 value={editForm?.totalPages || 0}
                                 onChange={e => setEditForm(prev => prev ? {...prev, totalPages: Number(e.target.value)} : null)}
                                 className="w-20 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
@@ -341,10 +365,77 @@ export const Analytics: React.FC<Props> = ({
                         <p className="text-xl font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
                     )}
                  </div>
-                 <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner">
+                  <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden shadow-inner">
                     <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-xl" style={{ width: `${progressPercent}%` }}></div>
                  </div>
               </div>
+
+              {(sub.habit || isEditing) && (
+                <div className="rounded-[2rem] border border-slate-100 bg-slate-50 p-4">
+                  {sub.habit && !sub.habit.completed ? (
+                    <>
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">습관 교정</p>
+                        <p className="hidden">
+                          좋은 체크 {sub.habit.goodCount} / 전체 {sub.habit.totalChecks}
+                        </p>
+                        <p className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black text-emerald-600">
+                          좋은 습관 {sub.habit.goodCount}회
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto_1fr] md:items-center">
+                        <div className="rounded-2xl bg-white p-4 border border-rose-100">
+                          <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-rose-400">고칠 습관</p>
+                          {isEditing ? (
+                            <input
+                              value={editForm?.habitBadKeyword || ''}
+                              onChange={e => setEditForm(prev => prev ? {...prev, habitBadKeyword: e.target.value} : null)}
+                              className="w-full bg-transparent text-base font-black text-rose-700 outline-none"
+                            />
+                          ) : (
+                            <p className="font-black text-rose-700">{sub.habit.badKeyword}</p>
+                          )}
+                        </div>
+                        <div className="hidden text-center text-slate-300 md:block">→</div>
+                        <div className="rounded-2xl bg-white p-4 border border-emerald-100">
+                          <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-emerald-500">좋은 습관</p>
+                          {isEditing ? (
+                            <input
+                              value={editForm?.habitGoodKeyword || ''}
+                              onChange={e => setEditForm(prev => prev ? {...prev, habitGoodKeyword: e.target.value} : null)}
+                              className="w-full bg-transparent text-base text-emerald-700 outline-none"
+                              style={{ fontWeight: Math.min(900, 650 + Math.min(sub.habit.goodCount, 5) * 50) }}
+                            />
+                          ) : (
+                            <p className="text-emerald-700" style={{ fontWeight: Math.min(900, 650 + Math.min(sub.habit.goodCount, 5) * 50) }}>{sub.habit.goodKeyword}</p>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => completeHabit(sub)}
+                        className="mt-3 w-full rounded-2xl bg-emerald-600 py-3 text-xs font-black text-white shadow-lg shadow-emerald-100 transition-all hover:bg-emerald-700"
+                      >
+                        완료: 좋은 습관만 남기기
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">정착된 좋은 습관</p>
+                        <p className="mt-1 text-lg font-black text-emerald-700">{sub.habit?.goodKeyword || '아직 없음'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => addHabit(sub)}
+                        className="rounded-2xl bg-slate-900 px-6 py-3 text-xs font-black text-white transition-all hover:bg-indigo-600"
+                      >
+                        + 새 고칠 습관 추가
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {isMoving && (
                 <div className="mt-4 bg-slate-900 p-8 rounded-[3rem] border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
@@ -366,9 +457,12 @@ export const Analytics: React.FC<Props> = ({
 
   return (
     <div className="space-y-12 animate-fade-in">
-      <div className="flex flex-col md:flex-row justify-between items-center bg-white p-12 rounded-[4rem] border border-slate-200 shadow-sm gap-8 relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none text-slate-200"><span className="text-[14rem] font-black">CORE</span></div>
-        <div className="relative z-10">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="rounded-2xl border border-indigo-100 bg-white px-5 py-3 shadow-sm">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">폴더 필요시간 총합</p>
+          <p className="mt-1 text-2xl font-black text-indigo-600">{formatTime(totalFolderDailyTime)}</p>
+        </div>
+        <div className="hidden">
           <h3 className="text-5xl font-black text-slate-900 flex items-center gap-6">
             <span className="w-5 h-14 bg-indigo-600 rounded-full"></span>
             학습 탐색기
@@ -381,13 +475,13 @@ export const Analytics: React.FC<Props> = ({
             onUpdateTags?.([...tagDefinitions, { id: newId, name: '새 폴더', color: COLORS[tagDefinitions.length % COLORS.length], isVisible: true }]);
             setEditingId(newId);
           }}
-          className="relative z-10 bg-slate-900 text-white px-16 py-7 rounded-[2.5rem] font-black text-sm hover:bg-indigo-600 transition-all shadow-2xl active:scale-95"
+          className="bg-slate-900 text-white px-5 py-3 rounded-2xl font-black text-xs hover:bg-indigo-600 transition-all shadow-lg active:scale-95"
         >
           ＋ 새 분석 그룹 추가
         </button>
       </div>
 
-      <div className="bg-slate-200/30 p-6 md:p-12 rounded-[5rem] border-4 border-dashed border-slate-300/50 min-h-[900px]">
+      <div className="bg-slate-200/30 p-5 md:p-8 rounded-[3rem] border-4 border-dashed border-slate-300/50">
         <RenderTree />
         
         {subjects.length === 0 && tagDefinitions.length === 0 && (
@@ -402,10 +496,10 @@ export const Analytics: React.FC<Props> = ({
 };
 
 const StatBox = ({ label, value, unit, color, isDark, highlight }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean }) => (
-  <div className={`flex flex-col p-4 rounded-2xl transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-md border border-slate-100 scale-105 z-10') : 'opacity-90'}`}>
-    <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1.5 tracking-tighter ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
-    <p className={`text-xl md:text-2xl font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
-      {value}<span className="text-[10px] font-bold ml-1 opacity-40">{unit}</span>
+  <div className={`flex flex-col min-w-0 px-2 py-2.5 md:px-3 rounded-xl transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
+    <p className={`text-[7px] md:text-[8px] font-black uppercase mb-1 tracking-tight truncate ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
+    <p className={`text-base md:text-lg font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
+      {value}<span className="text-[8px] font-bold ml-0.5 opacity-40">{unit}</span>
     </p>
   </div>
 );

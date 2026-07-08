@@ -49,6 +49,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">현재 완료 페이지</label>
               <input 
                 type="number"
+                step="1"
                 value={currentPages}
                 onChange={e => setCurrentPages(Number(e.target.value))}
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
@@ -58,6 +59,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">총 목표 페이지</label>
               <input 
                 type="number"
+                step="1"
                 value={pages}
                 onChange={e => setPages(Number(e.target.value))}
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
@@ -73,6 +75,18 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               />
             </div>
           </div>
+          <label className="hidden">
+            <div>
+              <p className="font-black text-slate-700">복습 일정 사용</p>
+              <p className="mt-1 text-xs font-medium text-slate-400">
+                끄면 이 과목의 학습 기록은 복습 관리에 표시되지 않습니다.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              className="h-6 w-6 shrink-0 accent-indigo-600"
+            />
+          </label>
         </div>
         <button 
           onClick={handleAdd}

@@ -6,8 +6,22 @@ import { Analytics } from './components/Analytics';
 import { ReviewManager } from './components/ReviewManager';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
-import { TestManager } from './components/TestManager';
+import { TestCalculator } from './components/TestCalculator';
 import { GoogleGenAI } from '@google/genai';
+
+const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
+  const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
+
+  const addWithParents = (id: string) => {
+    const tag = tags.find(item => item.id === id);
+    if (!tag || snapshots.has(tag.id)) return;
+    snapshots.set(tag.id, { id: tag.id, name: tag.name, parentId: tag.parentId });
+    if (tag.parentId) addWithParents(tag.parentId);
+  };
+
+  tagIds.forEach(addWithParents);
+  return Array.from(snapshots.values());
+};
 
 const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -39,21 +53,45 @@ const App: React.FC = () => {
       const savedTests = localStorage.getItem('swp_tests_categories_v3');
       const savedLogs = localStorage.getItem('swp_logs');
       const savedTags = localStorage.getItem('swp_tags');
+      const loadedSubjects: Array<Subject & {
+        procedures?: Array<{ totalPages: number; completedPages: number }>;
+      }> = savedSubs ? JSON.parse(savedSubs) || [] : [];
+      const loadedTags: TagDefinition[] = savedTags ? JSON.parse(savedTags) || [] : [];
       
-      if (savedSubs) setSubjects(JSON.parse(savedSubs) || []);
+      if (savedSubs) {
+        setSubjects(loadedSubjects.map(subject => ({
+          id: subject.id,
+          name: subject.name,
+          totalPages: subject.procedures?.[0]?.totalPages ?? subject.totalPages,
+          completedPages: subject.procedures?.length
+            ? subject.procedures.reduce((sum, procedure) => sum + procedure.completedPages, 0)
+            : subject.completedPages,
+          targetDate: subject.targetDate,
+          tagIds: subject.tagIds,
+          reviewEnabled: subject.reviewEnabled ?? true,
+          habit: subject.habit,
+        })));
+      }
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
       if (savedLogs) {
         // 레거시 데이터 마이그레이션: nextReviewDate가 없으면 timestamp로 초기화
         const loadedLogs: StudyLog[] = JSON.parse(savedLogs) || [];
-        const migratedLogs = loadedLogs.map(log => ({
-          ...log,
-          reviewStep: log.reviewStep ?? 0,
-          nextReviewDate: log.nextReviewDate ?? log.timestamp, // 과거 기록은 이미 복습 시점이 도래한 것으로 간주
-          isCondensed: log.isCondensed ?? false
-        }));
+        const migratedLogs = loadedLogs.map(log => {
+          const subject = loadedSubjects.find(item => item.id === log.subjectId);
+          const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], loadedTags);
+
+          return {
+            ...log,
+            subjectNameSnapshot: log.subjectNameSnapshot || subject?.name || '삭제된 과목',
+            folderSnapshots: log.folderSnapshots || folderSnapshots,
+            reviewStep: log.reviewStep ?? 0,
+            nextReviewDate: log.nextReviewDate ?? log.timestamp,
+            isCondensed: log.isCondensed ?? false
+          };
+        });
         setLogs(migratedLogs);
       }
-      if (savedTags) setTagDefinitions(JSON.parse(savedTags) || []);
+      if (savedTags) setTagDefinitions(loadedTags);
     } catch (e) {
       console.error("Failed to load data from localStorage", e);
     }
@@ -105,15 +143,25 @@ const App: React.FC = () => {
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
     setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
+    setLogs(prev => prev.map(log => {
+      if (log.subjectId !== updatedSubject.id) return log;
+      return {
+        ...log,
+        subjectNameSnapshot: updatedSubject.name
+      };
+    }));
+  };
+
+  const handleUpdateSubjectHabit = (updatedSubject: Subject) => {
+    setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
   };
 
   const handleDeleteSubject = (id: string) => {
     openConfirm(
       '과목을 삭제하시겠습니까?',
-      '이 과목에 연결된 모든 학습 기록과 통계가 영구적으로 사라집니다.',
+      '과목은 목록에서 삭제되지만 기존 학습 기록과 누적 통계는 유지됩니다.',
       () => {
         setSubjects(prev => prev.filter(s => s.id !== id));
-        setLogs(prev => prev.filter(l => l.subjectId !== id));
         setTestCategories(prev => prev.filter(c => c.subjectId !== id));
       }
     );
@@ -121,6 +169,15 @@ const App: React.FC = () => {
 
   const handleUpdateTags = (tags: TagDefinition[]) => {
     setTagDefinitions(tags);
+    setLogs(prev => prev.map(log => ({
+      ...log,
+      folderSnapshots: (log.folderSnapshots || []).map(snapshot => {
+        const updated = tags.find(tag => tag.id === snapshot.id);
+        return updated
+          ? { id: updated.id, name: updated.name, parentId: snapshot.parentId }
+          : snapshot;
+      })
+    })));
   };
 
   const handleDeleteFolder = (folderId: string) => {
@@ -234,18 +291,28 @@ const App: React.FC = () => {
   };
   
   const handleLogSession = (log: StudyLog) => {
-    // 새 로그 생성 시: 즉시 복습이 아닌 2시간 뒤부터 시작
+    const subject = subjects.find(item => item.id === log.subjectId);
+    const subjectReviewEnabled = subject?.reviewEnabled !== false;
+    const skipReview = log.isCondensed ?? !subjectReviewEnabled;
+    const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], tagDefinitions);
     const newLog: StudyLog = {
         ...log,
+        subjectNameSnapshot: subject?.name || '삭제된 과목',
+        folderSnapshots,
         reviewStep: 0,
-        // 현재 시간 + 2시간
-        nextReviewDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-        isCondensed: log.isCondensed ?? false
+        nextReviewDate: !skipReview
+          ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+          : undefined,
+        isCondensed: skipReview,
+        reviewEnabled: !skipReview
     };
     setLogs(prev => [...prev, newLog]);
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
-        return { ...sub, completedPages: sub.completedPages + log.pagesRead };
+        return {
+          ...sub,
+          completedPages: Math.min(sub.totalPages, sub.completedPages + log.pagesRead)
+        };
       }
       return sub;
     }));
@@ -255,17 +322,112 @@ const App: React.FC = () => {
     const oldLog = logs.find(l => l.id === updatedLog.id);
     if (!oldLog) return;
 
-    setLogs(prev => prev.map(l => l.id === updatedLog.id ? updatedLog : l));
-    
-    if (oldLog.subjectId === updatedLog.subjectId) {
-      const pageDiff = updatedLog.pagesRead - oldLog.pagesRead;
-      setSubjects(prev => prev.map(sub => {
-        if (sub.id === updatedLog.subjectId) {
-          return { ...sub, completedPages: sub.completedPages + pageDiff };
-        }
-        return sub;
+    const subject = subjects.find(item => item.id === updatedLog.subjectId);
+    const enrichedLog: StudyLog = {
+      ...updatedLog,
+      subjectNameSnapshot: subject?.name || updatedLog.subjectNameSnapshot || '삭제된 과목',
+      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions)
+    };
+
+    setLogs(prev => prev.map(l => l.id === updatedLog.id ? enrichedLog : l));
+    setSubjects(prev => prev.map(sub => {
+      if (oldLog.subjectId === updatedLog.subjectId && sub.id === updatedLog.subjectId) {
+        const pageDiff = updatedLog.pagesRead - oldLog.pagesRead;
+        return {
+          ...sub,
+          completedPages: Math.min(sub.totalPages, Math.max(0, sub.completedPages + pageDiff))
+        };
+      }
+
+      if (oldLog.subjectId !== updatedLog.subjectId && sub.id === oldLog.subjectId) {
+        return {
+          ...sub,
+          completedPages: Math.max(0, sub.completedPages - oldLog.pagesRead)
+        };
+      }
+
+      if (oldLog.subjectId !== updatedLog.subjectId && sub.id === updatedLog.subjectId) {
+        return {
+          ...sub,
+          completedPages: Math.min(sub.totalPages, sub.completedPages + updatedLog.pagesRead)
+        };
+      }
+
+      return sub;
+    }));
+  };
+
+  const handleDeleteLog = (logId: string) => {
+    const logToDelete = logs.find(log => log.id === logId);
+    if (!logToDelete) return;
+
+    openConfirm('학습 기록을 삭제할까요?', '해당 기록의 학습량도 과목 누적 페이지에서 빠집니다.', () => {
+      setLogs(prev => {
+        const nextLogs = prev.filter(log => log.id !== logId);
+        localStorage.setItem('swp_logs', JSON.stringify(nextLogs));
+        return nextLogs;
+      });
+      setSubjects(prev => prev.map(subject => {
+        if (subject.id !== logToDelete.subjectId) return subject;
+        return {
+          ...subject,
+          completedPages: Math.max(0, subject.completedPages - logToDelete.pagesRead)
+        };
       }));
-    }
+    });
+  };
+
+  const handleReplaceLogs = (logIds: string[], replacementLog: StudyLog) => {
+    const logsToReplace = logs.filter(log => logIds.includes(log.id));
+    if (logsToReplace.length === 0) return;
+
+    const subject = subjects.find(item => item.id === replacementLog.subjectId);
+    const enrichedLog: StudyLog = {
+      ...replacementLog,
+      subjectNameSnapshot: subject?.name || replacementLog.subjectNameSnapshot || '삭제된 과목',
+      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions)
+    };
+
+    setLogs(prev => [...prev.filter(log => !logIds.includes(log.id)), enrichedLog]);
+    setSubjects(prev => prev.map(subjectItem => {
+      const removedPages = logsToReplace
+        .filter(log => log.subjectId === subjectItem.id)
+        .reduce((sum, log) => sum + log.pagesRead, 0);
+      const addedPages = subjectItem.id === replacementLog.subjectId ? replacementLog.pagesRead : 0;
+
+      if (removedPages === 0 && addedPages === 0) return subjectItem;
+
+      return {
+        ...subjectItem,
+        completedPages: Math.min(subjectItem.totalPages, Math.max(0, subjectItem.completedPages - removedPages + addedPages))
+      };
+    }));
+  };
+
+  const handleDeleteLogs = (logIds: string[]) => {
+    const logsToDelete = logs.filter(log => logIds.includes(log.id));
+    if (logsToDelete.length === 0) return;
+
+    openConfirm('학습 기록을 삭제할까요?', '해당 합산 기록의 학습량도 과목 누적 페이지에서 빠집니다.', () => {
+      const idsToDelete = new Set(logIds);
+      setLogs(prev => {
+        const nextLogs = prev.filter(log => !idsToDelete.has(log.id));
+        localStorage.setItem('swp_logs', JSON.stringify(nextLogs));
+        return nextLogs;
+      });
+      setSubjects(prev => prev.map(subjectItem => {
+        const removedPages = logsToDelete
+          .filter(log => log.subjectId === subjectItem.id)
+          .reduce((sum, log) => sum + log.pagesRead, 0);
+
+        if (removedPages === 0) return subjectItem;
+
+        return {
+          ...subjectItem,
+          completedPages: Math.max(0, subjectItem.completedPages - removedPages)
+        };
+      }));
+    });
   };
 
   // 복습 액션 처리 (완료 또는 축약)
@@ -343,7 +505,7 @@ const App: React.FC = () => {
         
         <div className="space-y-2 flex-grow">
           <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="📊" label="학습 현황" />
-          <NavButton active={activeTab === 'test'} onClick={() => setActiveTab('test')} icon="🎯" label="시험 공간" />
+          <NavButton active={activeTab === 'test'} onClick={() => setActiveTab('test')} icon="🎯" label="시험 관리" />
           <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon="📈" label="추이 분석" />
           <NavButton active={activeTab === 'review'} onClick={() => setActiveTab('review')} icon="🔄" label="복습 관리" />
         </div>
@@ -367,7 +529,7 @@ const App: React.FC = () => {
             <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest">{todayStr}</p>
             <h2 className="text-3xl font-black text-slate-900 mt-1">
               {activeTab === 'dashboard' ? '학습 데이터 분석' : 
-               activeTab === 'test' ? '시험 데이터 및 효율 분석' :
+               activeTab === 'test' ? '시험 예측 및 부하 관리' :
                activeTab === 'history' ? '학습 추이 및 리포트' : '에빙하우스 복습 관리'}
             </h2>
           </div>
@@ -379,14 +541,19 @@ const App: React.FC = () => {
               <Analytics 
                 subjects={subjects} 
                 logs={logs} 
-                testCategories={testCategories}
                 tagDefinitions={tagDefinitions}
                 onUpdateSubject={handleUpdateSubject} 
                 onDeleteSubject={handleDeleteSubject} 
                 onUpdateTags={handleUpdateTags}
                 onDeleteFolder={handleDeleteFolder}
               />
-              <TodaySummary logs={logs} subjects={subjects} onUpdateLog={handleUpdateLog} />
+              <TodaySummary
+                logs={logs}
+                subjects={subjects}
+                onAddLog={handleLogSession}
+                onReplaceLogs={handleReplaceLogs}
+                onDeleteLogs={handleDeleteLogs}
+              />
               
               <div className="bg-white rounded-[3.5rem] shadow-sm border border-slate-200 overflow-hidden animate-fade-in">
                 <div className="flex bg-slate-50 p-3 m-4 rounded-[2rem] border border-slate-100">
@@ -410,7 +577,7 @@ const App: React.FC = () => {
                 
                 <div className="p-8 md:p-12">
                   {dashboardActionTab === 'logger' ? (
-                    <SessionLogger subjects={subjects} onLogSession={handleLogSession} />
+                    <SessionLogger subjects={subjects} logs={logs} onLogSession={handleLogSession} onUpdateSubject={handleUpdateSubjectHabit} />
                   ) : (
                     <SubjectPlanner onAddSubject={handleAddSubject} />
                   )}
@@ -419,22 +586,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'test' && (
-            <div className="animate-fade-in">
-              <TestManager 
-                testCategories={testCategories} 
-                logs={logs}
-                subjects={subjects}
-                onAddCategory={handleAddCategory}
-                onDeleteCategory={handleDeleteCategory}
-                onAddDifficultySpace={handleAddDifficultySpace}
-                onDeleteDifficultySpace={handleDeleteDifficultySpace}
-                onAddRecord={handleAddRecord}
-                onDeleteRecord={handleDeleteRecord}
-              />
-            </div>
-          )}
-
+          {activeTab === 'test' && <TestCalculator />}
           {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
           {activeTab === 'review' && <ReviewManager logs={logs} subjects={subjects} onReviewAction={handleReviewAction} />}
         </div>

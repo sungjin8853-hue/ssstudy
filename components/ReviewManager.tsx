@@ -10,12 +10,19 @@ interface Props {
 export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction }) => {
   const [activeReviewLog, setActiveReviewLog] = useState<StudyLog | null>(null);
   const [timer, setTimer] = useState(0);
+  const subjectReviewSettings = useMemo(
+    () => new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false])),
+    [subjects]
+  );
+  const isReviewEnabled = (log: StudyLog) =>
+    log.reviewEnabled ?? subjectReviewSettings.get(log.subjectId) !== false;
 
   // 현재 시각 기준, 복습이 필요한 항목 필터링 (condensed 제외)
   // 정렬: 가장 오래 기다린(Next Review Date가 과거인) 순서 -> Oldest First
   const dueReviews = useMemo(() => {
     const now = new Date().getTime();
     return logs
+      .filter(isReviewEnabled)
       .filter(log => !log.isCondensed) // 축약된 것 제외
       .filter(log => {
         // nextReviewDate가 없으면(legacy) 즉시 대상으로 간주
@@ -28,12 +35,13 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
         const dateB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
         return dateA - dateB;
       });
-  }, [logs]);
+  }, [logs, subjectReviewSettings]);
 
   // 대기 중인(미래의) 복습 목록
   const upcomingReviews = useMemo(() => {
     const now = new Date().getTime();
     return logs
+      .filter(isReviewEnabled)
       .filter(log => !log.isCondensed)
       .filter(log => {
         const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
@@ -44,7 +52,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
         const dateB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
         return dateA - dateB;
       });
-  }, [logs]);
+  }, [logs, subjectReviewSettings]);
 
   const startReviewSession = (log: StudyLog) => {
     setActiveReviewLog(log);
@@ -101,7 +109,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
           <div className="w-full max-w-4xl flex flex-col h-full gap-6">
             <div className="flex justify-between items-center text-white">
               <div>
-                <h4 className="text-2xl font-black">{subjects.find(s => s.id === activeReviewLog.subjectId)?.name} 복습 중</h4>
+                <h4 className="text-2xl font-black">{subjects.find(s => s.id === activeReviewLog.subjectId)?.name || activeReviewLog.subjectNameSnapshot || '삭제된 과목'} 복습 중</h4>
                 <div className="flex items-center gap-3 mt-1">
                    {activeReviewLog.startPage && activeReviewLog.endPage ? (
                       <p className="text-indigo-400 font-black text-lg">p.{activeReviewLog.startPage} ~ p.{activeReviewLog.endPage}</p>
@@ -168,7 +176,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
                             <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-bold">Step {log.reviewStep || 0}</span>
                             <span className="text-[10px] text-slate-400">{new Date(log.timestamp).toLocaleDateString()} 학습</span>
                         </div>
-                        <h4 className="text-xl font-black text-slate-800">{subjects.find(s => s.id === log.subjectId)?.name || '과목 없음'}</h4>
+                        <h4 className="text-xl font-black text-slate-800">{subjects.find(s => s.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'}</h4>
                         {log.startPage && log.endPage ? (
                             <p className="text-rose-600 font-black mt-1">p.{log.startPage} ~ p.{log.endPage}</p>
                         ) : (
@@ -220,7 +228,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction 
                   <div className="flex justify-between items-start z-10">
                       <div>
                           <p className="text-[10px] font-bold text-slate-400">Step {log.reviewStep || 0}</p>
-                          <p className="font-bold text-slate-800 mt-1">{subjects.find(s => s.id === log.subjectId)?.name}</p>
+                          <p className="font-bold text-slate-800 mt-1">{subjects.find(s => s.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'}</p>
                       </div>
                       <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-black">{timeLeftStr}</span>
                   </div>
