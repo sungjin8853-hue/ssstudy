@@ -6,17 +6,6 @@ export interface TagDefinition {
   parentId?: string;
 }
 
-export interface StudyHabit {
-  id: string;
-  badKeyword: string;
-  goodKeyword: string;
-  goodCount: number;
-  totalChecks: number;
-  completed?: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface Subject {
   id: string;
   name: string;
@@ -25,7 +14,6 @@ export interface Subject {
   targetDate: string;
   tagIds?: string[];
   reviewEnabled?: boolean;
-  habit?: StudyHabit;
 }
 
 export interface TestRecord {
@@ -73,12 +61,6 @@ export interface StudyLog {
   nextReviewDate?: string;
   isCondensed?: boolean;
   reviewEnabled?: boolean;
-  habitCheck?: {
-    habitId: string;
-    badKeyword: string;
-    goodKeyword: string;
-    result: 'bad' | 'good';
-  };
 }
 
 export interface PredictionInputs {

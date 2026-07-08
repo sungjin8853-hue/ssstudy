@@ -6,7 +6,6 @@ import { Analytics } from './components/Analytics';
 import { ReviewManager } from './components/ReviewManager';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
-import { TestCalculator } from './components/TestCalculator';
 import { GoogleGenAI } from '@google/genai';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
@@ -23,14 +22,25 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   return Array.from(snapshots.values());
 };
 
+const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
+
+const readSidebarCollapsed = () => {
+  return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+};
+
+const writeSidebarCollapsed = (collapsed: boolean) => {
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+};
+
 const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'review' | 'test'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'review'>('dashboard');
   const [dashboardActionTab, setDashboardActionTab] = useState<'logger' | 'planner'>('logger');
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
 
   // 커스텀 확인 모달 상태
   const [confirmModal, setConfirmModal] = useState<{
@@ -68,8 +78,7 @@ const App: React.FC = () => {
             : subject.completedPages,
           targetDate: subject.targetDate,
           tagIds: subject.tagIds,
-          reviewEnabled: subject.reviewEnabled ?? true,
-          habit: subject.habit,
+          reviewEnabled: subject.reviewEnabled ?? true
         })));
       }
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
@@ -152,8 +161,10 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleUpdateSubjectHabit = (updatedSubject: Subject) => {
-    setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
+  const toggleSidebar = () => {
+    const next = !isSidebarCollapsed;
+    setIsSidebarCollapsed(next);
+    writeSidebarCollapsed(next);
   };
 
   const handleDeleteSubject = (id: string) => {
@@ -472,7 +483,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen pb-20 md:pb-0 md:pl-64 bg-slate-50">
+    <div className={`min-h-screen pb-20 md:pb-0 bg-slate-50 transition-all ${isSidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
       {/* 커스텀 확인 모달 */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
@@ -497,28 +508,34 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav className="hidden md:flex flex-col w-64 bg-white h-screen border-r border-slate-200 fixed left-0 top-0 p-6 z-40">
-        <div className="mb-10 flex items-center gap-3">
+      <nav className={`hidden md:flex flex-col bg-white h-screen border-r border-slate-200 fixed left-0 top-0 z-40 transition-all ${isSidebarCollapsed ? 'w-20 p-4' : 'w-64 p-6'}`}>
+        <div className={`mb-10 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-xl font-bold">W</div>
-          <h1 className="text-xl font-black text-slate-800 tracking-tight">StudyWise</h1>
+          {!isSidebarCollapsed && <h1 className="text-xl font-black text-slate-800 tracking-tight">StudyWise</h1>}
         </div>
         
         <div className="space-y-2 flex-grow">
-          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="📊" label="학습 현황" />
-          <NavButton active={activeTab === 'test'} onClick={() => setActiveTab('test')} icon="🎯" label="시험 관리" />
-          <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon="📈" label="추이 분석" />
-          <NavButton active={activeTab === 'review'} onClick={() => setActiveTab('review')} icon="🔄" label="복습 관리" />
+          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="📊" label="학습 현황" collapsed={isSidebarCollapsed} />
+          <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon="📈" label="추이 분석" collapsed={isSidebarCollapsed} />
+          <NavButton active={activeTab === 'review'} onClick={() => setActiveTab('review')} icon="🔄" label="복습 관리" collapsed={isSidebarCollapsed} />
         </div>
 
-        <div className="mt-auto p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+        {!isSidebarCollapsed && <div className="mt-auto p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
           <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">오늘의 AI 팁</p>
           <p className="text-sm text-indigo-800 font-medium leading-tight">"{aiTip}"</p>
-        </div>
+        </div>}
+
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          className="mt-4 rounded-xl bg-slate-100 px-3 py-3 text-xs font-black text-slate-500 transition-all hover:bg-indigo-50 hover:text-indigo-600"
+        >
+          {isSidebarCollapsed ? '열기' : '접기'}
+        </button>
       </nav>
 
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-lg">
         <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📊</button>
-        <button onClick={() => setActiveTab('test')} className={`p-2 rounded-xl ${activeTab === 'test' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>🎯</button>
         <button onClick={() => setActiveTab('history')} className={`p-2 rounded-xl ${activeTab === 'history' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📈</button>
         <button onClick={() => setActiveTab('review')} className={`p-2 rounded-xl ${activeTab === 'review' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>🔄</button>
       </nav>
@@ -529,7 +546,6 @@ const App: React.FC = () => {
             <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest">{todayStr}</p>
             <h2 className="text-3xl font-black text-slate-900 mt-1">
               {activeTab === 'dashboard' ? '학습 데이터 분석' : 
-               activeTab === 'test' ? '시험 예측 및 부하 관리' :
                activeTab === 'history' ? '학습 추이 및 리포트' : '에빙하우스 복습 관리'}
             </h2>
           </div>
@@ -577,7 +593,7 @@ const App: React.FC = () => {
                 
                 <div className="p-8 md:p-12">
                   {dashboardActionTab === 'logger' ? (
-                    <SessionLogger subjects={subjects} logs={logs} onLogSession={handleLogSession} onUpdateSubject={handleUpdateSubjectHabit} />
+                    <SessionLogger subjects={subjects} logs={logs} onLogSession={handleLogSession} />
                   ) : (
                     <SubjectPlanner onAddSubject={handleAddSubject} />
                   )}
@@ -586,7 +602,6 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'test' && <TestCalculator />}
           {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
           {activeTab === 'review' && <ReviewManager logs={logs} subjects={subjects} onReviewAction={handleReviewAction} />}
         </div>
@@ -595,13 +610,13 @@ const App: React.FC = () => {
   );
 };
 
-const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: string; label: string }> = ({ active, onClick, icon, label }) => (
+const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: string; label: string; collapsed?: boolean }> = ({ active, onClick, icon, label, collapsed }) => (
   <button 
     onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-600 hover:bg-slate-100'}`}
+    className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-4'} py-3 rounded-xl transition-all ${active ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-600 hover:bg-slate-100'}`}
   >
     <span className="text-xl">{icon}</span>
-    <span className="font-bold text-sm">{label}</span>
+    {!collapsed && <span className="font-bold text-sm">{label}</span>}
   </button>
 );
 

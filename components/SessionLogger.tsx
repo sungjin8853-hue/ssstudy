@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Subject, StudyHabit, StudyLog } from '../types';
+import { Subject, StudyLog } from '../types';
 import { calculateRecentCompletedDayAverage } from '../utils/math';
 
 interface Props {
   subjects: Subject[];
   logs: StudyLog[];
   onLogSession: (log: StudyLog) => void;
-  onUpdateSubject?: (subject: Subject) => void;
 }
 
 type Step = 'idle' | 'timer' | 'pages';
@@ -14,7 +13,8 @@ type TimerMode = 'remainingPages' | 'elapsedTime';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
-const HABIT_PANEL_COLLAPSED_KEY = 'swp_habit_panel_collapsed';
+const SESSION_MEMO_KEY = 'swp_session_memos';
+const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
 
 const formatPageNumber = (value: number) => {
   if (!Number.isFinite(value)) return '0';
@@ -26,19 +26,6 @@ const calculateEndPageValue = (start: number, amount: number) => {
     ? start + amount - 1
     : start + amount;
   return Number(endPage.toFixed(2));
-};
-
-const createHabit = (badKeyword: string, goodKeyword: string): StudyHabit => {
-  const now = new Date().toISOString();
-  return {
-    id: Math.random().toString(36).substr(2, 9),
-    badKeyword,
-    goodKeyword,
-    goodCount: 0,
-    totalChecks: 0,
-    createdAt: now,
-    updatedAt: now
-  };
 };
 
 const readReviewSessionPreferences = (): Record<string, boolean> => {
@@ -55,105 +42,29 @@ const writeReviewSessionPreference = (subjectId: string, skipReview: boolean) =>
   localStorage.setItem(REVIEW_SESSION_PREF_KEY, JSON.stringify(preferences));
 };
 
-const readHabitPanelCollapsed = () => {
-  return localStorage.getItem(HABIT_PANEL_COLLAPSED_KEY) === 'true';
+const readSessionMemos = (): Record<string, string> => {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_MEMO_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
 };
 
-const writeHabitPanelCollapsed = (collapsed: boolean) => {
-  localStorage.setItem(HABIT_PANEL_COLLAPSED_KEY, String(collapsed));
+const writeSessionMemo = (subjectId: string, memo: string) => {
+  const memos = readSessionMemos();
+  memos[subjectId || 'global'] = memo;
+  localStorage.setItem(SESSION_MEMO_KEY, JSON.stringify(memos));
 };
 
-const HabitJourneyCard = ({
-  badKeyword,
-  goodKeyword,
-  goodCount,
-  dark = false,
-  selected,
-  onSelect,
-  editable = false,
-  onBadChange,
-  onGoodChange
-}: {
-  badKeyword: string;
-  goodKeyword: string;
-  goodCount: number;
-  dark?: boolean;
-  selected?: 'bad' | 'good' | null;
-  onSelect?: (value: 'bad' | 'good') => void;
-  editable?: boolean;
-  onBadChange?: (value: string) => void;
-  onGoodChange?: (value: string) => void;
-}) => {
-  const goodWeight = Math.min(900, 650 + Math.min(goodCount, 5) * 50);
-  const goodRatio = 0;
-  const beadLeft = '0%';
-
-  return (
-    <div className={`w-full rounded-[2rem] border p-5 ${dark ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-white'}`}>
-      <div className="mb-4 flex items-center justify-between [&>p:nth-child(2)]:hidden">
-        <p className={`text-[10px] font-black uppercase tracking-widest ${dark ? 'text-indigo-300' : 'text-indigo-500'}`}>습관 교정</p>
-        <p className={`text-[10px] font-bold ${dark ? 'text-slate-500' : 'text-slate-400'}`}>{Math.round(goodRatio * 100)}% 좋은 쪽</p>
-        <p className={`rounded-full px-3 py-1 text-[10px] font-black ${dark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-100 text-emerald-600'}`}>좋은 습관 {goodCount}회</p>
-      </div>
-      <div className="hidden">
-        <div className={`absolute left-0 right-0 top-1/2 h-2 -translate-y-1/2 rounded-full ${dark ? 'bg-rose-400/20' : 'bg-rose-100'}`}>
-          <div className="h-full rounded-full bg-gradient-to-r from-rose-400 via-amber-300 to-emerald-400" style={{ width: beadLeft }} />
-        </div>
-        <div
-          className="absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-emerald-400 shadow-xl transition-all"
-          style={{ left: beadLeft }}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          onClick={() => onSelect?.('bad')}
-          className={`rounded-2xl border p-4 text-left transition-all ${
-            selected === 'bad'
-              ? 'border-rose-500 bg-rose-50 text-rose-700'
-              : dark ? 'border-white/10 bg-black/10 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'
-          }`}
-        >
-          <p className="mb-2 text-[9px] font-black uppercase tracking-widest opacity-60">고칠 습관</p>
-          {editable ? (
-            <input
-              value={badKeyword}
-              onChange={e => onBadChange?.(e.target.value)}
-              placeholder="예: 급하게 넘김"
-              className="w-full bg-transparent text-base font-black outline-none"
-            />
-          ) : (
-            <p className="text-base font-black">{badKeyword || '아직 없음'}</p>
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => onSelect?.('good')}
-          className={`rounded-2xl border p-4 text-left transition-all ${
-            selected === 'good'
-              ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-              : dark ? 'border-white/10 bg-black/10 text-white' : 'border-slate-100 bg-slate-50 text-slate-700'
-          }`}
-        >
-          <p className="mb-2 text-[9px] font-black uppercase tracking-widest opacity-60">바꿀 습관</p>
-          {editable ? (
-            <input
-              value={goodKeyword}
-              onChange={e => onGoodChange?.(e.target.value)}
-              placeholder="예: 근거 표시"
-              className="w-full bg-transparent text-base outline-none"
-              style={{ fontWeight: goodWeight }}
-            />
-          ) : (
-            <p className="text-base" style={{ fontWeight: goodWeight }}>{goodKeyword || '아직 없음'}</p>
-          )}
-        </button>
-      </div>
-    </div>
-  );
+const readSessionMemoCollapsed = () => {
+  return localStorage.getItem(SESSION_MEMO_COLLAPSED_KEY) === 'true';
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, onUpdateSubject }) => {
+const writeSessionMemoCollapsed = (collapsed: boolean) => {
+  localStorage.setItem(SESSION_MEMO_COLLAPSED_KEY, String(collapsed));
+};
+
+export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState(measurableSubjects[0]?.id || '');
@@ -169,10 +80,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
   const [seconds, setSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
-  const [habitBadKeyword, setHabitBadKeyword] = useState('');
-  const [habitGoodKeyword, setHabitGoodKeyword] = useState('');
-  const [habitResult, setHabitResult] = useState<'bad' | 'good' | null>(null);
-  const [isHabitPanelCollapsed, setIsHabitPanelCollapsed] = useState(readHabitPanelCollapsed);
+  const [sessionMemo, setSessionMemo] = useState('');
+  const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
 
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -224,9 +133,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
   const pageAttackRemainingSeconds = averageSecondsPerPage > 0 && timeTargetPages < plannedPages
     ? Math.ceil(averageSecondsPerPage - (seconds % averageSecondsPerPage))
     : 0;
-  const activeHabit = selectedSubject?.habit && !selectedSubject.habit.completed ? selectedSubject.habit : undefined;
-  const completedHabit = selectedSubject?.habit?.completed ? selectedSubject.habit : undefined;
-
   useEffect(() => {
     if (isTimerRunning) {
       startTimeRef.current = Date.now();
@@ -267,18 +173,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
   }, [subjectId, recommendedDailyPages]);
 
   useEffect(() => {
-    const habit = selectedSubject?.habit;
-    if (habit && !habit.completed) {
-      setHabitBadKeyword(habit.badKeyword);
-      setHabitGoodKeyword(habit.goodKeyword);
-      setHabitResult(null);
+    if (!subjectId) {
+      setSessionMemo(readSessionMemos().global || '');
       return;
     }
-
-    setHabitBadKeyword('');
-    setHabitGoodKeyword(habit?.goodKeyword || '');
-    setHabitResult(null);
-  }, [subjectId, selectedSubject?.habit?.id, selectedSubject?.habit?.completed]);
+    setSessionMemo(readSessionMemos()[subjectId] || '');
+  }, [subjectId]);
 
   useEffect(() => {
     if (!measurableSubjects.some(subject => subject.id === subjectId)) {
@@ -303,7 +203,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
     setReadAmount('');
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
-    setHabitResult(null);
   };
 
   const handleToggleSkipReview = () => {
@@ -313,10 +212,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
     writeReviewSessionPreference(subjectId, nextSkipReview);
   };
 
-  const toggleHabitPanel = () => {
-    const nextCollapsed = !isHabitPanelCollapsed;
-    setIsHabitPanelCollapsed(nextCollapsed);
-    writeHabitPanelCollapsed(nextCollapsed);
+  const handleMemoChange = (memo: string) => {
+    setSessionMemo(memo);
+    writeSessionMemo(subjectId, memo);
+  };
+
+  const toggleMemoCollapsed = () => {
+    const next = !isMemoCollapsed;
+    setIsMemoCollapsed(next);
+    writeSessionMemoCollapsed(next);
   };
 
   const handleStartMeasurement = () => {
@@ -349,45 +253,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
     setStep('pages');
   };
 
-  const buildNextHabit = () => {
-    const badKeyword = habitBadKeyword.trim();
-    const goodKeyword = habitGoodKeyword.trim();
-
-    if (!badKeyword || !goodKeyword) return undefined;
-
-    if (!badKeyword && !goodKeyword && !activeHabit) {
-      if (completedHabit) return undefined;
-      alert('이번 과목에서 가장 고쳐야 할 습관과 바꿀 좋은 습관을 적어주세요.');
-      return null;
-    }
-    if (!badKeyword || !goodKeyword) {
-      alert('고쳐야 할 습관과 바꿀 좋은 습관을 모두 적어주세요.');
-      return null;
-    }
-
-    const baseHabit = activeHabit || createHabit(badKeyword, goodKeyword);
-    const checkedResult = habitResult;
-
-    return {
-      habit: {
-        ...baseHabit,
-        badKeyword,
-        goodKeyword,
-        goodCount: baseHabit.goodCount + (checkedResult === 'good' ? 1 : 0),
-        totalChecks: baseHabit.totalChecks + (checkedResult ? 1 : 0),
-        updatedAt: new Date().toISOString()
-      },
-      check: checkedResult
-        ? {
-            habitId: baseHabit.id,
-            badKeyword,
-            goodKeyword,
-            result: checkedResult
-          }
-        : undefined
-    };
-  };
-
   const handleFinalSave = () => {
     const sPage = parseFloat(startPage);
     const amount = parseFloat(readAmount);
@@ -402,9 +267,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
       return;
     }
 
-    const nextHabitState = buildNextHabit();
-    if (nextHabitState === null) return;
-
     onLogSession({
       id: Math.random().toString(36).substr(2, 9),
       subjectId,
@@ -414,16 +276,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
       timeSpentMinutes: minutes,
       timestamp: new Date().toISOString(),
       isReviewed: false,
-      isCondensed: skipReview,
-      habitCheck: nextHabitState?.check
+      isCondensed: skipReview
     });
-
-    if (selectedSubject && nextHabitState?.habit) {
-      onUpdateSubject?.({
-        ...selectedSubject,
-        habit: nextHabitState.habit
-      });
-    }
 
     resetAll();
   };
@@ -466,6 +320,30 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
                 하루 권장 장수를 자동으로 채웁니다. 필요하면 직접 바꿀 수 있어요.
               </p>
             </div>
+            <div className="mt-5 pt-5 border-t border-slate-200">
+              <div className="mb-3 flex items-center justify-between">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">세션 메모</label>
+                <button
+                  type="button"
+                  onClick={toggleMemoCollapsed}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform"
+                  title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
+                >
+                  <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
+                </button>
+              </div>
+              {!isMemoCollapsed && (
+                <>
+                  <textarea
+                    value={sessionMemo}
+                    onChange={e => handleMemoChange(e.target.value)}
+                    placeholder="이번 과목에서 기억할 것, 풀이 전략, 다음에 볼 내용..."
+                    className="h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                  />
+                  <p className="mt-2 px-1 text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
+                </>
+              )}
+            </div>
           </div>
           <button
             onClick={handleStartMeasurement}
@@ -483,10 +361,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
   const isDark = step === 'timer';
 
   return (
-    <div className={`fixed inset-0 flex flex-col items-center justify-center p-6 ${isDark ? 'bg-slate-950' : 'bg-white'}`} style={{ zIndex: 9999 }}>
+    <div className={`fixed inset-0 flex flex-col items-center justify-center p-4 ${isDark ? 'bg-slate-950' : 'bg-white'}`} style={{ zIndex: 9999 }}>
       <button
         onClick={() => setIsConfirmingCancel(true)}
-        className={`fixed top-8 right-8 w-14 h-14 rounded-full flex items-center justify-center shadow-xl active:scale-90 transition-all ${
+        className={`fixed top-5 right-5 w-10 h-10 rounded-full flex items-center justify-center shadow-sm active:scale-90 transition-all ${
           isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-500'
         }`}
       >
@@ -495,9 +373,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
 
       {isConfirmingCancel && (
         <div className="fixed inset-0 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm z-[10000]">
-          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-10 text-center shadow-2xl">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-6 text-center shadow-xl">
             <h4 className="text-xl font-black text-slate-900 mb-2">학습 측정을 중단할까요?</h4>
-            <p className="text-slate-500 text-sm mb-10">기록은 저장되지 않고 사라집니다.</p>
+            <p className="text-slate-500 text-sm mb-6">기록은 저장되지 않고 사라집니다.</p>
             <div className="flex flex-col gap-3">
               <button onClick={resetAll} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black">네, 취소합니다</button>
               <button onClick={() => setIsConfirmingCancel(false)} className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black">계속 공부할게요</button>
@@ -506,22 +384,35 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
         </div>
       )}
 
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-3xl">
         {step === 'timer' && (
           <div className="flex flex-col items-center">
-            <span className="px-4 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-black uppercase mb-8">측정 진행 중</span>
-            <p className="text-center text-xs font-black text-slate-500 mb-3">{selectedSubject?.name}</p>
-            {activeHabit && (
-              <div className="mb-6 w-full">
-                <HabitJourneyCard
-                  badKeyword={activeHabit.badKeyword}
-                  goodKeyword={activeHabit.goodKeyword}
-                  goodCount={activeHabit.goodCount}
-                  dark
-                />
+            <div className="mb-4 flex items-center gap-3">
+              <span className="px-3 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-black uppercase">측정 중</span>
+              <p className="text-xs font-black text-slate-500">{selectedSubject?.name}</p>
+            </div>
+            <div className="mb-4 w-full rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">세션 메모</p>
+                <button
+                  type="button"
+                  onClick={toggleMemoCollapsed}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-lg font-black text-indigo-300 transition-transform"
+                  title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
+                >
+                  <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
+                </button>
               </div>
-            )}
-            <div className="mb-8 grid w-full grid-cols-2 gap-2 rounded-3xl bg-white/5 p-2">
+              {!isMemoCollapsed && (
+                <textarea
+                  value={sessionMemo}
+                  onChange={e => handleMemoChange(e.target.value)}
+                  placeholder="세션 메모"
+                  className="mt-3 h-24 w-full resize-none rounded-xl border border-white/10 bg-black/10 p-4 text-sm font-bold text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500"
+                />
+              )}
+            </div>
+            <div className="mb-4 grid w-full max-w-lg grid-cols-2 gap-2 rounded-2xl bg-white/5 p-1.5">
               <button
                 onClick={() => setTimerMode('remainingPages')}
                 className={`py-3 rounded-2xl text-xs font-black transition-all ${timerMode === 'remainingPages' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}
@@ -537,16 +428,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
             </div>
 
             {timerMode === 'remainingPages' ? (
-              <div className="mb-16 text-center">
+              <div className="mb-8 text-center">
                 <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">학습 진척도</p>
                 <div className="text-4xl md:text-5xl font-mono font-black text-white tabular-nums">
                   {averageTimePerPage > 0
                     ? `${formatPageNumber(progressCurrentPages)} / ${formatPageNumber(progressTargetPages)}P`
                     : '-'}
                 </div>
-                <div className="mt-6 rounded-[2rem] bg-white/5 px-8 py-6">
+                <div className="mt-4 rounded-2xl bg-white/5 px-6 py-4">
                   <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">타임어택</p>
-                  <div className="font-mono text-8xl md:text-9xl font-black text-white tabular-nums">
+                  <div className="font-mono text-7xl md:text-8xl font-black text-white tabular-nums">
                     {averageTimePerPage > 0 ? formatTime(pageAttackRemainingSeconds) : '--:--'}
                   </div>
                 </div>
@@ -557,19 +448,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
                 </p>
               </div>
             ) : (
-              <div className="text-8xl md:text-9xl font-mono font-black text-white tabular-nums mb-16">{formatTime(seconds)}</div>
+              <div className="text-7xl md:text-8xl font-mono font-black text-white tabular-nums mb-8">{formatTime(seconds)}</div>
             )}
 
-            <div className="flex gap-4 w-full">
+            <div className="flex gap-2 w-full max-w-lg">
               <button
                 onClick={() => setIsTimerRunning(!isTimerRunning)}
-                className={`flex-[2] py-6 rounded-3xl font-black text-xl shadow-2xl ${isTimerRunning ? 'bg-slate-800 text-white' : 'bg-indigo-600 text-white'}`}
+                className={`flex-[2] py-4 rounded-2xl font-black text-base shadow-lg ${isTimerRunning ? 'bg-slate-800 text-white' : 'bg-indigo-600 text-white'}`}
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
               </button>
               <button
                 onClick={handleToggleSkipReview}
-                className={`w-24 py-4 rounded-3xl font-black text-xs shadow-xl transition-all flex flex-col items-center justify-center gap-1 ${
+                className={`w-24 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex flex-col items-center justify-center gap-1 ${
                   skipReview
                     ? 'bg-rose-100 text-rose-500 border-2 border-rose-500'
                     : 'bg-white text-slate-400 border-2 border-transparent'
@@ -578,15 +469,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
                 <span className="text-xl">{skipReview ? '🚫' : '📥'}</span>
                 <span>{skipReview ? '복습 제외' : '복습 담기'}</span>
               </button>
-              <button onClick={handleTimerComplete} className="flex-1 py-6 bg-green-600 text-white rounded-3xl font-black text-xl shadow-2xl">완료</button>
+              <button onClick={handleTimerComplete} className="flex-1 py-4 bg-green-600 text-white rounded-2xl font-black text-base shadow-lg">완료</button>
             </div>
           </div>
         )}
 
         {step === 'pages' && (
           <div className="flex flex-col items-center">
-            <h3 className="text-3xl font-black text-slate-900 mb-8">학습량 입력</h3>
-            <div className="flex flex-col gap-6 mb-8 w-full bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100">
+            <h3 className="text-2xl font-black text-slate-900 mb-4">학습량 입력</h3>
+            <div className="flex flex-col gap-4 mb-4 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">오늘 학습한 페이지 수</label>
                 <input
@@ -596,23 +487,23 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
                   onChange={e => setReadAmount(e.target.value)}
                   placeholder="0"
                   autoFocus
-                  className="w-full p-6 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-3xl font-black text-4xl text-center outline-none transition-all shadow-sm text-indigo-900"
+                  className="w-full p-4 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-2xl font-black text-3xl text-center outline-none transition-all shadow-sm text-indigo-900"
                 />
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="rounded-2xl bg-white p-4 text-center border border-slate-100">
+                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">이전 속도</p>
                   <p className="mt-1 text-lg font-black text-slate-700">
                     {averageTimePerPage > 0 ? `${averageTimePerPage.toFixed(2)}분/P` : '기록 필요'}
                   </p>
                 </div>
-                <div className="rounded-2xl bg-white p-4 text-center border border-slate-100">
+                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">이번 속도</p>
                   <p className="mt-1 text-lg font-black text-indigo-600">
                     {currentTimePerPage > 0 ? `${currentTimePerPage.toFixed(2)}분/P` : '-'}
                   </p>
                 </div>
-                <div className="rounded-2xl bg-white p-4 text-center border border-slate-100">
+                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">속도 변화</p>
                   <p className={`mt-1 text-lg font-black ${speedRatioPercent > 100 ? 'text-emerald-600' : speedRatioPercent > 0 && speedRatioPercent < 100 ? 'text-rose-600' : 'text-slate-500'}`}>
                     {currentTimePerPage > 0 && averageTimePerPage > 0
@@ -625,45 +516,33 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession, o
                   </p>
                 </div>
               </div>
-              <div className={`rounded-[2rem] border border-indigo-100 bg-indigo-50/50 p-4 ${isHabitPanelCollapsed ? '[&>*:not(:first-child)]:hidden' : ''}`}>
-                <div className="mb-3 flex items-center justify-between">
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">세션 메모</label>
                   <button
                     type="button"
-                    onClick={toggleHabitPanel}
-                    className={`mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform ${isHabitPanelCollapsed ? '' : 'rotate-90'}`}
-                    title={isHabitPanelCollapsed ? '습관 체크 열기' : '습관 체크 닫기'}
+                    onClick={toggleMemoCollapsed}
+                    className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform"
+                    title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
                   >
-                    ›
+                    <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
                   </button>
-                  <div>
-                    <p className="text-sm font-black text-slate-800">이번 세션 습관 체크</p>
-                    <p className="mt-1 text-[10px] font-bold text-slate-400">
-                      핵심 키워드만 적어두면 다음 측정 때 계속 떠요.
-                    </p>
-                  </div>
-                  {completedHabit && !activeHabit && (
-                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black text-emerald-600">
-                      좋은 습관 유지: {completedHabit.goodKeyword}
-                    </span>
-                  )}
                 </div>
-                <HabitJourneyCard
-                  badKeyword={habitBadKeyword}
-                  goodKeyword={habitGoodKeyword}
-                  goodCount={activeHabit?.goodCount || 0}
-                  selected={habitResult}
-                  onSelect={setHabitResult}
-                  editable
-                  onBadChange={setHabitBadKeyword}
-                  onGoodChange={setHabitGoodKeyword}
-                />
-                <p className="mt-3 text-center text-[10px] font-bold text-slate-400">
-                  오늘 더 가까웠던 쪽을 하나 체크해두면 습관 기록에 반영됩니다.
-                </p>
+                {!isMemoCollapsed && (
+                  <>
+                    <textarea
+                      value={sessionMemo}
+                      onChange={e => handleMemoChange(e.target.value)}
+                      placeholder="다음 세션에서 이어볼 내용..."
+                      className="mt-3 h-28 w-full resize-none rounded-xl border border-indigo-100 bg-white p-4 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500"
+                    />
+                    <p className="mt-2 text-center text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
+                  </>
+                )}
               </div>
             </div>
 
-            <button onClick={handleFinalSave} className="w-full py-5 bg-green-600 text-white rounded-3xl font-black text-xl shadow-xl">
+            <button onClick={handleFinalSave} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg shadow-lg">
               저장 완료
             </button>
           </div>
