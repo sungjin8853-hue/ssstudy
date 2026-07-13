@@ -28,9 +28,9 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
   const [expandedFolderKeys, setExpandedFolderKeys] = useState<Set<string>>(new Set());
 
   const recentLogsData = useMemo(() => {
-    return logs.slice(-20).map(log => ({
+    return logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0).slice(-20).map(log => ({
       date: new Date(log.timestamp).toLocaleDateString('ko-KR', { day: 'numeric', month: 'short' }),
-      efficiency: log.pagesRead > 0 ? Number((log.timeSpentMinutes / log.pagesRead).toFixed(2)) : 0,
+      efficiency: Number((log.timeSpentMinutes / log.pagesRead).toFixed(2)),
       name: subjects.find(subject => subject.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'
     }));
   }, [logs, subjects]);
@@ -38,6 +38,9 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
   const buildSummary = (items: StudyLog[], id: string, name: string): Summary => {
     const totalPages = items.reduce((sum, log) => sum + log.pagesRead, 0);
     const totalMinutes = items.reduce((sum, log) => sum + log.timeSpentMinutes, 0);
+    const timedItems = items.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
+    const timedPages = timedItems.reduce((sum, log) => sum + log.pagesRead, 0);
+    const timedMinutes = timedItems.reduce((sum, log) => sum + log.timeSpentMinutes, 0);
     const latestTimestamp = items.reduce(
       (latest, log) => Math.max(latest, new Date(log.timestamp).getTime()),
       0
@@ -48,7 +51,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
       name,
       totalPages,
       totalMinutes,
-      averageEfficiency: totalPages > 0 ? totalMinutes / totalPages : 0,
+      averageEfficiency: timedPages > 0 ? timedMinutes / timedPages : 0,
       sessionCount: items.length,
       latestTimestamp
     };

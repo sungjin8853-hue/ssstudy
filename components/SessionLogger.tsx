@@ -28,6 +28,13 @@ const calculateEndPageValue = (start: number, amount: number) => {
   return Number(endPage.toFixed(2));
 };
 
+const calculateAmountFromEndPage = (start: number, end: number) => {
+  const amount = Number.isInteger(start) && Number.isInteger(end)
+    ? end - start + 1
+    : end - start;
+  return Number(amount.toFixed(2));
+};
+
 const readReviewSessionPreferences = (): Record<string, boolean> => {
   try {
     return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
@@ -121,12 +128,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
   const expectedReadAmount = averageTimePerPage > 0
     ? Math.min(remainingSubjectPages, Math.max(1, timeTargetPages || Math.floor(elapsedPagesByPlan)))
     : Math.min(remainingSubjectPages, plannedPages);
-  const currentTimePerPage = readAmount && parseFloat(readAmount) > 0 ? minutes / parseFloat(readAmount) : 0;
+  const currentReadAmount = startPage && readAmount
+    ? calculateAmountFromEndPage(parseFloat(startPage), parseFloat(readAmount))
+    : 0;
+  const currentTimePerPage = currentReadAmount > 0 ? minutes / currentReadAmount : 0;
   const speedDeltaMinutes = currentTimePerPage > 0 && averageTimePerPage > 0
     ? currentTimePerPage - averageTimePerPage
     : 0;
   const previousExpectedPages = averageTimePerPage > 0 ? minutes / averageTimePerPage : 0;
-  const actualPages = readAmount ? parseFloat(readAmount) : 0;
+  const actualPages = currentReadAmount;
   const speedRatioPercent = previousExpectedPages > 0 && actualPages > 0
     ? (actualPages / previousExpectedPages) * 100
     : 0;
@@ -245,20 +255,25 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
     }
     setIsTimerRunning(false);
     if (selectedSubject) {
-      setStartPage(formatPageNumber(selectedSubject.completedPages + 1));
-    }
-    if (expectedReadAmount > 0) {
-      setReadAmount(formatPageNumber(expectedReadAmount));
+      const nextStartPage = selectedSubject.completedPages + 1;
+      setStartPage(formatPageNumber(nextStartPage));
+      if (expectedReadAmount > 0) {
+        setReadAmount(formatPageNumber(calculateEndPageValue(nextStartPage, expectedReadAmount)));
+      }
+      else {
+        setReadAmount(formatPageNumber(nextStartPage));
+      }
     }
     setStep('pages');
   };
 
   const handleFinalSave = () => {
     const sPage = parseFloat(startPage);
-    const amount = parseFloat(readAmount);
+    const endPage = parseFloat(readAmount);
+    const amount = calculateAmountFromEndPage(sPage, endPage);
 
-    if (isNaN(sPage) || isNaN(amount) || amount <= 0) {
-      alert('학습한 페이지 수를 정확히 입력해주세요.');
+    if (isNaN(sPage) || isNaN(endPage) || isNaN(amount) || amount <= 0) {
+      alert('완료된 끝 페이지를 정확히 입력해주세요.');
       return;
     }
 
@@ -272,7 +287,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
       subjectId,
       pagesRead: amount,
       startPage: sPage,
-      endPage: calculateEndPageValue(sPage, amount),
+      endPage,
       timeSpentMinutes: minutes,
       timestamp: new Date().toISOString(),
       isReviewed: false,
@@ -281,10 +296,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
 
     resetAll();
   };
-
-  const calculatedEndPage = startPage && readAmount
-    ? calculateEndPageValue(parseFloat(startPage), parseFloat(readAmount))
-    : null;
 
   if (step === 'idle') {
     return (
@@ -479,7 +490,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
             <h3 className="text-2xl font-black text-slate-900 mb-4">학습량 입력</h3>
             <div className="flex flex-col gap-4 mb-4 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100">
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">오늘 학습한 페이지 수</label>
+                <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">완료된 끝 페이지</label>
                 <input
                   type="number"
                   step="1"
@@ -489,6 +500,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                   autoFocus
                   className="w-full p-4 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-2xl font-black text-3xl text-center outline-none transition-all shadow-sm text-indigo-900"
                 />
+                <p className="px-2 text-center text-[10px] font-bold text-slate-400">
+                  시작 p.{formatPageNumber(parseFloat(startPage) || 0)} · 학습량 {currentReadAmount > 0 ? formatPageNumber(currentReadAmount) : '0'}P
+                </p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="rounded-xl bg-white p-3 text-center border border-slate-100">

@@ -27,19 +27,19 @@ const formatNumber = (value: number) => {
   return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/\.?0+$/, '');
 };
 
-const calculateEndPageValue = (start: number, amount: number) => {
-  const endPage = Number.isInteger(start) && Number.isInteger(amount)
-    ? start + amount - 1
-    : start + amount;
-  return Number(endPage.toFixed(2));
+const calculateAmountFromEndPage = (start: number, end: number) => {
+  const amount = Number.isInteger(start) && Number.isInteger(end)
+    ? end - start + 1
+    : end - start;
+  return Number(amount.toFixed(2));
 };
 
 export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onReplaceLogs, onDeleteLogs }) => {
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
   const [subjectId, setSubjectId] = useState('');
-  const [editPages, setEditPages] = useState(0);
-  const [editMinutes, setEditMinutes] = useState(0);
+  const [editEndPage, setEditEndPage] = useState(0);
+  const [editMinutes, setEditMinutes] = useState('');
   const [editStartPage, setEditStartPage] = useState(1);
 
   const todayLogs = useMemo(() => {
@@ -50,7 +50,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
   const totals = useMemo(() => {
     const time = todayLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
     const pages = todayLogs.reduce((acc, log) => acc + log.pagesRead, 0);
-    const avgEfficiency = pages > 0 ? (time / pages).toFixed(1) : '0';
+    const timedPages = todayLogs
+      .filter(log => log.timeSpentMinutes > 0)
+      .reduce((acc, log) => acc + log.pagesRead, 0);
+    const avgEfficiency = timedPages > 0 ? (time / timedPages).toFixed(1) : '-';
     return { time, pages, avgEfficiency };
   }, [todayLogs]);
 
@@ -97,18 +100,19 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
     setModalMode('add');
     setEditingSummary(null);
     setSubjectId(firstSubject?.id || '');
-    setEditPages(0);
-    setEditMinutes(0);
-    setEditStartPage(firstSubject ? firstSubject.completedPages + 1 : 1);
+    setEditMinutes('');
+    const start = firstSubject ? firstSubject.completedPages + 1 : 1;
+    setEditStartPage(start);
+    setEditEndPage(start);
   };
 
   const openEditModal = (summary: SubjectSummary) => {
     setModalMode('edit');
     setEditingSummary(summary);
     setSubjectId(summary.subjectId);
-    setEditPages(summary.pages);
-    setEditMinutes(summary.minutes);
+    setEditMinutes(summary.minutes > 0 ? String(summary.minutes) : '');
     setEditStartPage(summary.startPage || 1);
+    setEditEndPage(summary.endPage || summary.startPage || 1);
   };
 
   const closeModal = () => {
@@ -117,19 +121,21 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
   };
 
   const saveLog = () => {
-    if (!subjectId || editPages <= 0 || editMinutes < 0) {
-      alert('과목, 학습량, 시간을 확인해주세요.');
+    const pages = calculateAmountFromEndPage(editStartPage, editEndPage);
+    const minutes = editMinutes.trim() === '' ? 0 : Number(editMinutes);
+
+    if (!subjectId || pages <= 0 || Number.isNaN(minutes) || minutes < 0) {
+      alert('과목, 완료된 끝 페이지, 시간을 확인해주세요.');
       return;
     }
 
-    const endPage = calculateEndPageValue(editStartPage, editPages);
     const replacementLog: StudyLog = {
       id: editingSummary?.logs[0]?.id || Math.random().toString(36).substr(2, 9),
       subjectId,
-      pagesRead: editPages,
-      timeSpentMinutes: editMinutes,
+      pagesRead: pages,
+      timeSpentMinutes: minutes,
       startPage: editStartPage,
-      endPage,
+      endPage: editEndPage,
       timestamp: editingSummary?.latestTimestamp || new Date().toISOString(),
       isReviewed: false,
       isCondensed: editingSummary?.logs.every(log => log.isCondensed) || false
@@ -145,7 +151,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
   };
 
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
-  const calculatedEndPage = editPages > 0 ? calculateEndPageValue(editStartPage, editPages) : null;
+  const calculatedPages = editEndPage > 0 ? calculateAmountFromEndPage(editStartPage, editEndPage) : 0;
 
   return (
     <section className="animate-fade-in">
@@ -169,7 +175,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
           </div>
           <div className="text-right border-l pl-4 border-slate-200">
             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">평균 효율</p>
-            <p className="text-sm font-black text-indigo-600">{totals.avgEfficiency}분/P</p>
+            <p className="text-sm font-black text-indigo-600">{totals.avgEfficiency === '-' ? '-' : `${totals.avgEfficiency}분/P`}</p>
           </div>
         </div>
       </div>
@@ -181,7 +187,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {subjectSummaries.map(summary => {
-            const efficiency = summary.pages > 0 ? (summary.minutes / summary.pages).toFixed(2) : '0';
+            const efficiency = summary.pages > 0 && summary.minutes > 0 ? `${(summary.minutes / summary.pages).toFixed(2)}분/P` : '-';
 
             return (
               <div key={summary.subjectId} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between group hover:border-indigo-300 transition-all">
@@ -198,7 +204,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  <span className="text-xs font-bold text-indigo-600">{efficiency}분/P</span>
+                  <span className="text-xs font-bold text-indigo-600">{efficiency}</span>
                   <div className="flex gap-1">
                     <button
                       onClick={() => openEditModal(summary)}
@@ -235,7 +241,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
                     const nextSubject = subjects.find(subject => subject.id === e.target.value);
                     setSubjectId(e.target.value);
                     if (modalMode === 'add' && nextSubject) {
-                      setEditStartPage(nextSubject.completedPages + 1);
+                      const start = nextSubject.completedPages + 1;
+                      setEditStartPage(start);
+                      setEditEndPage(start);
                     }
                   }}
                   className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg outline-none"
@@ -247,12 +255,22 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">학습량(P)</label>
-                <input type="number" step="1" value={editPages} onChange={e => setEditPages(Number(e.target.value))} className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg" />
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">완료된 끝 페이지</label>
+                <input type="number" step="1" value={editEndPage} onChange={e => setEditEndPage(Number(e.target.value))} className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg" />
+                <p className="px-1 text-[10px] font-bold text-slate-400">
+                  시작 p.{formatNumber(editStartPage)} · 학습량 {calculatedPages > 0 ? formatNumber(calculatedPages) : '0'}P
+                </p>
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">소요 시간(분)</label>
-                <input type="number" value={editMinutes} onChange={e => setEditMinutes(Number(e.target.value))} className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg" />
+                <input
+                  type="number"
+                  value={editMinutes}
+                  onChange={e => setEditMinutes(e.target.value)}
+                  placeholder="비워두면 효율 계산 제외"
+                  className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg"
+                />
+                <p className="px-1 text-[10px] font-bold text-slate-400">공백이면 평균효율과 소모시간에 반영되지 않습니다.</p>
               </div>
             </div>
             <div className="flex gap-3">
