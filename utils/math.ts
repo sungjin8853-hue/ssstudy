@@ -4,7 +4,7 @@ const RECENT_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
 export const calculateRecentCompletedDayAverage = (
   logs: StudyLog[],
-  dailyTargetPages: number
+  _dailyTargetPages: number
 ): { averageTimePerPage: number; standardDeviation: number } => {
   const validLogs = logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
 
@@ -25,9 +25,7 @@ export const calculateRecentCompletedDayAverage = (
       dailyMap.set(dayKey, current);
     });
 
-  const completedDays = Array.from(dailyMap.values()).filter(day =>
-    dailyTargetPages > 0 ? day.pages >= dailyTargetPages : day.pages > 0
-  );
+  const completedDays = Array.from(dailyMap.values()).filter(day => day.pages > 0 && day.minutes > 0);
 
   if (completedDays.length === 0) {
     return { averageTimePerPage: 0, standardDeviation: 0 };
