@@ -15,6 +15,29 @@ const DAY_MS = 1000 * 60 * 60 * 24;
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
 const SESSION_MEMO_KEY = 'swp_session_memos';
 const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
+const MARKER_SOUND_SRC = '/sounds/marker.mp3';
+const PAGE_TURN_SOUND_SRC = '/sounds/page-turn.mp3';
+
+const playSound = (src: string, startAtSeconds = 0) => {
+  const audio = new Audio(src);
+  audio.volume = 1;
+
+  const play = () => {
+    audio.currentTime = startAtSeconds;
+    void audio.play().catch(() => undefined);
+  };
+
+  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    play();
+    return;
+  }
+
+  audio.addEventListener('loadedmetadata', play, { once: true });
+  audio.load();
+};
+
+const playMarkerSound = () => playSound(MARKER_SOUND_SRC, 0.5);
+const playPageTurnSound = () => playSound(PAGE_TURN_SOUND_SRC);
 
 const formatPageNumber = (value: number) => {
   if (!Number.isFinite(value)) return '0';
@@ -71,6 +94,12 @@ const writeSessionMemoCollapsed = (collapsed: boolean) => {
   localStorage.setItem(SESSION_MEMO_COLLAPSED_KEY, String(collapsed));
 };
 
+const getMemoTextSize = (text: string) => {
+  if (text.length > 220) return 'text-sm';
+  if (text.length > 120) return 'text-base';
+  return 'text-lg';
+};
+
 export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
@@ -88,11 +117,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
   const [sessionMemo, setSessionMemo] = useState('');
+  const [reviewMemo, setReviewMemo] = useState('');
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
 
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const accumulatedSecondsRef = useRef(0);
+  const markerSoundPagesRef = useRef<Set<number>>(new Set());
+  const pageTurnSoundPagesRef = useRef<Set<number>>(new Set());
 
   const selectedSubjectLogs = useMemo(
     () => logs.filter(log => log.subjectId === subjectId && log.pagesRead > 0 && log.timeSpentMinutes > 0),
@@ -143,6 +175,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
   const pageAttackRemainingSeconds = averageSecondsPerPage > 0 && timeTargetPages < plannedPages
     ? Math.ceil(averageSecondsPerPage - (seconds % averageSecondsPerPage))
     : 0;
+  const hasSessionMemo = sessionMemo.trim().length > 0;
   useEffect(() => {
     if (isTimerRunning) {
       startTimeRef.current = Date.now();
@@ -171,6 +204,26 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
   useEffect(() => {
     setMinutes(parseFloat((seconds / 60).toFixed(2)));
   }, [seconds]);
+
+  useEffect(() => {
+    if (!isTimerRunning || step !== 'timer' || averageSecondsPerPage <= 0 || plannedPages <= 0) return;
+
+    const currentPageIndex = Math.floor(seconds / averageSecondsPerPage);
+    if (currentPageIndex >= plannedPages) return;
+
+    const elapsedInPage = seconds - currentPageIndex * averageSecondsPerPage;
+    const remainingInPage = averageSecondsPerPage - elapsedInPage;
+
+    if (averageSecondsPerPage > 60 && remainingInPage <= 60 && !markerSoundPagesRef.current.has(currentPageIndex)) {
+      markerSoundPagesRef.current.add(currentPageIndex);
+      playMarkerSound();
+    }
+
+    if (remainingInPage <= 2 && !pageTurnSoundPagesRef.current.has(currentPageIndex)) {
+      pageTurnSoundPagesRef.current.add(currentPageIndex);
+      playPageTurnSound();
+    }
+  }, [averageSecondsPerPage, isTimerRunning, plannedPages, seconds, step]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -211,8 +264,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
     setIsTimerRunning(false);
     setStartPage('');
     setReadAmount('');
+    setReviewMemo('');
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
+    markerSoundPagesRef.current.clear();
+    pageTurnSoundPagesRef.current.clear();
   };
 
   const handleToggleSkipReview = () => {
@@ -238,6 +294,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
       alert('과목을 먼저 선택해주세요.');
       return;
     }
+    markerSoundPagesRef.current.clear();
+    pageTurnSoundPagesRef.current.clear();
     setStep('timer');
     setIsTimerRunning(true);
   };
@@ -271,6 +329,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
     const sPage = parseFloat(startPage);
     const endPage = parseFloat(readAmount);
     const amount = calculateAmountFromEndPage(sPage, endPage);
+    const shouldSkipReview = skipReview && reviewMemo.trim().length === 0;
 
     if (isNaN(sPage) || isNaN(endPage) || isNaN(amount) || amount <= 0) {
       alert('완료된 끝 페이지를 정확히 입력해주세요.');
@@ -291,7 +350,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
       timeSpentMinutes: minutes,
       timestamp: new Date().toISOString(),
       isReviewed: false,
-      isCondensed: skipReview
+      isCondensed: shouldSkipReview,
+      reviewMemo: !shouldSkipReview ? reviewMemo.trim() : undefined
     });
 
     resetAll();
@@ -349,7 +409,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                     value={sessionMemo}
                     onChange={e => handleMemoChange(e.target.value)}
                     placeholder="이번 과목에서 기억할 것, 풀이 전략, 다음에 볼 내용..."
-                    className="h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                    className={`h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 ${getMemoTextSize(sessionMemo)}`}
                   />
                   <p className="mt-2 px-1 text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
                 </>
@@ -402,13 +462,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
               <span className="px-3 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-black uppercase">측정 중</span>
               <p className="text-xs font-black text-slate-500">{selectedSubject?.name}</p>
             </div>
-            <div className="mb-4 w-full rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center justify-between">
+            <div className={`mb-4 w-full rounded-2xl border-4 p-3 transition-all ${hasSessionMemo && isMemoCollapsed ? 'border-rose-500 bg-rose-500/10 shadow-lg shadow-rose-950/20' : 'border-white/10 bg-white/5'}`}>
+              <div className="flex items-center justify-between [&>p:first-child]:hidden">
                 <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">세션 메모</p>
+                <p className={`text-sm font-black uppercase tracking-widest ${hasSessionMemo && isMemoCollapsed ? 'text-rose-300' : 'text-indigo-300'}`}>세션 메모</p>
                 <button
                   type="button"
                   onClick={toggleMemoCollapsed}
-                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-lg font-black text-indigo-300 transition-transform"
+                  className={`flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 text-2xl font-black transition-transform ${hasSessionMemo && isMemoCollapsed ? 'text-rose-300 ring-2 ring-rose-400/40' : 'text-indigo-300'}`}
                   title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
                 >
                   <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
@@ -419,7 +480,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                   value={sessionMemo}
                   onChange={e => handleMemoChange(e.target.value)}
                   placeholder="세션 메모"
-                  className="mt-3 h-24 w-full resize-none rounded-xl border border-white/10 bg-black/10 p-4 text-sm font-bold text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500"
+                  className={`mt-3 h-24 w-full resize-none rounded-xl border border-white/10 bg-black/10 p-4 font-bold text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500 ${getMemoTextSize(sessionMemo)}`}
                 />
               )}
             </div>
@@ -474,11 +535,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                 className={`w-24 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex flex-col items-center justify-center gap-1 ${
                   skipReview
                     ? 'bg-rose-100 text-rose-500 border-2 border-rose-500'
-                    : 'bg-white text-slate-400 border-2 border-transparent'
+                    : 'bg-emerald-100 text-emerald-600 border-2 border-emerald-500'
                 }`}
               >
-                <span className="text-xl">{skipReview ? '🚫' : '📥'}</span>
-                <span>{skipReview ? '복습 제외' : '복습 담기'}</span>
+                <span className="text-xl">{skipReview ? '🚫' : '✅'}</span>
+                <span>{skipReview ? '복습 제외' : '복습 포함'}</span>
               </button>
               <button onClick={handleTimerComplete} className="flex-1 py-4 bg-green-600 text-white rounded-2xl font-black text-base shadow-lg">완료</button>
             </div>
@@ -548,12 +609,24 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                       value={sessionMemo}
                       onChange={e => handleMemoChange(e.target.value)}
                       placeholder="다음 세션에서 이어볼 내용..."
-                      className="mt-3 h-28 w-full resize-none rounded-xl border border-indigo-100 bg-white p-4 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500"
+                      className={`mt-3 h-28 w-full resize-none rounded-xl border border-indigo-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-indigo-500 ${getMemoTextSize(sessionMemo)}`}
                     />
                     <p className="mt-2 text-center text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
                   </>
                 )}
               </div>
+              {!skipReview && (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-3">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-rose-500">복습 핵심 키워드</label>
+                  <textarea
+                    value={reviewMemo}
+                    onChange={e => setReviewMemo(e.target.value)}
+                    placeholder="나중에 복습할 때 바로 떠올릴 핵심어를 적어주세요. 예: 공식 조건, 자주 틀린 포인트, 암기 단서"
+                    className={`mt-3 h-28 w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-rose-500 ${getMemoTextSize(reviewMemo)}`}
+                  />
+                  <p className="mt-2 text-center text-[10px] font-bold text-rose-300">복습 큐에서 같은 과목이 묶이면 이 내용도 함께 합쳐집니다.</p>
+                </div>
+              )}
             </div>
 
             <button onClick={handleFinalSave} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg shadow-lg">

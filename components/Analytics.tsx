@@ -10,6 +10,7 @@ interface Props {
   onDeleteSubject?: (id: string) => void;
   onUpdateTags?: (tags: TagDefinition[]) => void;
   onDeleteFolder?: (folderId: string) => void;
+  onOpenReview?: () => void;
 }
 
 const COLORS = [
@@ -24,7 +25,8 @@ export const Analytics: React.FC<Props> = ({
   onUpdateSubject, 
   onDeleteSubject,
   onUpdateTags,
-  onDeleteFolder
+  onDeleteFolder,
+  onOpenReview
 }) => {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -101,6 +103,20 @@ export const Analytics: React.FC<Props> = ({
     const rootFolders = tagDefinitions.filter(folder => !folder.parentId);
     return rootFolders.reduce((sum, folder) => sum + getRecursiveData(folder.id).dailyTime, 0);
   }, [tagDefinitions, allSubjectStats]);
+
+  const dueReviewSummary = useMemo(() => {
+    const now = Date.now();
+    const subjectReviewSettings = new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false]));
+    const dueLogs = logs.filter(log => {
+      const enabled = log.reviewEnabled ?? subjectReviewSettings.get(log.subjectId) !== false;
+      const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
+      return enabled && !log.isCondensed && nextReview <= now;
+    });
+    return {
+      itemCount: dueLogs.length,
+      subjectCount: new Set(dueLogs.map(log => log.subjectId)).size
+    };
+  }, [logs, subjects]);
 
   const formatTime = (minutes: number) => {
     const h = Math.floor(minutes / 60);
@@ -346,6 +362,17 @@ export const Analytics: React.FC<Props> = ({
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">폴더 필요시간 총합</p>
           <p className="mt-0.5 text-xl font-black text-indigo-600">{formatTime(totalFolderDailyTime)}</p>
         </div>
+        <button
+          type="button"
+          onClick={onOpenReview}
+          className="rounded-xl border border-rose-100 bg-white px-4 py-2 text-left shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
+        >
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">오늘 복습 큐</p>
+          <p className="mt-0.5 text-xl font-black text-rose-600">
+            {dueReviewSummary.subjectCount}과목
+            <span className="ml-2 text-xs font-bold text-rose-300">{dueReviewSummary.itemCount}개</span>
+          </p>
+        </button>
         <div className="hidden">
           <h3 className="text-5xl font-black text-slate-900 flex items-center gap-6">
             <span className="w-5 h-14 bg-indigo-600 rounded-full"></span>

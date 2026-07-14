@@ -61,6 +61,7 @@ export interface StudyLog {
   nextReviewDate?: string;
   isCondensed?: boolean;
   reviewEnabled?: boolean;
+  reviewMemo?: string;
 }
 
 export interface PredictionInputs {

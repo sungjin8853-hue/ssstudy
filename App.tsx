@@ -442,9 +442,10 @@ const App: React.FC = () => {
   };
 
   // 복습 액션 처리 (완료 또는 축약)
-  const handleReviewAction = (logId: string, action: 'complete' | 'condense') => {
+  const handleReviewAction = (logIds: string | string[], action: 'complete' | 'condense') => {
+    const targetIds = new Set(Array.isArray(logIds) ? logIds : [logIds]);
     setLogs(prev => prev.map(log => {
-        if (log.id !== logId) return log;
+        if (!targetIds.has(log.id)) return log;
 
         if (action === 'condense') {
             return { ...log, isCondensed: true };
@@ -480,6 +481,10 @@ const App: React.FC = () => {
             nextReviewDate: nextDate.toISOString()
         };
     }));
+  };
+
+  const handleUpdateReviewMemo = (logId: string, memo: string) => {
+    setLogs(prev => prev.map(log => log.id === logId ? { ...log, reviewMemo: memo } : log));
   };
 
   return (
@@ -562,6 +567,7 @@ const App: React.FC = () => {
                 onDeleteSubject={handleDeleteSubject} 
                 onUpdateTags={handleUpdateTags}
                 onDeleteFolder={handleDeleteFolder}
+                onOpenReview={() => setActiveTab('review')}
               />
               <TodaySummary
                 logs={logs}
@@ -603,7 +609,14 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
-          {activeTab === 'review' && <ReviewManager logs={logs} subjects={subjects} onReviewAction={handleReviewAction} />}
+          {activeTab === 'review' && (
+            <ReviewManager
+              logs={logs}
+              subjects={subjects}
+              onReviewAction={handleReviewAction}
+              onUpdateReviewMemo={handleUpdateReviewMemo}
+            />
+          )}
         </div>
       </main>
     </div>
