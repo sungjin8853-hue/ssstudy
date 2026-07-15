@@ -123,6 +123,7 @@ const buildReviewGroups = (logs: StudyLog[], subjects: Subject[], onlyDue: boole
 
 export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction, onUpdateReviewMemo }) => {
   const [activeReviewGroup, setActiveReviewGroup] = useState<ReviewGroup | null>(null);
+  const [memoDrafts, setMemoDrafts] = useState<Record<string, string>>({});
   const [timer, setTimer] = useState(0);
 
   const dueReviewGroups = useMemo(() => buildReviewGroups(logs, subjects, true), [logs, subjects]);
@@ -141,6 +142,17 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
   }, [activeReviewGroup]);
 
   const startReviewSession = (group: ReviewGroup) => {
+    setMemoDrafts(prev => {
+      const next = { ...prev };
+      let changed = false;
+      group.logs.forEach(log => {
+        if (!Object.prototype.hasOwnProperty.call(next, log.id)) {
+          next[log.id] = log.reviewMemo || '';
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
     setActiveReviewGroup(group);
     setTimer(0);
   };
@@ -187,16 +199,34 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
       return;
     }
 
-    const mergedSignature = mergedLogs.map(log => `${log.id}:${log.reviewMemo || ''}`).join('|');
+    setMemoDrafts(prev => {
+      const next = { ...prev };
+      let changed = false;
+      mergedLogs.forEach(log => {
+        if (!Object.prototype.hasOwnProperty.call(next, log.id)) {
+          next[log.id] = log.reviewMemo || '';
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+
+    const logsWithDrafts = mergedLogs.map(log =>
+      Object.prototype.hasOwnProperty.call(memoDrafts, log.id)
+        ? { ...log, reviewMemo: memoDrafts[log.id] }
+        : log
+    );
+
+    const mergedSignature = logsWithDrafts.map(log => `${log.id}:${log.reviewMemo || ''}`).join('|');
     const currentSignature = activeReviewGroup.logs.map(log => `${log.id}:${log.reviewMemo || ''}`).join('|');
     if (mergedSignature !== currentSignature) {
       setActiveReviewGroup({
         ...activeReviewGroup,
-        logs: mergedLogs,
-        earliestReviewTime: Math.min(...mergedLogs.map(log => log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0))
+        logs: logsWithDrafts,
+        earliestReviewTime: Math.min(...logsWithDrafts.map(log => log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0))
       });
     }
-  }, [activeReviewGroup, logs, subjects]);
+  }, [activeReviewGroup, logs, subjects, memoDrafts]);
 
   useEffect(() => {
     let interval: number;
@@ -215,12 +245,15 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
   };
 
   const handleMemoChange = (logId: string, memo: string) => {
+    setMemoDrafts(prev => ({ ...prev, [logId]: memo }));
     onUpdateReviewMemo(logId, memo);
     setActiveReviewGroup(prev => prev
       ? { ...prev, logs: prev.logs.map(log => log.id === logId ? { ...log, reviewMemo: memo } : log) }
       : prev
     );
   };
+
+  const getMemoValue = (log: StudyLog) => memoDrafts[log.id] ?? log.reviewMemo ?? '';
 
   const getNextIntervalLabel = (step?: number) => {
     const s = step || 0;
@@ -290,10 +323,10 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                     <div key={log.id} className="rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
                       <p className="mb-2 text-xs font-black text-rose-400">{formatPageRange(log)}</p>
                       <textarea
-                        value={log.reviewMemo || ''}
+                        value={getMemoValue(log)}
                         onChange={event => handleMemoChange(log.id, event.target.value)}
                         placeholder="복습하면서 떠오른 핵심어를 바로 수정하세요."
-                        className={`min-h-[150px] w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold leading-relaxed text-slate-800 outline-none focus:border-rose-500 ${getMemoTextSize(log.reviewMemo || '')}`}
+                        className={`min-h-[150px] w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold leading-relaxed text-slate-800 outline-none focus:border-rose-500 ${getMemoTextSize(getMemoValue(log))}`}
                       />
                     </div>
                   ))}
