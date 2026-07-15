@@ -23,6 +23,8 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
 };
 
 const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
+const INITIAL_REVIEW_DELAY_MS = 2 * 60 * 60 * 1000;
+const TEST_REVIEW_DELAY_THRESHOLD_MS = 10 * 60 * 1000;
 
 const readSidebarCollapsed = () => {
   return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
@@ -30,6 +32,24 @@ const readSidebarCollapsed = () => {
 
 const writeSidebarCollapsed = (collapsed: boolean) => {
   localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+};
+
+const repairTestReviewDate = (log: StudyLog) => {
+  const currentStep = log.reviewStep ?? 0;
+  if (currentStep !== 0 || log.isCondensed || log.reviewEnabled === false || !log.nextReviewDate) {
+    return log.nextReviewDate ?? log.timestamp;
+  }
+
+  const studiedAt = new Date(log.timestamp).getTime();
+  const reviewAt = new Date(log.nextReviewDate).getTime();
+  const wasTestDelay = Number.isFinite(studiedAt)
+    && Number.isFinite(reviewAt)
+    && reviewAt >= studiedAt
+    && reviewAt - studiedAt < TEST_REVIEW_DELAY_THRESHOLD_MS;
+
+  return wasTestDelay
+    ? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
+    : log.nextReviewDate;
 };
 
 const App: React.FC = () => {
@@ -94,7 +114,12 @@ const App: React.FC = () => {
             subjectNameSnapshot: log.subjectNameSnapshot || subject?.name || '삭제된 과목',
             folderSnapshots: log.folderSnapshots || folderSnapshots,
             reviewStep: log.reviewStep ?? 0,
-            nextReviewDate: log.nextReviewDate ?? log.timestamp,
+            nextReviewDate: repairTestReviewDate({
+              ...log,
+              reviewStep: log.reviewStep ?? 0,
+              nextReviewDate: log.nextReviewDate ?? log.timestamp,
+              isCondensed: log.isCondensed ?? false
+            }),
             isCondensed: log.isCondensed ?? false
           };
         });
@@ -312,7 +337,7 @@ const App: React.FC = () => {
         folderSnapshots,
         reviewStep: 0,
         nextReviewDate: !skipReview
-          ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+          ? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
           : undefined,
         isCondensed: skipReview,
         reviewEnabled: !skipReview
