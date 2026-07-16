@@ -62,6 +62,12 @@ export interface StudyLog {
   isCondensed?: boolean;
   reviewEnabled?: boolean;
   reviewMemo?: string;
+  sessionTimerId?: string;
+  timerBreakdown?: Array<{
+    timerId: string;
+    pages: number;
+    timeSpentMinutes: number;
+  }>;
 }
 
 export interface PredictionInputs {
