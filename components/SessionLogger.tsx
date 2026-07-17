@@ -522,6 +522,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
     setSelectedSessionTimerId(timerId);
     writeSessionTimerSelection(subjectId, timerId);
     setTimerMode('remainingPages');
+    if (step === 'timer') {
+      setPageElapsedSeconds(0);
+      currentPageMeasuredSecondsRef.current = 0;
+      halfwaySoundPagesRef.current.delete(attackCompletedPages);
+      markerSoundPagesRef.current.delete(attackCompletedPages);
+      pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+    }
     if (step === 'timer' && timerId !== 'none') {
       setSessionTimerIds(prev => prev.includes(timerId) ? prev : [...prev, timerId]);
     }
@@ -549,7 +556,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
         activeTimerCompletedSecondsRef.current = {};
         activeTimerPagesRef.current = {};
         activeTimerPageSecondsRef.current = {};
+        setPageElapsedSeconds(0);
         currentPageMeasuredSecondsRef.current = 0;
+        halfwaySoundPagesRef.current.delete(attackCompletedPages);
+        markerSoundPagesRef.current.delete(attackCompletedPages);
+        pageTurnSoundPagesRef.current.delete(attackCompletedPages);
         setSessionTimerIds([nextTimer.id]);
         setSessionTimerSeconds(elapsedSecondsSoFar > 0 ? { [nextTimer.id]: elapsedSecondsSoFar } : {});
         setSessionTimerCompletedSeconds({});
