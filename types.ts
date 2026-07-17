@@ -65,6 +65,7 @@ export interface StudyLog {
   sessionTimerId?: string;
   timerBreakdown?: Array<{
     timerId: string;
+    timerDifficulty?: 'easy' | 'medium' | 'hard';
     pages: number;
     timeSpentMinutes: number;
   }>;
