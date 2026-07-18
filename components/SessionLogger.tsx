@@ -1,12 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Subject, StudyLog, TagDefinition } from '../types';
+import { Subject, StudyLog } from '../types';
 import { calculateRecentCompletedDayAverage } from '../utils/math';
 
 interface Props {
   subjects: Subject[];
-  tagDefinitions: TagDefinition[];
   logs: StudyLog[];
   onLogSession: (log: StudyLog) => void;
+}
+
+type TimerDifficulty = 'easy' | 'medium' | 'hard';
+
+interface SessionTimer {
+  id: string;
+  name: string;
+  difficulty?: TimerDifficulty;
+}
+
+interface TimerPageAllocation {
+  timerId: string;
+  timerDifficulty?: TimerDifficulty;
+  pages: number;
+  timeSpentMinutes: number;
 }
 
 type Step = 'idle' | 'timer' | 'pages';
@@ -16,8 +30,11 @@ const DAY_MS = 1000 * 60 * 60 * 24;
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
 const SESSION_MEMO_KEY = 'swp_session_memos';
 const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
+const SESSION_TIMERS_KEY = 'swp_session_timers';
+const SESSION_TIMER_SELECTION_KEY = 'swp_session_timer_selection';
 const MARKER_SOUND_SRC = '/sounds/marker.mp3';
 const PAGE_TURN_SOUND_SRC = '/sounds/page-turn.mp3';
+const FIRST_TIMER_ATTACK_SECONDS = 10 * 60;
 
 const playSound = (src: string, startAtSeconds = 0, durationSeconds?: number) => {
   const audio = new Audio(src);
@@ -46,6 +63,14 @@ const playSound = (src: string, startAtSeconds = 0, durationSeconds?: number) =>
 const playHalfwayPenSound = () => playSound(MARKER_SOUND_SRC, 0.5, 0.2);
 const playMarkerSound = () => playSound(MARKER_SOUND_SRC, 0.5);
 const playPageTurnSound = () => playSound(PAGE_TURN_SOUND_SRC);
+
+const difficultyLabels: Record<TimerDifficulty, string> = {
+  easy: '쉬움',
+  medium: '중간',
+  hard: '어려움',
+};
+
+const getTimerDifficulty = (timer?: SessionTimer): TimerDifficulty => timer?.difficulty || 'medium';
 
 const formatPageNumber = (value: number) => {
   if (!Number.isFinite(value)) return '0';
@@ -102,6 +127,34 @@ const writeSessionMemoCollapsed = (collapsed: boolean) => {
   localStorage.setItem(SESSION_MEMO_COLLAPSED_KEY, String(collapsed));
 };
 
+const readSessionTimers = (): Record<string, SessionTimer[]> => {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_TIMERS_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
+const writeSessionTimers = (subjectId: string, timers: SessionTimer[]) => {
+  const allTimers = readSessionTimers();
+  allTimers[subjectId || 'global'] = timers;
+  localStorage.setItem(SESSION_TIMERS_KEY, JSON.stringify(allTimers));
+};
+
+const readSessionTimerSelections = (): Record<string, string> => {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_TIMER_SELECTION_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
+const writeSessionTimerSelection = (subjectId: string, timerId: string) => {
+  const selections = readSessionTimerSelections();
+  selections[subjectId || 'global'] = timerId;
+  localStorage.setItem(SESSION_TIMER_SELECTION_KEY, JSON.stringify(selections));
+};
+
 const getMemoTextSize = (text: string) => {
   if (text.length > 220) return 'text-sm';
   if (text.length > 120) return 'text-base';
@@ -116,11 +169,10 @@ const isToday = (timestamp: string) => {
     && date.getDate() === today.getDate();
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, onLogSession }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
-  const [subjectId, setSubjectId] = useState('');
-  const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
+  const [subjectId, setSubjectId] = useState(measurableSubjects[0]?.id || '');
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
   const isSubjectReviewDisabled = selectedSubject?.reviewEnabled === false;
 
@@ -136,14 +188,28 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [sessionMemo, setSessionMemo] = useState('');
   const [reviewMemo, setReviewMemo] = useState('');
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
+  const [sessionTimers, setSessionTimers] = useState<SessionTimer[]>([]);
+  const [selectedSessionTimerId, setSelectedSessionTimerId] = useState('none');
   const [attackCompletedPages, setAttackCompletedPages] = useState(0);
   const [pageElapsedSeconds, setPageElapsedSeconds] = useState(0);
-  const [nextSubjectId, setNextSubjectId] = useState('');
+  const [sessionTimerIds, setSessionTimerIds] = useState<string[]>([]);
+  const [sessionTimerSeconds, setSessionTimerSeconds] = useState<Record<string, number>>({});
+  const [sessionTimerCompletedSeconds, setSessionTimerCompletedSeconds] = useState<Record<string, number>>({});
+  const [sessionTimerPages, setSessionTimerPages] = useState<Record<string, number>>({});
+  const [sessionTimerPageSeconds, setSessionTimerPageSeconds] = useState<Record<string, number[]>>({});
+  const [timerPageDrafts, setTimerPageDrafts] = useState<Record<string, string>>({});
+  const [editingTimerId, setEditingTimerId] = useState<string | null>(null);
+  const [isEditingTimers, setIsEditingTimers] = useState(false);
 
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const accumulatedSecondsRef = useRef(0);
   const lastAttackSecondRef = useRef(0);
+  const activeTimerSecondsRef = useRef<Record<string, number>>({});
+  const activeTimerCompletedSecondsRef = useRef<Record<string, number>>({});
+  const activeTimerPagesRef = useRef<Record<string, number>>({});
+  const activeTimerPageSecondsRef = useRef<Record<string, number[]>>({});
+  const currentPageMeasuredSecondsRef = useRef(0);
   const halfwaySoundPagesRef = useRef<Set<number>>(new Set());
   const markerSoundPagesRef = useRef<Set<number>>(new Set());
   const pageTurnSoundPagesRef = useRef<Set<number>>(new Set());
@@ -152,6 +218,24 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     () => logs.filter(log => log.subjectId === subjectId && log.pagesRead > 0 && log.timeSpentMinutes > 0),
     [logs, subjectId]
   );
+
+  const timerBasisLogs = useMemo(() => {
+    if (selectedSessionTimerId === 'none') return selectedSubjectLogs;
+
+    return selectedSubjectLogs.flatMap(log => {
+      const breakdownLogs = (log.timerBreakdown || [])
+        .filter(item => item.timerId === selectedSessionTimerId)
+        .map(item => ({
+          ...log,
+          pagesRead: item.pages,
+          timeSpentMinutes: item.timeSpentMinutes,
+          sessionTimerId: item.timerId
+        }));
+
+      if (breakdownLogs.length > 0) return breakdownLogs;
+      return log.sessionTimerId === selectedSessionTimerId ? [log] : [];
+    });
+  }, [selectedSessionTimerId, selectedSubjectLogs]);
 
   const remainingSubjectPages = selectedSubject
     ? Math.max(0, selectedSubject.totalPages - selectedSubject.completedPages)
@@ -163,23 +247,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       .reduce((sum, log) => sum + log.pagesRead, 0),
     [logs, subjectId]
   );
-
-  const getTodayPagesForSubject = (targetSubjectId: string) => logs
-    .filter(log => log.subjectId === targetSubjectId && isToday(log.timestamp))
-    .reduce((sum, log) => sum + log.pagesRead, 0);
-
-  const getRecommendedDailyPagesForSubject = (subject: Subject) => {
-    const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
-    const todayPages = getTodayPagesForSubject(subject.id);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const targetDate = new Date(subject.targetDate);
-    targetDate.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((targetDate.getTime() - today.getTime()) / DAY_MS);
-    const remainingBeforeToday = remainingPages + todayPages;
-    const dailyTarget = diffDays > 0 ? Math.ceil(remainingBeforeToday / diffDays) : remainingBeforeToday;
-    return Math.min(remainingPages, Math.max(0, dailyTarget - todayPages));
-  };
 
   const recommendedDailyPages = useMemo(() => {
     if (!selectedSubject) return 0;
@@ -193,10 +260,34 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return Math.min(remainingSubjectPages, Math.max(0, dailyTarget - todaySubjectPages));
   }, [selectedSubject, remainingSubjectPages, todaySubjectPages]);
 
-  const averageTimePerPage = useMemo(
+  const selectedTimerAverage = useMemo(
+    () => calculateRecentCompletedDayAverage(timerBasisLogs, recommendedDailyPages).averageTimePerPage,
+    [timerBasisLogs, recommendedDailyPages]
+  );
+
+  const overallAverage = useMemo(
     () => calculateRecentCompletedDayAverage(selectedSubjectLogs, recommendedDailyPages).averageTimePerPage,
     [selectedSubjectLogs, recommendedDailyPages]
   );
+
+  const selectedTimerSessionPages = selectedSessionTimerId !== 'none' ? sessionTimerPages[selectedSessionTimerId] || 0 : 0;
+  const selectedTimerSessionMinutes = selectedSessionTimerId !== 'none' ? (sessionTimerCompletedSeconds[selectedSessionTimerId] || 0) / 60 : 0;
+  const selectedTimerPageSeconds = selectedSessionTimerId !== 'none' ? sessionTimerPageSeconds[selectedSessionTimerId] || [] : [];
+  const liveSelectedTimerAverage = selectedSessionTimerId !== 'none' && selectedTimerPageSeconds.length > 0
+    ? (selectedTimerPageSeconds.reduce((sum, value) => sum + value, 0) / selectedTimerPageSeconds.length) / 60
+    : selectedSessionTimerId !== 'none' && selectedTimerSessionPages > 0
+      ? (selectedTimerAverage * Math.max(0, timerBasisLogs.reduce((sum, log) => sum + log.pagesRead, 0)) + selectedTimerSessionMinutes)
+        / Math.max(1, timerBasisLogs.reduce((sum, log) => sum + log.pagesRead, 0) + selectedTimerSessionPages)
+      : selectedTimerAverage;
+
+  const hasSavedSelectedTimerRecord = selectedSessionTimerId !== 'none' && timerBasisLogs.length > 0;
+  const isFirstSelectedTimerMeasurement = selectedSessionTimerId !== 'none' && !hasSavedSelectedTimerRecord;
+  const firstTimerFallbackAverage = isFirstSelectedTimerMeasurement ? FIRST_TIMER_ATTACK_SECONDS / 60 : 0;
+  const averageTimePerPage = selectedSessionTimerId === 'none'
+    ? overallAverage
+    : liveSelectedTimerAverage || overallAverage || firstTimerFallbackAverage;
+  const isUsingOverallAverageForTimer = selectedSessionTimerId !== 'none' && liveSelectedTimerAverage === 0 && overallAverage > 0;
+  const isUsingFirstTimerFallback = selectedSessionTimerId !== 'none' && liveSelectedTimerAverage === 0 && overallAverage === 0 && firstTimerFallbackAverage > 0;
 
   const averageSecondsPerPage = averageTimePerPage > 0 ? averageTimePerPage * 60 : 0;
   const plannedPages = Math.max(1, plannedPageCount);
@@ -222,95 +313,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const pageAttackRemainingSeconds = averageSecondsPerPage > 0
     ? Math.max(0, Math.ceil(averageSecondsPerPage - pageElapsedSeconds))
     : 0;
-
-  const hasMeasurableSubjectInFolder = (folderId: string): boolean => {
-    const childFolderIds = tagDefinitions
-      .filter(folder => folder.parentId === folderId)
-      .map(folder => folder.id);
-
-    return measurableSubjects.some(subject => subject.tagIds?.includes(folderId))
-      || childFolderIds.some(hasMeasurableSubjectInFolder);
-  };
-
-  const getSelectableFolders = (parentId?: string) => tagDefinitions
-    .filter(folder => folder.parentId === parentId)
-    .filter(folder => hasMeasurableSubjectInFolder(folder.id));
-
-  const getSelectableSubjects = (parentId?: string) => measurableSubjects.filter(subject => (
-    parentId
-      ? subject.tagIds?.includes(parentId)
-      : !subject.tagIds || subject.tagIds.length === 0
-  ));
-
-  const selectionLevels = Array.from({ length: folderPathIds.length + 1 }, (_, index) => {
-    const parentId = index === 0 ? undefined : folderPathIds[index - 1];
-    return {
-      index,
-      parentId,
-      folders: getSelectableFolders(parentId),
-      subjects: getSelectableSubjects(parentId)
-    };
-  }).filter(level => level.index === 0 || level.folders.length > 0 || level.subjects.length > 0);
-
-  const handleFolderSelectionChange = (levelIndex: number, value: string) => {
-    const basePath = folderPathIds.slice(0, levelIndex);
-    setSubjectId('');
-
-    if (!value) {
-      setFolderPathIds(basePath);
-      return;
-    }
-
-    const [kind, id] = value.split(':');
-    if (kind === 'folder') {
-      setFolderPathIds([...basePath, id]);
-      return;
-    }
-
-    setFolderPathIds(basePath);
-    setSubjectId(id);
-  };
-
-  const getAncestorIds = (folderId: string): string[] => {
-    const folder = tagDefinitions.find(tag => tag.id === folderId);
-    if (!folder) return [];
-    return folder.parentId ? [...getAncestorIds(folder.parentId), folder.id] : [folder.id];
-  };
-
-  const getPrimaryFolderPathIds = (subject: Subject) => (
-    subject.tagIds?.[0] ? getAncestorIds(subject.tagIds[0]) : []
-  );
-
-  const getRootFolderIds = (subject: Subject) => {
-    const roots = (subject.tagIds || [])
-      .map(tagId => getAncestorIds(tagId)[0])
-      .filter((folderId): folderId is string => Boolean(folderId));
-    return Array.from(new Set(roots));
-  };
-
-  const selectedRootFolderIds = selectedSubject ? getRootFolderIds(selectedSubject) : [];
-  const nextSubjectCandidates = selectedSubject
-    ? measurableSubjects
-      .filter(subject => subject.id !== selectedSubject.id)
-      .filter(subject => {
-        const rootIds = getRootFolderIds(subject);
-        if (selectedRootFolderIds.length === 0) return rootIds.length === 0;
-        return rootIds.some(rootId => selectedRootFolderIds.includes(rootId));
-      })
-      .map(subject => {
-        const subjectLogs = logs.filter(log => log.subjectId === subject.id && log.pagesRead > 0 && log.timeSpentMinutes > 0);
-        const dailyPages = getRecommendedDailyPagesForSubject(subject);
-        const average = calculateRecentCompletedDayAverage(subjectLogs, dailyPages).averageTimePerPage;
-        return {
-          subject,
-          dailyPages,
-          average,
-          estimatedMinutes: dailyPages * average
-        };
-      })
-      .sort((a, b) => b.estimatedMinutes - a.estimatedMinutes)
-    : [];
-
+  const canUseFirstTimerAttackControls = selectedSessionTimerId !== 'none'
+    && step === 'timer'
+    && !hasSavedSelectedTimerRecord;
+  const hasSessionMemo = false;
   useEffect(() => {
     if (isTimerRunning) {
       startTimeRef.current = Date.now();
@@ -350,6 +356,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (delta <= 0) return;
     lastAttackSecondRef.current = seconds;
 
+    if (selectedSessionTimerId !== 'none') {
+      activeTimerSecondsRef.current[selectedSessionTimerId] =
+        (activeTimerSecondsRef.current[selectedSessionTimerId] || 0) + delta;
+      currentPageMeasuredSecondsRef.current += delta;
+      setSessionTimerSeconds(prev => ({
+        ...prev,
+        [selectedSessionTimerId]: activeTimerSecondsRef.current[selectedSessionTimerId] || 0
+      }));
+    }
+
     if (averageSecondsPerPage <= 0) return;
 
     setPageElapsedSeconds(prev => {
@@ -363,11 +379,35 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
       if (completed > 0) {
         setAttackCompletedPages(current => current + completed);
+        if (selectedSessionTimerId !== 'none') {
+          const completedSeconds = Math.max(1, currentPageMeasuredSecondsRef.current - nextElapsed);
+          activeTimerPagesRef.current[selectedSessionTimerId] =
+            (activeTimerPagesRef.current[selectedSessionTimerId] || 0) + completed;
+          activeTimerCompletedSecondsRef.current[selectedSessionTimerId] =
+            (activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0) + completedSeconds;
+          activeTimerPageSecondsRef.current[selectedSessionTimerId] = [
+            ...(activeTimerPageSecondsRef.current[selectedSessionTimerId] || []),
+            completedSeconds
+          ];
+          currentPageMeasuredSecondsRef.current = Math.max(0, nextElapsed);
+          setSessionTimerPages(prev => ({
+            ...prev,
+            [selectedSessionTimerId]: activeTimerPagesRef.current[selectedSessionTimerId] || 0
+          }));
+          setSessionTimerCompletedSeconds(prev => ({
+            ...prev,
+            [selectedSessionTimerId]: activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0
+          }));
+          setSessionTimerPageSeconds(prev => ({
+            ...prev,
+            [selectedSessionTimerId]: activeTimerPageSecondsRef.current[selectedSessionTimerId] || []
+          }));
+        }
       }
 
       return nextElapsed;
     });
-  }, [averageSecondsPerPage, seconds, step]);
+  }, [averageSecondsPerPage, seconds, selectedSessionTimerId, step]);
 
   useEffect(() => {
     if (!isTimerRunning || step !== 'timer' || timerMode !== 'remainingPages' || averageSecondsPerPage <= 0) return;
@@ -404,23 +444,22 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   useEffect(() => {
     if (!subjectId) {
       setSessionMemo(readSessionMemos().global || '');
+      setSessionTimers(readSessionTimers().global || []);
+      setSelectedSessionTimerId(readSessionTimerSelections().global || 'none');
       return;
     }
     setSessionMemo(readSessionMemos()[subjectId] || '');
+    const timers = readSessionTimers()[subjectId] || [];
+    const savedSelection = readSessionTimerSelections()[subjectId] || 'none';
+    setSessionTimers(timers);
+    setSelectedSessionTimerId(savedSelection !== 'none' && timers.some(timer => timer.id === savedSelection) ? savedSelection : 'none');
   }, [subjectId]);
 
   useEffect(() => {
-    if (subjectId && !measurableSubjects.some(subject => subject.id === subjectId)) {
-      setSubjectId('');
+    if (!measurableSubjects.some(subject => subject.id === subjectId)) {
+      setSubjectId(measurableSubjects[0]?.id || '');
     }
   }, [subjects, subjectId]);
-
-  useEffect(() => {
-    if (folderPathIds.some(folderId => !tagDefinitions.some(folder => folder.id === folderId))) {
-      setFolderPathIds([]);
-      setSubjectId('');
-    }
-  }, [folderPathIds, tagDefinitions]);
 
   const formatTime = (totalSeconds: number) => {
     const hrs = Math.floor(totalSeconds / 3600);
@@ -434,41 +473,31 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSeconds(0);
     setAttackCompletedPages(0);
     setPageElapsedSeconds(0);
+    setSessionTimerIds([]);
+    setSessionTimerSeconds({});
+    setSessionTimerCompletedSeconds({});
+    setSessionTimerPages({});
+    setSessionTimerPageSeconds({});
+    setTimerPageDrafts({});
     accumulatedSecondsRef.current = 0;
     lastAttackSecondRef.current = 0;
+    activeTimerSecondsRef.current = {};
+    activeTimerCompletedSecondsRef.current = {};
+    activeTimerPagesRef.current = {};
+    activeTimerPageSecondsRef.current = {};
+    currentPageMeasuredSecondsRef.current = 0;
     startTimeRef.current = null;
     setIsTimerRunning(false);
     setStartPage('');
     setReadAmount('');
     setReviewMemo('');
-    setNextSubjectId('');
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
+    setIsEditingTimers(false);
+    setEditingTimerId(null);
     halfwaySoundPagesRef.current.clear();
     markerSoundPagesRef.current.clear();
     pageTurnSoundPagesRef.current.clear();
-  };
-
-  const startMeasurementForSubject = (targetSubject: Subject) => {
-    setStep('timer');
-    setSubjectId(targetSubject.id);
-    setFolderPathIds(getPrimaryFolderPathIds(targetSubject));
-    setSeconds(0);
-    setAttackCompletedPages(0);
-    setPageElapsedSeconds(0);
-    setStartPage('');
-    setReadAmount('');
-    setReviewMemo('');
-    setNextSubjectId('');
-    setIsConfirmingCancel(false);
-    setTimerMode('remainingPages');
-    accumulatedSecondsRef.current = 0;
-    lastAttackSecondRef.current = 0;
-    startTimeRef.current = Date.now();
-    halfwaySoundPagesRef.current.clear();
-    markerSoundPagesRef.current.clear();
-    pageTurnSoundPagesRef.current.clear();
-    setIsTimerRunning(true);
   };
 
   const handleToggleSkipReview = () => {
@@ -489,6 +518,309 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     writeSessionMemoCollapsed(next);
   };
 
+  const selectSessionTimer = (timerId: string) => {
+    setSelectedSessionTimerId(timerId);
+    writeSessionTimerSelection(subjectId, timerId);
+    setTimerMode('remainingPages');
+    if (step === 'timer') {
+      setPageElapsedSeconds(0);
+      currentPageMeasuredSecondsRef.current = 0;
+      halfwaySoundPagesRef.current.delete(attackCompletedPages);
+      markerSoundPagesRef.current.delete(attackCompletedPages);
+      pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+    }
+    if (step === 'timer' && timerId !== 'none') {
+      setSessionTimerIds(prev => prev.includes(timerId) ? prev : [...prev, timerId]);
+    }
+  };
+
+  const addSessionTimer = (difficulty: TimerDifficulty = 'medium') => {
+    const elapsedSecondsSoFar = step === 'timer'
+      ? accumulatedSecondsRef.current + (startTimeRef.current !== null ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0)
+      : 0;
+
+    setSessionTimers(prev => {
+      const sameDifficultyCount = prev.filter(timer => getTimerDifficulty(timer) === difficulty).length;
+      const nextTimer = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: `${difficultyLabels[difficulty]} ${sameDifficultyCount + 1}`,
+        difficulty
+      };
+      const nextTimers = [...prev, nextTimer];
+      writeSessionTimers(subjectId, nextTimers);
+      setSelectedSessionTimerId(nextTimer.id);
+      writeSessionTimerSelection(subjectId, nextTimer.id);
+      setTimerMode('remainingPages');
+      if (step === 'timer') {
+        activeTimerSecondsRef.current = elapsedSecondsSoFar > 0 ? { [nextTimer.id]: elapsedSecondsSoFar } : {};
+        activeTimerCompletedSecondsRef.current = {};
+        activeTimerPagesRef.current = {};
+        activeTimerPageSecondsRef.current = {};
+        setPageElapsedSeconds(0);
+        currentPageMeasuredSecondsRef.current = 0;
+        halfwaySoundPagesRef.current.delete(attackCompletedPages);
+        markerSoundPagesRef.current.delete(attackCompletedPages);
+        pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+        setSessionTimerIds([nextTimer.id]);
+        setSessionTimerSeconds(elapsedSecondsSoFar > 0 ? { [nextTimer.id]: elapsedSecondsSoFar } : {});
+        setSessionTimerCompletedSeconds({});
+        setSessionTimerPages({});
+        setSessionTimerPageSeconds({});
+      }
+      return nextTimers;
+    });
+  };
+
+  const renameSessionTimer = (timerId: string, name: string) => {
+    const trimmedName = name.trim() || '타이머';
+    setSessionTimers(prev => {
+      const nextTimers = prev.map(timer => timer.id === timerId ? { ...timer, name: trimmedName } : timer);
+      writeSessionTimers(subjectId, nextTimers);
+      return nextTimers;
+    });
+    setEditingTimerId(null);
+  };
+
+  const deleteSessionTimer = (timerId: string) => {
+    const nextSelection = selectedSessionTimerId === timerId ? 'none' : selectedSessionTimerId;
+
+    setSessionTimers(prev => {
+      const nextTimers = prev.filter(timer => timer.id !== timerId);
+      writeSessionTimers(subjectId, nextTimers);
+      return nextTimers;
+    });
+    setSelectedSessionTimerId(nextSelection);
+    writeSessionTimerSelection(subjectId, nextSelection);
+    setSessionTimerIds(prev => prev.filter(id => id !== timerId));
+    setSessionTimerSeconds(prev => {
+      const next = { ...prev };
+      delete next[timerId];
+      return next;
+    });
+    setSessionTimerCompletedSeconds(prev => {
+      const next = { ...prev };
+      delete next[timerId];
+      return next;
+    });
+    setSessionTimerPages(prev => {
+      const next = { ...prev };
+      delete next[timerId];
+      return next;
+    });
+    setSessionTimerPageSeconds(prev => {
+      const next = { ...prev };
+      delete next[timerId];
+      return next;
+    });
+    setTimerPageDrafts(prev => {
+      const next = { ...prev };
+      delete next[timerId];
+      return next;
+    });
+    delete activeTimerSecondsRef.current[timerId];
+    delete activeTimerCompletedSecondsRef.current[timerId];
+    delete activeTimerPagesRef.current[timerId];
+    delete activeTimerPageSecondsRef.current[timerId];
+    if (editingTimerId === timerId) setEditingTimerId(null);
+    if (step === 'timer' && selectedSessionTimerId === timerId) {
+      setTimerMode('remainingPages');
+      setPageElapsedSeconds(0);
+      currentPageMeasuredSecondsRef.current = 0;
+      markerSoundPagesRef.current.delete(attackCompletedPages);
+      pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+    }
+  };
+
+  const addTwoMinutesToAttack = () => {
+    if (step !== 'timer') return;
+    setPageElapsedSeconds(prev => prev - 120);
+    halfwaySoundPagesRef.current.delete(attackCompletedPages);
+    markerSoundPagesRef.current.delete(attackCompletedPages);
+    pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+  };
+
+  const moveToNextAttackPage = () => {
+    if (step !== 'timer') return;
+
+    if (selectedSessionTimerId !== 'none') {
+      const completedSeconds = Math.max(1, currentPageMeasuredSecondsRef.current);
+      activeTimerPagesRef.current[selectedSessionTimerId] =
+        (activeTimerPagesRef.current[selectedSessionTimerId] || 0) + 1;
+      activeTimerCompletedSecondsRef.current[selectedSessionTimerId] =
+        (activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0) + completedSeconds;
+      activeTimerPageSecondsRef.current[selectedSessionTimerId] = [
+        ...(activeTimerPageSecondsRef.current[selectedSessionTimerId] || []),
+        completedSeconds
+      ];
+      currentPageMeasuredSecondsRef.current = 0;
+      setSessionTimerPages(prev => ({
+        ...prev,
+        [selectedSessionTimerId]: activeTimerPagesRef.current[selectedSessionTimerId] || 0
+      }));
+      setSessionTimerCompletedSeconds(prev => ({
+        ...prev,
+        [selectedSessionTimerId]: activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0
+      }));
+      setSessionTimerPageSeconds(prev => ({
+        ...prev,
+        [selectedSessionTimerId]: activeTimerPageSecondsRef.current[selectedSessionTimerId] || []
+      }));
+      setSessionTimerIds(prev => prev.includes(selectedSessionTimerId) ? prev : [...prev, selectedSessionTimerId]);
+    }
+
+    setAttackCompletedPages(current => current + 1);
+    setPageElapsedSeconds(0);
+    halfwaySoundPagesRef.current.delete(attackCompletedPages + 1);
+    markerSoundPagesRef.current.delete(attackCompletedPages + 1);
+    pageTurnSoundPagesRef.current.delete(attackCompletedPages + 1);
+  };
+
+  const usedSessionTimerIds = Array.from(new Set([
+    ...sessionTimerIds,
+    ...Object.keys(sessionTimerSeconds).filter(timerId => (sessionTimerSeconds[timerId] || 0) > 0)
+  ]));
+  const usedSessionTimers = usedSessionTimerIds
+    .map(timerId => sessionTimers.find(timer => timer.id === timerId))
+    .filter((timer): timer is SessionTimer => Boolean(timer));
+
+  const getTimerAverageTimePerPage = (timerId: string) => {
+    const timerLogs = selectedSubjectLogs.flatMap(log => {
+      const breakdownLogs = (log.timerBreakdown || [])
+        .filter(item => item.timerId === timerId)
+        .map(item => ({
+          ...log,
+          pagesRead: item.pages,
+          timeSpentMinutes: item.timeSpentMinutes,
+          sessionTimerId: item.timerId
+        }));
+
+      if (breakdownLogs.length > 0) return breakdownLogs;
+      return log.sessionTimerId === timerId ? [log] : [];
+    });
+
+    return calculateRecentCompletedDayAverage(timerLogs, recommendedDailyPages).averageTimePerPage;
+  };
+
+  const renderSessionTimerButton = (timer: SessionTimer) => (
+    <div
+      key={timer.id}
+      className={`flex items-center gap-1 rounded-2xl px-2 py-1 transition-all ${selectedSessionTimerId === timer.id ? 'bg-indigo-500 text-white' : 'bg-white/10 text-slate-400 hover:text-white'}`}
+    >
+      {editingTimerId === timer.id ? (
+        <input
+          autoFocus
+          defaultValue={timer.name}
+          onBlur={e => renameSessionTimer(timer.id, e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') renameSessionTimer(timer.id, e.currentTarget.value);
+            if (e.key === 'Escape') setEditingTimerId(null);
+          }}
+          className="w-24 rounded-xl bg-white px-2 py-1 text-xs font-black text-slate-900 outline-none"
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => selectSessionTimer(timer.id)}
+            className="px-2 py-1 text-xs font-black"
+          >
+            <span className="mr-1 opacity-70">{difficultyLabels[getTimerDifficulty(timer)]}</span>
+            {timer.name}
+          </button>
+          {isEditingTimers && (
+            <>
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  setEditingTimerId(timer.id);
+                }}
+                className="rounded-xl px-2 py-1 text-[10px] font-black opacity-70 hover:bg-white/20 hover:opacity-100"
+                title="이름 수정"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  deleteSessionTimer(timer.id);
+                }}
+                className="rounded-xl px-2 py-1 text-[10px] font-black opacity-70 hover:bg-red-500/30 hover:text-red-100 hover:opacity-100"
+                title="삭제"
+              >
+                삭제
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  const getTimerExpectedPages = (timerId: string) => {
+    const timerSeconds = sessionTimerSeconds[timerId] || 0;
+    const timerAverage = getTimerAverageTimePerPage(timerId);
+    if (timerSeconds <= 0 || timerAverage <= 0) return 0;
+    return Math.max(0, Math.round((timerSeconds / 60) / timerAverage));
+  };
+
+  const calculateTimerPageAllocations = (totalPages: number): TimerPageAllocation[] => {
+    if (usedSessionTimers.length === 0 || totalPages <= 0) return [];
+
+    const roundedTotalPages = Math.max(0, Math.round(totalPages));
+    const manualEntries = usedSessionTimers
+      .map(timer => ({
+        timer,
+        value: timerPageDrafts[timer.id]?.trim() === '' || timerPageDrafts[timer.id] === undefined
+          ? null
+          : Math.max(0, Math.round(Number(timerPageDrafts[timer.id]))),
+        recordedPages: Math.max(0, Math.round(sessionTimerPages[timer.id] || 0)),
+        hasMeasuredTime: (sessionTimerSeconds[timer.id] || 0) > 0
+      }));
+    const manualSum = manualEntries.reduce((sum, entry) => sum + (entry.value && entry.value > 0 ? entry.value : 0), 0);
+    const recordedTotal = manualEntries.reduce((sum, entry) => sum + (entry.value === null || Number.isNaN(entry.value) ? entry.recordedPages : 0), 0);
+    const autoPages = new Map<string, number>();
+    const blankEntries = manualEntries.filter(entry => entry.value === null || Number.isNaN(entry.value));
+    const measuredBlankEntries = blankEntries.filter(entry => entry.recordedPages === 0 && entry.hasMeasuredTime && getTimerExpectedPages(entry.timer.id) > 0);
+    const unmeasuredBlankEntries = blankEntries.filter(entry => !autoPages.has(entry.timer.id) && !measuredBlankEntries.includes(entry));
+    const measuredAutoTotal = measuredBlankEntries.reduce((sum, entry) => {
+      const value = getTimerExpectedPages(entry.timer.id);
+      autoPages.set(entry.timer.id, value);
+      return sum + value;
+    }, 0);
+
+    const remainingPagesForUnmeasured = Math.max(0, roundedTotalPages - manualSum - recordedTotal - measuredAutoTotal);
+
+    if (unmeasuredBlankEntries.length > 0) {
+      const denominator = remainingPagesForUnmeasured % unmeasuredBlankEntries.length === 0
+        ? unmeasuredBlankEntries.length
+        : Math.max(1, unmeasuredBlankEntries.length - 1);
+      const base = Math.floor(remainingPagesForUnmeasured / denominator);
+      let used = 0;
+
+      unmeasuredBlankEntries.forEach((entry, index) => {
+        const isLast = index === unmeasuredBlankEntries.length - 1;
+        const value = isLast ? Math.max(0, remainingPagesForUnmeasured - used) : base;
+        used += value;
+        autoPages.set(entry.timer.id, value);
+      });
+    }
+
+    return manualEntries.map(entry => {
+      const pages = entry.value !== null && !Number.isNaN(entry.value)
+        ? Math.max(0, entry.value)
+        : entry.recordedPages + (autoPages.get(entry.timer.id) || 0);
+
+      return {
+        timerId: entry.timer.id,
+        timerDifficulty: getTimerDifficulty(entry.timer),
+        pages,
+        timeSpentMinutes: Number(((sessionTimerSeconds[entry.timer.id] || 0) / 60).toFixed(2))
+      };
+    }).filter(entry => entry.pages > 0 && entry.timeSpentMinutes > 0);
+  };
+
   const handleStartMeasurement = () => {
     if (!subjectId) {
       alert('과목을 먼저 선택해주세요.');
@@ -499,6 +831,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     pageTurnSoundPagesRef.current.clear();
     setAttackCompletedPages(0);
     setPageElapsedSeconds(0);
+    setSessionTimerIds(selectedSessionTimerId !== 'none' ? [selectedSessionTimerId] : []);
+    setSessionTimerSeconds({});
+    setSessionTimerCompletedSeconds({});
+    setSessionTimerPages({});
+    setTimerPageDrafts({});
+    activeTimerSecondsRef.current = {};
+    activeTimerCompletedSecondsRef.current = {};
+    activeTimerPagesRef.current = {};
+    currentPageMeasuredSecondsRef.current = 0;
     lastAttackSecondRef.current = 0;
     setStep('timer');
     setIsTimerRunning(true);
@@ -508,7 +849,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (startTimeRef.current !== null) {
       const currentElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
       const nextTotalSeconds = accumulatedSecondsRef.current + currentElapsed;
+      const missingTimerSeconds = Math.max(0, nextTotalSeconds - seconds);
       accumulatedSecondsRef.current = nextTotalSeconds;
+      if (selectedSessionTimerId !== 'none' && missingTimerSeconds > 0) {
+        activeTimerSecondsRef.current[selectedSessionTimerId] =
+          (activeTimerSecondsRef.current[selectedSessionTimerId] || 0) + missingTimerSeconds;
+      }
       setSeconds(accumulatedSecondsRef.current);
       startTimeRef.current = null;
     }
@@ -517,6 +863,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       timerRef.current = null;
     }
     setIsTimerRunning(false);
+    const completedTimerSeconds = { ...activeTimerSecondsRef.current };
+    const completedTimerPageSeconds = { ...activeTimerCompletedSecondsRef.current };
+    const completedTimerPages = { ...activeTimerPagesRef.current };
+    setSessionTimerSeconds(completedTimerSeconds);
+    setSessionTimerCompletedSeconds(completedTimerPageSeconds);
+    setSessionTimerPages(completedTimerPages);
+    setSessionTimerPageSeconds({ ...activeTimerPageSecondsRef.current });
+    setSessionTimerIds(prev => {
+      const measuredIds = Array.from(new Set([
+        ...Object.keys(completedTimerSeconds).filter(timerId => completedTimerSeconds[timerId] > 0),
+        ...Object.keys(completedTimerPages).filter(timerId => completedTimerPages[timerId] > 0)
+      ]));
+      return Array.from(new Set([...prev, ...measuredIds]));
+    });
     if (selectedSubject) {
       const nextStartPage = selectedSubject.completedPages + 1;
       setStartPage(formatPageNumber(nextStartPage));
@@ -546,9 +906,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       return;
     }
 
-    const queuedSubject = nextSubjectId
-      ? subjects.find(subject => subject.id === nextSubjectId && subject.completedPages < subject.totalPages)
-      : undefined;
+    const timerBreakdown = calculateTimerPageAllocations(amount);
 
     onLogSession({
       id: Math.random().toString(36).substr(2, 9),
@@ -560,13 +918,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       timestamp: new Date().toISOString(),
       isReviewed: false,
       isCondensed: shouldSkipReview,
-      reviewMemo: !shouldSkipReview ? reviewMemo.trim() : undefined
+      reviewMemo: !shouldSkipReview ? reviewMemo.trim() : undefined,
+      sessionTimerId: selectedSessionTimerId !== 'none' ? selectedSessionTimerId : undefined,
+      timerBreakdown: timerBreakdown.length > 0 ? timerBreakdown : undefined
     });
-
-    if (queuedSubject) {
-      startMeasurementForSubject(queuedSubject);
-      return;
-    }
 
     resetAll();
   };
@@ -581,53 +936,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         <div className="space-y-6 max-w-md mx-auto">
           <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
             <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest px-1">측정할 과목 선택</label>
-            <div className="rounded-3xl border border-slate-200 bg-white p-3">
-              <div className="space-y-3">
-                {selectionLevels.map(level => {
-                  const selectedFolder = folderPathIds[level.index];
-                  const parentMatchesSelectedSubject = selectedSubject && (
-                    level.parentId
-                      ? selectedSubject.tagIds?.includes(level.parentId)
-                      : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
-                  );
-                  const value = selectedFolder
-                    ? `folder:${selectedFolder}`
-                    : parentMatchesSelectedSubject
-                      ? `subject:${selectedSubject.id}`
-                      : '';
-
-                  return (
-                    <select
-                      key={`${level.parentId || 'root'}-${level.index}`}
-                      value={value}
-                      onChange={e => handleFolderSelectionChange(level.index, e.target.value)}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-lg font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10"
-                    >
-                      <option value="">
-                        {level.index === 0 ? '최상위 선택' : '하위 항목 선택'}
-                      </option>
-                      {level.folders.map(folder => (
-                        <option key={folder.id} value={`folder:${folder.id}`}>
-                          📂 {folder.name}
-                        </option>
-                      ))}
-                      {level.subjects.map(subject => (
-                        <option key={subject.id} value={`subject:${subject.id}`}>
-                          {subject.name} · {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P 남음
-                        </option>
-                      ))}
-                    </select>
-                  );
-                })}
-
-                {selectionLevels.length === 0 && (
-                  <div className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-400">
-                    측정할 과목이 없어요.
-                  </div>
-                )}
-              </div>
-
-            </div>
+            <select
+              className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold appearance-none cursor-pointer focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
+              value={subjectId}
+              onChange={e => setSubjectId(e.target.value)}
+            >
+              <option value="">과목을 선택하세요...</option>
+              {measurableSubjects.map(subject => (
+                <option key={subject.id} value={subject.id}>{subject.name}</option>
+              ))}
+            </select>
             <div className="mt-5 pt-5 border-t border-slate-200">
               <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest px-1">오늘 공부할 장수</label>
               <input
@@ -669,11 +987,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           </div>
           <button
             onClick={handleStartMeasurement}
-            disabled={measurableSubjects.length === 0 || !subjectId}
+            disabled={measurableSubjects.length === 0}
             className="w-full py-5 bg-indigo-600 disabled:bg-slate-300 disabled:shadow-none text-white rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:hover:bg-slate-300 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 group"
           >
             <span className="text-2xl group-hover:rotate-12 transition-transform">⏱️</span>
-            {measurableSubjects.length === 0 ? '모든 과목 목표 완료' : subjectId ? '측정 엔진 가동' : '과목을 선택해주세요'}
+            {measurableSubjects.length > 0 ? '측정 엔진 가동' : '모든 과목 목표 완료'}
           </button>
         </div>
       </div>
@@ -713,6 +1031,48 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               <span className="px-3 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-black uppercase">측정 중</span>
               <p className="text-xs font-black text-slate-500">{selectedSubject?.name}</p>
             </div>
+            <div className="mb-4 w-full max-w-lg rounded-2xl border border-white/10 bg-white/5 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">학습 측정 타이머</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingTimers(prev => !prev)}
+                    className={`rounded-2xl px-3 py-2 text-xs font-black transition-all ${isEditingTimers ? 'bg-white text-slate-950' : 'bg-white/10 text-indigo-200 hover:bg-white/20'}`}
+                  >
+                    편집
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => addSessionTimer('easy')}
+                  className="rounded-2xl bg-emerald-500/20 px-3 py-2 text-xs font-black text-emerald-200 hover:bg-emerald-500/30"
+                  title="쉬운 난도 소환"
+                >
+                  + 쉬움
+                </button>
+                {sessionTimers.filter(timer => getTimerDifficulty(timer) === 'easy').map(renderSessionTimerButton)}
+                <button
+                  type="button"
+                  onClick={() => selectSessionTimer('none')}
+                  className={`rounded-2xl px-4 py-2 text-xs font-black transition-all ${selectedSessionTimerId === 'none' ? 'bg-indigo-500 text-white' : 'bg-white/10 text-slate-400 hover:text-white'}`}
+                >
+                  중간 타이머
+                </button>
+                {sessionTimers.filter(timer => getTimerDifficulty(timer) === 'medium').map(renderSessionTimerButton)}
+                {sessionTimers.filter(timer => getTimerDifficulty(timer) === 'hard').map(renderSessionTimerButton)}
+                <button
+                  type="button"
+                  onClick={() => addSessionTimer('hard')}
+                  className="rounded-2xl bg-rose-500/20 px-3 py-2 text-xs font-black text-rose-200 hover:bg-rose-500/30"
+                  title="어려운 난도 소환"
+                >
+                  + 어려움
+                </button>
+              </div>
+            </div>
             <div className="mb-4 grid w-full max-w-lg grid-cols-3 gap-2 rounded-2xl bg-white/5 p-1.5">
               <button
                 onClick={() => setTimerMode('remainingPages')}
@@ -743,15 +1103,44 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                     : '-'}
                 </div>
                 <div className="mt-4 rounded-2xl bg-white/5 px-6 py-4">
-                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">타임어택</p>
+                  <div className="mb-2 flex items-center justify-center gap-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">타임어택</p>
+                    <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-black text-indigo-200">
+                      {selectedSessionTimerId === 'none'
+                        ? '중간'
+                        : difficultyLabels[getTimerDifficulty(sessionTimers.find(timer => timer.id === selectedSessionTimerId))]}
+                    </span>
+                  </div>
                   <div className="font-mono text-7xl md:text-8xl font-black text-white tabular-nums">
                     {averageTimePerPage > 0 ? formatTime(pageAttackRemainingSeconds) : '--:--'}
                   </div>
+                  {canUseFirstTimerAttackControls && (
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={addTwoMinutesToAttack}
+                        disabled={averageTimePerPage <= 0}
+                        className="rounded-2xl bg-white/10 px-4 py-3 text-xs font-black text-white transition-all hover:bg-white/20 disabled:opacity-30"
+                      >
+                        2분 추가
+                      </button>
+                      <button
+                        type="button"
+                        onClick={moveToNextAttackPage}
+                        disabled={averageTimePerPage <= 0}
+                        className="rounded-2xl bg-indigo-600 px-4 py-3 text-xs font-black text-white shadow-lg shadow-indigo-950/20 transition-all hover:bg-indigo-500 disabled:opacity-30"
+                      >
+                        다음장으로
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <p className="mt-5 text-xs font-bold text-slate-500">
                   {averageTimePerPage > 0
-                    ? `${formatPageNumber(plannedPageCount)}장 목표 · 현재 시간 기준 ${formatPageNumber(timeTargetPages)}장 진행`
-                    : '최근 5일 안에 학습 기록이 필요합니다.'}
+                    ? `${formatPageNumber(plannedPageCount)}장 목표 · 현재 시간 기준 ${formatPageNumber(timeTargetPages)}장 진행${isUsingOverallAverageForTimer ? ' · 전체 평균 기준' : ''}${isUsingFirstTimerFallback ? ' · 첫 측정 10분 기준' : ''}`
+                    : selectedSessionTimerId !== 'none'
+                      ? '저장된 평균이 없어 전체 학습 기록이 필요합니다.'
+                      : '최근 5일 안에 하루치 학습량을 끝낸 기록이 필요합니다.'}
                 </p>
               </div>
             ) : timerMode === 'elapsedTime' ? (
@@ -837,6 +1226,45 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                   </p>
                 </div>
               </div>
+              {usedSessionTimers.length > 0 && currentReadAmount > 0 && (
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">타이머별 학습량</label>
+                    <span className="text-[10px] font-bold text-indigo-300">비워두면 자동 분배</span>
+                  </div>
+                  <div className="space-y-2">
+                    {usedSessionTimers.map(timer => {
+                      const autoAllocation = calculateTimerPageAllocations(currentReadAmount)
+                        .find(entry => entry.timerId === timer.id);
+                      return (
+                        <div key={timer.id} className="grid grid-cols-[1fr_110px] items-center gap-2 rounded-xl bg-white p-2">
+                          <div>
+                            <p className="text-sm font-black text-slate-800">{timer.name}</p>
+                            <p className="text-[10px] font-bold text-slate-400">
+                              {difficultyLabels[getTimerDifficulty(timer)]} · 측정 시간 {formatTime(sessionTimerSeconds[timer.id] || 0)}
+                              {timerPageDrafts[timer.id]?.trim()
+                                ? ''
+                                : ` · 배정 ${formatPageNumber(autoAllocation?.pages || 0)}P${(sessionTimerPages[timer.id] || 0) > 0 ? ` (직접 ${formatPageNumber(sessionTimerPages[timer.id])}P 포함)` : ''}`}
+                            </p>
+                          </div>
+                          <input
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={timerPageDrafts[timer.id] || ''}
+                            onChange={e => setTimerPageDrafts(prev => ({
+                              ...prev,
+                              [timer.id]: e.target.value === '' ? '' : String(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                            }))}
+                            placeholder={formatPageNumber(autoAllocation?.pages || 0)}
+                            className="w-full rounded-xl border border-indigo-100 bg-indigo-50 p-2 text-center text-lg font-black text-indigo-900 outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="hidden">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">세션 메모</label>
@@ -871,26 +1299,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                     className={`mt-3 h-28 w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-rose-500 ${getMemoTextSize(reviewMemo)}`}
                   />
                   <p className="mt-2 text-center text-[10px] font-bold text-rose-300">복습 큐에서 같은 과목이 묶이면 이 내용도 함께 합쳐집니다.</p>
-                </div>
-              )}
-              {nextSubjectCandidates.length > 0 && (
-                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">다음 측정 추천</label>
-                    <span className="text-[10px] font-bold text-indigo-300">필요시간 큰 순</span>
-                  </div>
-                  <select
-                    value={nextSubjectId}
-                    onChange={e => setNextSubjectId(e.target.value)}
-                    className="w-full rounded-2xl border border-indigo-100 bg-white px-4 py-3 text-base font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/10"
-                  >
-                    <option value="">다음 과목 선택 안 함</option>
-                    {nextSubjectCandidates.map(({ subject, dailyPages, average, estimatedMinutes }) => (
-                      <option key={subject.id} value={subject.id}>
-                        {subject.name} · {estimatedMinutes > 0 ? `${Math.round(estimatedMinutes)}분` : '기록 필요'} · {formatPageNumber(dailyPages)}P · {average > 0 ? `${average.toFixed(2)}분/P` : '효율 없음'}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               )}
             </div>

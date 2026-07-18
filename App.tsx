@@ -624,12 +624,7 @@ const App: React.FC = () => {
                 
                 <div className="p-8 md:p-12">
                   {dashboardActionTab === 'logger' ? (
-                    <SessionLogger
-                      subjects={subjects}
-                      tagDefinitions={tagDefinitions}
-                      logs={logs}
-                      onLogSession={handleLogSession}
-                    />
+                    <SessionLogger subjects={subjects} logs={logs} onLogSession={handleLogSession} />
                   ) : (
                     <SubjectPlanner onAddSubject={handleAddSubject} />
                   )}
