@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Subject, StudyLog } from '../types';
+import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateRecentCompletedDayAverage } from '../utils/math';
 
 interface Props {
   subjects: Subject[];
+  tagDefinitions: TagDefinition[];
   logs: StudyLog[];
   onLogSession: (log: StudyLog) => void;
 }
@@ -169,10 +170,11 @@ const isToday = (timestamp: string) => {
     && date.getDate() === today.getDate();
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, onLogSession }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
-  const [subjectId, setSubjectId] = useState(measurableSubjects[0]?.id || '');
+  const [subjectId, setSubjectId] = useState('');
+  const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
   const isSubjectReviewDisabled = selectedSubject?.reviewEnabled === false;
 
@@ -456,10 +458,65 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
   }, [subjectId]);
 
   useEffect(() => {
-    if (!measurableSubjects.some(subject => subject.id === subjectId)) {
-      setSubjectId(measurableSubjects[0]?.id || '');
+    if (subjectId && !measurableSubjects.some(subject => subject.id === subjectId)) {
+      setSubjectId('');
     }
   }, [subjects, subjectId]);
+
+  useEffect(() => {
+    if (folderPathIds.some(folderId => !tagDefinitions.some(folder => folder.id === folderId))) {
+      setFolderPathIds([]);
+      setSubjectId('');
+    }
+  }, [folderPathIds, tagDefinitions]);
+
+  const hasMeasurableSubjectInFolder = (folderId: string): boolean => {
+    const childFolderIds = tagDefinitions
+      .filter(folder => folder.parentId === folderId)
+      .map(folder => folder.id);
+
+    return measurableSubjects.some(subject => subject.tagIds?.includes(folderId))
+      || childFolderIds.some(hasMeasurableSubjectInFolder);
+  };
+
+  const getSelectableFolders = (parentId?: string) => tagDefinitions
+    .filter(folder => folder.parentId === parentId)
+    .filter(folder => hasMeasurableSubjectInFolder(folder.id));
+
+  const getSelectableSubjects = (parentId?: string) => measurableSubjects.filter(subject => (
+    parentId
+      ? subject.tagIds?.includes(parentId)
+      : !subject.tagIds || subject.tagIds.length === 0
+  ));
+
+  const selectionLevels = Array.from({ length: folderPathIds.length + 1 }, (_, index) => {
+    const parentId = index === 0 ? undefined : folderPathIds[index - 1];
+    return {
+      index,
+      parentId,
+      folders: getSelectableFolders(parentId),
+      subjects: getSelectableSubjects(parentId)
+    };
+  }).filter(level => level.index === 0 || level.folders.length > 0 || level.subjects.length > 0);
+
+  const handleFolderSelectionChange = (levelIndex: number, value: string) => {
+    const basePath = folderPathIds.slice(0, levelIndex);
+    setSubjectId('');
+
+    if (!value) {
+      setFolderPathIds(basePath);
+      return;
+    }
+
+    const [kind, id] = value.split(':');
+    if (kind === 'folder') {
+      setFolderPathIds([...basePath, id]);
+      return;
+    }
+
+    setFolderPathIds(basePath);
+    setSubjectId(id);
+  };
 
   const formatTime = (totalSeconds: number) => {
     const hrs = Math.floor(totalSeconds / 3600);
@@ -765,6 +822,21 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
     return Math.max(0, Math.round((timerSeconds / 60) / timerAverage));
   };
 
+  const getTimerSpeedChange = (timerId: string, pages: number, secondsSpent: number) => {
+    const previousAverage = getTimerAverageTimePerPage(timerId);
+    const currentAverage = pages > 0 && secondsSpent > 0 ? (secondsSpent / 60) / pages : 0;
+    const previousExpectedPages = previousAverage > 0 && secondsSpent > 0 ? (secondsSpent / 60) / previousAverage : 0;
+    const ratioPercent = previousExpectedPages > 0 && pages > 0 ? (pages / previousExpectedPages) * 100 : 0;
+    const deltaMinutes = currentAverage > 0 && previousAverage > 0 ? currentAverage - previousAverage : 0;
+
+    return {
+      previousAverage,
+      currentAverage,
+      ratioPercent,
+      deltaMinutes
+    };
+  };
+
   const calculateTimerPageAllocations = (totalPages: number): TimerPageAllocation[] => {
     if (usedSessionTimers.length === 0 || totalPages <= 0) return [];
 
@@ -936,8 +1008,47 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
         <div className="space-y-6 max-w-md mx-auto">
           <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
             <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest px-1">측정할 과목 선택</label>
+            <div className="rounded-3xl border border-slate-200 bg-white p-3">
+              <div className="space-y-3">
+                {selectionLevels.map(level => {
+                  const selectedFolder = folderPathIds[level.index];
+                  const parentMatchesSelectedSubject = selectedSubject && (
+                    level.parentId
+                      ? selectedSubject.tagIds?.includes(level.parentId)
+                      : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
+                  );
+                  const value = selectedFolder
+                    ? `folder:${selectedFolder}`
+                    : parentMatchesSelectedSubject
+                      ? `subject:${selectedSubject.id}`
+                      : '';
+
+                  return (
+                    <select
+                      key={`${level.parentId || 'root'}-${level.index}`}
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-lg font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10"
+                      value={value}
+                      onChange={e => handleFolderSelectionChange(level.index, e.target.value)}
+                    >
+                      <option value="">{level.index === 0 ? '최상위 선택' : '하위 항목 선택'}</option>
+                      {level.folders.map(folder => (
+                        <option key={folder.id} value={`folder:${folder.id}`}>폴더 {folder.name}</option>
+                      ))}
+                      {level.subjects.map(subject => (
+                        <option key={subject.id} value={`subject:${subject.id}`}>
+                          {subject.name} · {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P 남음
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })}
+                {selectionLevels.length === 0 && (
+                  <div className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-400">측정할 과목이 없어요.</div>
+                )}
+              </div>
+            </div>
             <select
-              className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold appearance-none cursor-pointer focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none"
+              className="hidden"
               value={subjectId}
               onChange={e => setSubjectId(e.target.value)}
             >
@@ -987,7 +1098,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
           </div>
           <button
             onClick={handleStartMeasurement}
-            disabled={measurableSubjects.length === 0}
+            disabled={measurableSubjects.length === 0 || !subjectId}
             className="w-full py-5 bg-indigo-600 disabled:bg-slate-300 disabled:shadow-none text-white rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:hover:bg-slate-300 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 group"
           >
             <span className="text-2xl group-hover:rotate-12 transition-transform">⏱️</span>
@@ -1236,16 +1347,24 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, onLogSession })
                     {usedSessionTimers.map(timer => {
                       const autoAllocation = calculateTimerPageAllocations(currentReadAmount)
                         .find(entry => entry.timerId === timer.id);
+                      const timerDraft = timerPageDrafts[timer.id];
+                      const timerPages = timerDraft?.trim()
+                        ? Math.max(0, Math.round(Number(timerDraft) || 0))
+                        : autoAllocation?.pages || 0;
+                      const timerSpeedChange = getTimerSpeedChange(timer.id, timerPages, sessionTimerSeconds[timer.id] || 0);
                       return (
                         <div key={timer.id} className="grid grid-cols-[1fr_110px] items-center gap-2 rounded-xl bg-white p-2">
                           <div>
                             <p className="text-sm font-black text-slate-800">{timer.name}</p>
-                            <p className="text-[10px] font-bold text-slate-400">
-                              {difficultyLabels[getTimerDifficulty(timer)]} · 측정 시간 {formatTime(sessionTimerSeconds[timer.id] || 0)}
-                              {timerPageDrafts[timer.id]?.trim()
-                                ? ''
-                                : ` · 배정 ${formatPageNumber(autoAllocation?.pages || 0)}P${(sessionTimerPages[timer.id] || 0) > 0 ? ` (직접 ${formatPageNumber(sessionTimerPages[timer.id])}P 포함)` : ''}`}
-                            </p>
+                            {timerSpeedChange.currentAverage > 0 && timerSpeedChange.previousAverage > 0 && (
+                              <p className={`mt-1 text-base font-black ${timerSpeedChange.ratioPercent > 100 ? 'text-emerald-600' : timerSpeedChange.ratioPercent < 100 ? 'text-rose-600' : 'text-slate-500'}`}>
+                                {timerSpeedChange.ratioPercent > 100
+                                  ? `${timerSpeedChange.ratioPercent.toFixed(0)}% 속도`
+                                  : timerSpeedChange.ratioPercent < 100
+                                    ? `${Math.abs(timerSpeedChange.deltaMinutes).toFixed(2)}분/P 느림`
+                                    : '변화 없음'}
+                              </p>
+                            )}
                           </div>
                           <input
                             type="number"
