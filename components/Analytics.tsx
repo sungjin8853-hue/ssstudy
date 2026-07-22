@@ -18,6 +18,16 @@ const COLORS = [
   '#8B5CF6', '#06B6D4', '#64748B'
 ];
 
+const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
+
+const readReviewSessionPreferences = (): Record<string, boolean> => {
+  try {
+    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
@@ -107,8 +117,12 @@ export const Analytics: React.FC<Props> = ({
   const dueReviewSummary = useMemo(() => {
     const now = Date.now();
     const subjectReviewSettings = new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false]));
+    const reviewSessionPreferences = readReviewSessionPreferences();
     const dueLogs = logs.filter(log => {
-      const enabled = log.reviewEnabled ?? subjectReviewSettings.get(log.subjectId) !== false;
+      const hasSessionPreference = reviewSessionPreferences[log.subjectId] !== undefined;
+      const enabled = hasSessionPreference
+        ? reviewSessionPreferences[log.subjectId] === false
+        : subjectReviewSettings.get(log.subjectId) !== false && log.reviewEnabled !== false;
       const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
       return enabled && !log.isCondensed && nextReview <= now;
     });

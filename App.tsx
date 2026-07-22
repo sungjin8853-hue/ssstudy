@@ -52,6 +52,24 @@ const repairTestReviewDate = (log: StudyLog) => {
     : log.nextReviewDate;
 };
 
+const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
+
+const readReviewSessionPreferences = (): Record<string, boolean> => {
+  try {
+    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+
+const shouldSkipReviewForLog = (log: StudyLog, subject?: Subject) => {
+  const sessionReviewPreference = readReviewSessionPreferences()[log.subjectId];
+  if (sessionReviewPreference !== undefined) {
+    return sessionReviewPreference === true;
+  }
+  return log.isCondensed === true || subject?.reviewEnabled === false;
+};
+
 const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
@@ -328,8 +346,7 @@ const App: React.FC = () => {
   
   const handleLogSession = (log: StudyLog) => {
     const subject = subjects.find(item => item.id === log.subjectId);
-    const subjectReviewEnabled = subject?.reviewEnabled !== false;
-    const skipReview = log.isCondensed ?? !subjectReviewEnabled;
+    const skipReview = shouldSkipReviewForLog(log, subject);
     const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], tagDefinitions);
     const newLog: StudyLog = {
         ...log,
@@ -418,10 +435,17 @@ const App: React.FC = () => {
     if (logsToReplace.length === 0) return;
 
     const subject = subjects.find(item => item.id === replacementLog.subjectId);
+    const skipReview = shouldSkipReviewForLog(replacementLog, subject);
     const enrichedLog: StudyLog = {
       ...replacementLog,
       subjectNameSnapshot: subject?.name || replacementLog.subjectNameSnapshot || '삭제된 과목',
-      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions)
+      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions),
+      reviewStep: replacementLog.reviewStep ?? 0,
+      nextReviewDate: !skipReview
+        ? replacementLog.nextReviewDate ?? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
+        : undefined,
+      isCondensed: skipReview,
+      reviewEnabled: !skipReview
     };
 
     setLogs(prev => [...prev.filter(log => !logIds.includes(log.id)), enrichedLog]);
