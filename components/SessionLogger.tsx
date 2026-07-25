@@ -232,6 +232,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const [startPage, setStartPage] = useState('');
   const [readAmount, setReadAmount] = useState('');
+  const [initialReadAmount, setInitialReadAmount] = useState('');
   const [skipReview, setSkipReview] = useState(false);
   const [minutes, setMinutes] = useState(0);
   const [plannedPageCount, setPlannedPageCount] = useState(0);
@@ -265,9 +266,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const activeTimerPagesRef = useRef<Record<string, number>>({});
   const activeTimerPageSecondsRef = useRef<Record<string, number[]>>({});
   const currentPageMeasuredSecondsRef = useRef(0);
+  const selectedSessionTimerIdRef = useRef('none');
   const halfwaySoundPagesRef = useRef<Set<number>>(new Set());
   const markerSoundPagesRef = useRef<Set<number>>(new Set());
   const pageTurnSoundPagesRef = useRef<Set<number>>(new Set());
+
+  const rememberCompletedTimer = (timerId: string) => {
+    setSessionTimerIds(prev => prev.includes(timerId) ? prev : [...prev, timerId]);
+  };
 
   const selectedSubjectLogs = useMemo(
     () => logs.filter(log => log.subjectId === subjectId && log.pagesRead > 0 && log.timeSpentMinutes > 0),
@@ -356,6 +362,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const currentReadAmount = startPage && readAmount
     ? calculateAmountFromEndPage(parseFloat(startPage), parseFloat(readAmount))
     : 0;
+  const hasPageProgress = currentReadAmount > 0;
+  const hasChangedEndPage = readAmount.trim() !== ''
+    && initialReadAmount.trim() !== ''
+    && Number(readAmount) !== Number(initialReadAmount);
   const currentTimePerPage = currentReadAmount > 0 ? minutes / currentReadAmount : 0;
   const speedDeltaMinutes = currentTimePerPage > 0 && averageTimePerPage > 0
     ? currentTimePerPage - averageTimePerPage
@@ -373,6 +383,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     && step === 'timer'
     && !hasSavedSelectedTimerRecord;
   const hasSessionMemo = false;
+  useEffect(() => {
+    selectedSessionTimerIdRef.current = selectedSessionTimerId;
+  }, [selectedSessionTimerId]);
+
   useEffect(() => {
     if (isTimerRunning) {
       startTimeRef.current = Date.now();
@@ -412,12 +426,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (delta <= 0) return;
     lastAttackSecondRef.current = seconds;
 
-    activeTimerSecondsRef.current[selectedSessionTimerId] =
-      (activeTimerSecondsRef.current[selectedSessionTimerId] || 0) + delta;
+    const timerId = selectedSessionTimerIdRef.current;
+    activeTimerSecondsRef.current[timerId] =
+      (activeTimerSecondsRef.current[timerId] || 0) + delta;
     currentPageMeasuredSecondsRef.current += delta;
     setSessionTimerSeconds(prev => ({
       ...prev,
-      [selectedSessionTimerId]: activeTimerSecondsRef.current[selectedSessionTimerId] || 0
+      [timerId]: activeTimerSecondsRef.current[timerId] || 0
     }));
 
     if (averageSecondsPerPage <= 0) return;
@@ -433,30 +448,32 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       }
 
       if (completed > 0) {
+        const completedTimerId = selectedSessionTimerIdRef.current;
         setAttackCompletedPages(current => current + completed);
         setPageAttackTargetSeconds(averageSecondsPerPage);
         const completedSeconds = Math.max(1, currentPageMeasuredSecondsRef.current - nextElapsed);
-        activeTimerPagesRef.current[selectedSessionTimerId] =
-          (activeTimerPagesRef.current[selectedSessionTimerId] || 0) + completed;
-        activeTimerCompletedSecondsRef.current[selectedSessionTimerId] =
-          (activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0) + completedSeconds;
-        activeTimerPageSecondsRef.current[selectedSessionTimerId] = [
-          ...(activeTimerPageSecondsRef.current[selectedSessionTimerId] || []),
+        activeTimerPagesRef.current[completedTimerId] =
+          (activeTimerPagesRef.current[completedTimerId] || 0) + completed;
+        activeTimerCompletedSecondsRef.current[completedTimerId] =
+          (activeTimerCompletedSecondsRef.current[completedTimerId] || 0) + completedSeconds;
+        activeTimerPageSecondsRef.current[completedTimerId] = [
+          ...(activeTimerPageSecondsRef.current[completedTimerId] || []),
           completedSeconds
         ];
         currentPageMeasuredSecondsRef.current = Math.max(0, nextElapsed);
         setSessionTimerPages(prev => ({
           ...prev,
-          [selectedSessionTimerId]: activeTimerPagesRef.current[selectedSessionTimerId] || 0
+          [completedTimerId]: activeTimerPagesRef.current[completedTimerId] || 0
         }));
         setSessionTimerCompletedSeconds(prev => ({
           ...prev,
-          [selectedSessionTimerId]: activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0
+          [completedTimerId]: activeTimerCompletedSecondsRef.current[completedTimerId] || 0
         }));
         setSessionTimerPageSeconds(prev => ({
           ...prev,
-          [selectedSessionTimerId]: activeTimerPageSecondsRef.current[selectedSessionTimerId] || []
+          [completedTimerId]: activeTimerPageSecondsRef.current[completedTimerId] || []
         }));
+        rememberCompletedTimer(completedTimerId);
       }
 
       return nextElapsed;
@@ -577,13 +594,39 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return `${hrs > 0 ? hrs + ':' : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const resetPageAttackTimer = (targetSeconds = averageSecondsPerPage) => {
+  const resetPageAttackTimer = (targetSeconds = 0) => {
     setPageAttackTargetSeconds(targetSeconds > 0 ? targetSeconds : 0);
     setPageElapsedSeconds(0);
     currentPageMeasuredSecondsRef.current = 0;
     halfwaySoundPagesRef.current.delete(attackCompletedPages);
     markerSoundPagesRef.current.delete(attackCompletedPages);
     pageTurnSoundPagesRef.current.delete(attackCompletedPages);
+  };
+
+  const getCurrentElapsedSeconds = () => (
+    accumulatedSecondsRef.current + (
+      startTimeRef.current !== null
+        ? Math.floor((Date.now() - startTimeRef.current) / 1000)
+        : 0
+    )
+  );
+
+  const lockElapsedTimeToCurrentTimer = () => {
+    if (step !== 'timer') return;
+    const currentElapsed = getCurrentElapsedSeconds();
+    const delta = currentElapsed - lastAttackSecondRef.current;
+    if (delta <= 0) return;
+
+    const timerId = selectedSessionTimerIdRef.current;
+    activeTimerSecondsRef.current[timerId] =
+      (activeTimerSecondsRef.current[timerId] || 0) + delta;
+    currentPageMeasuredSecondsRef.current += delta;
+    lastAttackSecondRef.current = currentElapsed;
+    setSeconds(currentElapsed);
+    setSessionTimerSeconds(prev => ({
+      ...prev,
+      [timerId]: activeTimerSecondsRef.current[timerId] || 0
+    }));
   };
 
   const resetAll = () => {
@@ -609,6 +652,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setIsTimerRunning(false);
     setStartPage('');
     setReadAmount('');
+    setInitialReadAmount('');
     setReviewMemo('');
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
@@ -617,6 +661,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     halfwaySoundPagesRef.current.clear();
     markerSoundPagesRef.current.clear();
     pageTurnSoundPagesRef.current.clear();
+    selectedSessionTimerIdRef.current = 'none';
   };
 
   const handleToggleSkipReview = () => {
@@ -638,21 +683,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const selectSessionTimer = (timerId: string) => {
+    lockElapsedTimeToCurrentTimer();
+    selectedSessionTimerIdRef.current = timerId;
     setSelectedSessionTimerId(timerId);
     writeSessionTimerSelection(subjectId, timerId);
     setTimerMode('remainingPages');
     if (step === 'timer') {
-      resetPageAttackTimer();
-    }
-    if (step === 'timer') {
-      setSessionTimerIds(prev => prev.includes(timerId) ? prev : [...prev, timerId]);
+      resetPageAttackTimer(0);
     }
   };
 
   const addSessionTimer = (difficulty: TimerDifficulty = 'medium') => {
-    const elapsedSecondsSoFar = step === 'timer'
-      ? accumulatedSecondsRef.current + (startTimeRef.current !== null ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0)
-      : 0;
+    lockElapsedTimeToCurrentTimer();
 
     setSessionTimers(prev => {
       const sameDifficultyCount = prev.filter(timer => getTimerDifficulty(timer) === difficulty).length;
@@ -663,20 +705,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       };
       const nextTimers = [...prev, nextTimer];
       writeSessionTimers(subjectId, nextTimers);
+      selectedSessionTimerIdRef.current = nextTimer.id;
       setSelectedSessionTimerId(nextTimer.id);
       writeSessionTimerSelection(subjectId, nextTimer.id);
       setTimerMode('remainingPages');
       if (step === 'timer') {
-        activeTimerSecondsRef.current = elapsedSecondsSoFar > 0 ? { [nextTimer.id]: elapsedSecondsSoFar } : {};
-        activeTimerCompletedSecondsRef.current = {};
-        activeTimerPagesRef.current = {};
-        activeTimerPageSecondsRef.current = {};
-        resetPageAttackTimer();
-        setSessionTimerIds([nextTimer.id]);
-        setSessionTimerSeconds(elapsedSecondsSoFar > 0 ? { [nextTimer.id]: elapsedSecondsSoFar } : {});
-        setSessionTimerCompletedSeconds({});
-        setSessionTimerPages({});
-        setSessionTimerPageSeconds({});
+        resetPageAttackTimer(0);
       }
       return nextTimers;
     });
@@ -700,6 +734,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       writeSessionTimers(subjectId, nextTimers);
       return nextTimers;
     });
+    selectedSessionTimerIdRef.current = nextSelection;
     setSelectedSessionTimerId(nextSelection);
     writeSessionTimerSelection(subjectId, nextSelection);
     setSessionTimerIds(prev => prev.filter(id => id !== timerId));
@@ -753,29 +788,31 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const moveToNextAttackPage = () => {
     if (step !== 'timer') return;
 
+    lockElapsedTimeToCurrentTimer();
+    const timerId = selectedSessionTimerIdRef.current;
     const completedSeconds = Math.max(1, currentPageMeasuredSecondsRef.current);
-    activeTimerPagesRef.current[selectedSessionTimerId] =
-      (activeTimerPagesRef.current[selectedSessionTimerId] || 0) + 1;
-    activeTimerCompletedSecondsRef.current[selectedSessionTimerId] =
-      (activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0) + completedSeconds;
-    activeTimerPageSecondsRef.current[selectedSessionTimerId] = [
-      ...(activeTimerPageSecondsRef.current[selectedSessionTimerId] || []),
+    activeTimerPagesRef.current[timerId] =
+      (activeTimerPagesRef.current[timerId] || 0) + 1;
+    activeTimerCompletedSecondsRef.current[timerId] =
+      (activeTimerCompletedSecondsRef.current[timerId] || 0) + completedSeconds;
+    activeTimerPageSecondsRef.current[timerId] = [
+      ...(activeTimerPageSecondsRef.current[timerId] || []),
       completedSeconds
     ];
     currentPageMeasuredSecondsRef.current = 0;
     setSessionTimerPages(prev => ({
       ...prev,
-      [selectedSessionTimerId]: activeTimerPagesRef.current[selectedSessionTimerId] || 0
+      [timerId]: activeTimerPagesRef.current[timerId] || 0
     }));
     setSessionTimerCompletedSeconds(prev => ({
       ...prev,
-      [selectedSessionTimerId]: activeTimerCompletedSecondsRef.current[selectedSessionTimerId] || 0
+      [timerId]: activeTimerCompletedSecondsRef.current[timerId] || 0
     }));
     setSessionTimerPageSeconds(prev => ({
       ...prev,
-      [selectedSessionTimerId]: activeTimerPageSecondsRef.current[selectedSessionTimerId] || []
+      [timerId]: activeTimerPageSecondsRef.current[timerId] || []
     }));
-    setSessionTimerIds(prev => prev.includes(selectedSessionTimerId) ? prev : [...prev, selectedSessionTimerId]);
+    rememberCompletedTimer(timerId);
 
     setAttackCompletedPages(current => current + 1);
     setPageAttackTargetSeconds(averageSecondsPerPage);
@@ -786,9 +823,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const usedSessionTimerIds = Array.from(new Set([
-    ...(step === 'timer' || step === 'pages' ? [DEFAULT_SESSION_TIMER.id] : []),
-    ...sessionTimerIds,
-    ...Object.keys(sessionTimerSeconds).filter(timerId => (sessionTimerSeconds[timerId] || 0) > 0)
+    ...sessionTimerIds.filter(timerId => (sessionTimerPages[timerId] || 0) > 0),
+    ...Object.keys(sessionTimerPageSeconds).filter(timerId => (sessionTimerPageSeconds[timerId] || []).length > 0),
+    ...Object.keys(sessionTimerSeconds).filter(timerId => (sessionTimerSeconds[timerId] || 0) > 0),
+    ...(step === 'timer' || step === 'pages' ? [selectedSessionTimerId] : [])
   ]));
   const usedSessionTimers = usedSessionTimerIds
     .map(timerId => timerId === DEFAULT_SESSION_TIMER.id ? DEFAULT_SESSION_TIMER : sessionTimers.find(timer => timer.id === timerId))
@@ -895,13 +933,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     const completedPages = sessionTimerPages[timerId] || 0;
     const completedSeconds = sessionTimerCompletedSeconds[timerId] || 0;
     const totalSeconds = sessionTimerSeconds[timerId] || 0;
-    const currentAverage = measuredPageAverage > 0
-      ? measuredPageAverage
-      : completedPages > 0 && completedSeconds > 0
+    const currentAverage = pages > 0 && totalSeconds > 0
+      ? (totalSeconds / 60) / pages
+      : measuredPageAverage > 0
+        ? measuredPageAverage
+        : completedPages > 0 && completedSeconds > 0
         ? (completedSeconds / 60) / completedPages
-        : pages > 0 && totalSeconds > 0
-          ? (totalSeconds / 60) / pages
-          : 0;
+        : 0;
     const secondsBasis = currentAverage > 0 && pages > 0 ? currentAverage * pages * 60 : totalSeconds;
     const previousExpectedPages = previousAverage > 0 && secondsBasis > 0 ? (secondsBasis / 60) / previousAverage : 0;
     const ratioPercent = previousAverage > 0 && currentAverage > 0 ? (previousAverage / currentAverage) * 100 : 0;
@@ -1058,7 +1096,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setAttackCompletedPages(0);
     setPageAttackTargetSeconds(averageSecondsPerPage);
     setPageElapsedSeconds(0);
-    setSessionTimerIds([selectedSessionTimerId]);
+    selectedSessionTimerIdRef.current = selectedSessionTimerId;
+    setSessionTimerIds([]);
     setSessionTimerSeconds({});
     setSessionTimerCompletedSeconds({});
     setSessionTimerPages({});
@@ -1066,6 +1105,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     activeTimerSecondsRef.current = {};
     activeTimerCompletedSecondsRef.current = {};
     activeTimerPagesRef.current = {};
+    activeTimerPageSecondsRef.current = {};
+    setSessionTimerPageSeconds({});
     currentPageMeasuredSecondsRef.current = 0;
     lastAttackSecondRef.current = 0;
     setStep('timer');
@@ -1079,8 +1120,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       const missingTimerSeconds = Math.max(0, nextTotalSeconds - seconds);
       accumulatedSecondsRef.current = nextTotalSeconds;
       if (missingTimerSeconds > 0) {
-        activeTimerSecondsRef.current[selectedSessionTimerId] =
-          (activeTimerSecondsRef.current[selectedSessionTimerId] || 0) + missingTimerSeconds;
+        const timerId = selectedSessionTimerIdRef.current;
+        activeTimerSecondsRef.current[timerId] =
+          (activeTimerSecondsRef.current[timerId] || 0) + missingTimerSeconds;
       }
       setSeconds(accumulatedSecondsRef.current);
       startTimeRef.current = null;
@@ -1107,12 +1149,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (selectedSubject) {
       const nextStartPage = selectedSubject.completedPages + 1;
       setStartPage(formatPageNumber(nextStartPage));
-      if (expectedReadAmount > 0) {
-        setReadAmount(formatPageNumber(calculateEndPageValue(nextStartPage, expectedReadAmount)));
-      }
-      else {
-        setReadAmount(formatPageNumber(nextStartPage));
-      }
+      const nextReadAmount = expectedReadAmount > 0
+        ? formatPageNumber(calculateEndPageValue(nextStartPage, expectedReadAmount))
+        : formatPageNumber(nextStartPage);
+      setReadAmount(nextReadAmount);
+      setInitialReadAmount(nextReadAmount);
     }
     setStep('pages');
   };
@@ -1492,7 +1533,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                   </p>
                 </div>
               </div>
-              {usedSessionTimers.length > 0 && currentReadAmount > 0 && (
+              {usedSessionTimers.length > 0 && hasPageProgress && hasChangedEndPage && (
                 <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-3">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">타이머별 끝 페이지</label>
