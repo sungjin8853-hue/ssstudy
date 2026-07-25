@@ -254,6 +254,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [sessionTimerPages, setSessionTimerPages] = useState<Record<string, number>>({});
   const [sessionTimerPageSeconds, setSessionTimerPageSeconds] = useState<Record<string, number[]>>({});
   const [timerPageDrafts, setTimerPageDrafts] = useState<Record<string, string>>({});
+  const [hiddenTimerPageRows, setHiddenTimerPageRows] = useState<Record<string, boolean>>({});
   const [editingTimerId, setEditingTimerId] = useState<string | null>(null);
   const [isEditingTimers, setIsEditingTimers] = useState(false);
 
@@ -641,6 +642,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSessionTimerPages({});
     setSessionTimerPageSeconds({});
     setTimerPageDrafts({});
+    setHiddenTimerPageRows({});
     accumulatedSecondsRef.current = 0;
     lastAttackSecondRef.current = 0;
     activeTimerSecondsRef.current = {};
@@ -815,7 +817,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     rememberCompletedTimer(timerId);
 
     setAttackCompletedPages(current => current + 1);
-    setPageAttackTargetSeconds(averageSecondsPerPage);
+    const hasSavedTimerRecord = timerBasisLogs.length > 0;
+    const nextTargetSeconds = timerId !== DEFAULT_SESSION_TIMER.id && !hasSavedTimerRecord
+      ? Math.max(1, Math.round(
+        activeTimerPageSecondsRef.current[timerId].reduce((sum, value) => sum + value, 0)
+        / activeTimerPageSecondsRef.current[timerId].length
+      ))
+      : averageSecondsPerPage;
+    setPageAttackTargetSeconds(nextTargetSeconds);
     setPageElapsedSeconds(0);
     halfwaySoundPagesRef.current.delete(attackCompletedPages + 1);
     markerSoundPagesRef.current.delete(attackCompletedPages + 1);
@@ -1004,7 +1013,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const getTimerEndPageRows = (totalPages: number): TimerEndPageRow[] => {
-    if (pageInputSessionTimers.length === 0 || totalPages <= 0) return [];
+    if (pageInputSessionTimers.length === 0) return [];
 
     const autoAllocations = calculateAutoTimerPageAllocations(totalPages);
     const autoByTimer = new Map(autoAllocations.map(entry => [entry.timerId, entry]));
@@ -1026,7 +1035,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         pages,
         endPage
       };
-    }).filter(row => row.pages > 0 || (sessionTimerSeconds[row.timer.id] || 0) > 0);
+    }).filter(row => !hiddenTimerPageRows[row.timer.id] && (
+      row.pages > 0
+      || sessionTimerIds.includes(row.timer.id)
+      || Boolean(timerPageDrafts[row.timer.id]?.trim())
+    ));
   };
 
   const calculateTimerPageAllocations = (totalPages: number): TimerPageAllocation[] => {
@@ -1043,7 +1056,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     })).filter(entry => entry.pages > 0 && entry.timeSpentMinutes > 0);
   };
 
-  const handleTimerEndPageChange = (timerId: string, value: string) => {
+  const handleTimerEndPageChange = (timerId: string, value: string, shouldSyncTotalEndPage = true) => {
     if (value.trim() === '') {
       setTimerPageDrafts(prev => ({
         ...prev,
@@ -1079,9 +1092,28 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     }));
 
     const lastEndPage = Number(nextDrafts[rows[rows.length - 1].timer.id]);
-    if (Number.isFinite(lastEndPage)) {
+    if (shouldSyncTotalEndPage && Number.isFinite(lastEndPage)) {
       setReadAmount(formatPageNumber(lastEndPage));
     }
+  };
+
+  const handleReadAmountChange = (value: string) => {
+    setReadAmount(value);
+
+    if (value.trim() === '') {
+      setTimerPageDrafts({});
+      setHiddenTimerPageRows({});
+      return;
+    }
+
+    const nextEndPage = Math.round(Number(value));
+    if (!Number.isFinite(nextEndPage) || currentReadAmount <= 0) return;
+
+    const rows = getTimerEndPageRows(currentReadAmount);
+    if (rows.length === 0) return;
+
+    const lastRow = rows[rows.length - 1];
+    handleTimerEndPageChange(lastRow.timer.id, String(nextEndPage), false);
   };
 
   const handleStartMeasurement = () => {
@@ -1102,6 +1134,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSessionTimerCompletedSeconds({});
     setSessionTimerPages({});
     setTimerPageDrafts({});
+    setHiddenTimerPageRows({});
     activeTimerSecondsRef.current = {};
     activeTimerCompletedSecondsRef.current = {};
     activeTimerPagesRef.current = {};
@@ -1193,6 +1226,59 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     resetAll();
   };
+
+  const timerEndPageRows = step === 'pages' ? getTimerEndPageRows(Math.max(0, currentReadAmount)) : [];
+  const hasTimerEndPageRows = timerEndPageRows.length > 0;
+  const renderTimerPageRows = () => (
+    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">타이머별 학습량</label>
+        <span className="text-[10px] font-bold text-indigo-300">끝 페이지 수정 가능</span>
+      </div>
+      <div className="space-y-2">
+        {timerEndPageRows.map(row => {
+          const timerSpeedChange = getTimerSpeedChange(row.timer.id, row.pages);
+          return (
+            <div key={row.timer.id} className="grid grid-cols-[1fr_120px_48px] items-center gap-2 rounded-xl bg-white p-2">
+              <div>
+                <p className="text-sm font-black text-slate-800">{row.timer.name}</p>
+                <p className="mt-1 text-xs font-black text-indigo-500">
+                  {formatPageNumber(row.pages)}P · 끝 p.{formatPageNumber(row.endPage)}
+                </p>
+                {timerSpeedChange.currentAverage > 0 && timerSpeedChange.previousAverage > 0 && (
+                  <p className={`mt-1 text-base font-black ${timerSpeedChange.ratioPercent > 100 ? 'text-emerald-600' : timerSpeedChange.ratioPercent < 100 ? 'text-rose-600' : 'text-slate-500'}`}>
+                    {timerSpeedChange.ratioPercent > 100
+                      ? `+${(timerSpeedChange.ratioPercent - 100).toFixed(0)}% · ${timerSpeedChange.previousAverage.toFixed(2)}분/P → ${timerSpeedChange.currentAverage.toFixed(2)}분/P`
+                      : timerSpeedChange.ratioPercent < 100
+                        ? `-${(100 - timerSpeedChange.ratioPercent).toFixed(0)}% · ${timerSpeedChange.previousAverage.toFixed(2)}분/P → ${timerSpeedChange.currentAverage.toFixed(2)}분/P`
+                        : '변화 없음'}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-1 rounded-xl border border-indigo-100 bg-indigo-50 px-2">
+                <span className="text-[10px] font-black text-indigo-400">끝 p.</span>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={timerPageDrafts[row.timer.id] || formatPageNumber(row.endPage)}
+                  onChange={e => handleTimerEndPageChange(row.timer.id, e.target.value)}
+                  className="w-full bg-transparent p-2 text-center text-lg font-black text-indigo-900 outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setHiddenTimerPageRows(prev => ({ ...prev, [row.timer.id]: true }))}
+                className="rounded-xl bg-rose-50 px-2 py-3 text-xs font-black text-rose-500 transition-all hover:bg-rose-100"
+              >
+                삭제
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   if (step === 'idle') {
     return (
@@ -1492,87 +1578,39 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           <div className="flex flex-col items-center">
             <h3 className="text-2xl font-black text-slate-900 mb-4">학습량 입력</h3>
             <div className="flex flex-col gap-4 mb-4 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">완료된 끝 페이지</label>
-                <input
-                  type="number"
-                  step="1"
-                  value={readAmount}
-                  onChange={e => setReadAmount(e.target.value)}
-                  placeholder="0"
-                  autoFocus
-                  className="w-full p-4 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-2xl font-black text-3xl text-center outline-none transition-all shadow-sm text-indigo-900"
-                />
-                <p className="px-2 text-center text-[10px] font-bold text-slate-400">
-                  시작 p.{formatPageNumber(parseFloat(startPage) || 0)} · 학습량 {currentReadAmount > 0 ? formatPageNumber(currentReadAmount) : '0'}P
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">이전 속도</p>
-                  <p className="mt-1 text-lg font-black text-slate-700">
-                    {averageTimePerPage > 0 ? `${averageTimePerPage.toFixed(2)}분/P` : '기록 필요'}
+              {hasTimerEndPageRows ? (
+                renderTimerPageRows()
+              ) : (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">완료된 끝 페이지</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={readAmount}
+                    onChange={e => handleReadAmountChange(e.target.value)}
+                    placeholder="0"
+                    autoFocus
+                    className="w-full p-4 bg-white border-2 border-slate-200 focus:border-indigo-500 rounded-2xl font-black text-3xl text-center outline-none transition-all shadow-sm text-indigo-900"
+                  />
+                  <p className="px-2 text-center text-[10px] font-bold text-slate-400">
+                    시작 p.{formatPageNumber(parseFloat(startPage) || 0)} · 학습량 {currentReadAmount > 0 ? formatPageNumber(currentReadAmount) : '0'}P
                   </p>
-                </div>
-                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">이번 속도</p>
-                  <p className="mt-1 text-lg font-black text-indigo-600">
-                    {currentTimePerPage > 0 ? `${currentTimePerPage.toFixed(2)}분/P` : '-'}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">속도 변화</p>
-                  <p className={`mt-1 text-lg font-black ${speedRatioPercent > 100 ? 'text-emerald-600' : speedRatioPercent > 0 && speedRatioPercent < 100 ? 'text-rose-600' : 'text-slate-500'}`}>
-                    {currentTimePerPage > 0 && averageTimePerPage > 0
-                      ? speedRatioPercent > 100
-                        ? `${speedRatioPercent.toFixed(0)}% 속도`
-                        : speedRatioPercent < 100
-                          ? `${Math.abs(speedDeltaMinutes).toFixed(2)}분/P 느림`
-                          : '변화 없음'
-                      : '-'}
-                  </p>
-                </div>
-              </div>
-              {usedSessionTimers.length > 0 && hasPageProgress && hasChangedEndPage && (
-                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">타이머별 끝 페이지</label>
-                    <span className="text-[10px] font-bold text-indigo-300">같은 타이머는 합산</span>
-                  </div>
-                  <div className="space-y-2">
-                    {getTimerEndPageRows(currentReadAmount).map(row => {
-                      const timerSpeedChange = getTimerSpeedChange(row.timer.id, row.pages);
-                      return (
-                        <div key={row.timer.id} className="grid grid-cols-[1fr_120px] items-center gap-2 rounded-xl bg-white p-2">
-                          <div>
-                            <p className="text-sm font-black text-slate-800">{row.timer.name}</p>
-                            {timerSpeedChange.currentAverage > 0 && timerSpeedChange.previousAverage > 0 && (
-                              <p className={`mt-1 text-base font-black ${timerSpeedChange.ratioPercent > 100 ? 'text-emerald-600' : timerSpeedChange.ratioPercent < 100 ? 'text-rose-600' : 'text-slate-500'}`}>
-                                {timerSpeedChange.ratioPercent > 100
-                                  ? `+${(timerSpeedChange.ratioPercent - 100).toFixed(0)}% · ${timerSpeedChange.previousAverage.toFixed(2)}분/P → ${timerSpeedChange.currentAverage.toFixed(2)}분/P`
-                                  : timerSpeedChange.ratioPercent < 100
-                                    ? `-${(100 - timerSpeedChange.ratioPercent).toFixed(0)}% · ${timerSpeedChange.previousAverage.toFixed(2)}분/P → ${timerSpeedChange.currentAverage.toFixed(2)}분/P`
-                                    : '변화 없음'}
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 rounded-xl border border-indigo-100 bg-indigo-50 px-2">
-                            <span className="text-[10px] font-black text-indigo-400">끝 p.</span>
-                            <input
-                              type="number"
-                              step="1"
-                              min="0"
-                              value={timerPageDrafts[row.timer.id] || formatPageNumber(row.endPage)}
-                              onChange={e => handleTimerEndPageChange(row.timer.id, e.target.value)}
-                              className="w-full bg-transparent p-2 text-center text-lg font-black text-indigo-900 outline-none"
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
                 </div>
               )}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">현재 페이지</p>
+                  <p className="mt-1 text-xl font-black text-indigo-600">
+                    {currentReadAmount > 0 ? `${formatPageNumber(currentReadAmount)}P` : '0P'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">현재 시간</p>
+                  <p className="mt-1 text-xl font-black text-slate-700">
+                    {formatTime(seconds)}
+                  </p>
+                </div>
+              </div>
               <div className="hidden">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-black uppercase tracking-widest text-indigo-500">세션 메모</label>

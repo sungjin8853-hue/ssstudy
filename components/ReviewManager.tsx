@@ -15,15 +15,64 @@ interface ReviewGroup {
   earliestReviewTime: number;
 }
 
-const getMemoTextSize = (text: string) => {
-  if (text.length > 420) return 'text-base';
-  if (text.length > 220) return 'text-lg';
-  return 'text-xl';
+const getMemoBoxHeight = (text: string) => {
+  const lineCount = text.split('\n').length;
+  const contentRows = text.trim() ? Math.ceil(text.length / 48) : 1;
+  const rows = Math.min(12, Math.max(1, lineCount, contentRows));
+  return `${rows * 30 + 16}px`;
 };
 
 const formatPageRange = (log: StudyLog) => {
   if (log.startPage && log.endPage) return `p.${log.startPage} ~ p.${log.endPage}`;
   return `${log.pagesRead}P`;
+};
+
+type ReviewPageRange = {
+  start: number;
+  end: number;
+};
+
+const getReviewPageRange = (log: StudyLog): ReviewPageRange | null => {
+  if (typeof log.startPage === 'number' && typeof log.endPage === 'number') {
+    return {
+      start: Math.min(log.startPage, log.endPage),
+      end: Math.max(log.startPage, log.endPage)
+    };
+  }
+
+  if (typeof log.endPage === 'number' && log.pagesRead > 0) {
+    const start = Math.max(1, log.endPage - log.pagesRead + 1);
+    return { start, end: log.endPage };
+  }
+
+  return null;
+};
+
+const formatPageNumber = (value: number) => Number.isInteger(value) ? `${value}` : value.toFixed(1);
+
+const getMergedReviewRangeText = (logs: StudyLog[]) => {
+  const merged = logs
+    .map(getReviewPageRange)
+    .filter((range): range is ReviewPageRange => Boolean(range))
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+    .reduce<ReviewPageRange[]>((ranges, range) => {
+      const previous = ranges[ranges.length - 1];
+      if (previous && range.start <= previous.end + 1) {
+        previous.end = Math.max(previous.end, range.end);
+        return ranges;
+      }
+
+      ranges.push({ ...range });
+      return ranges;
+    }, []);
+
+  if (merged.length === 0) {
+    return logs.map(formatPageRange).join(', ');
+  }
+
+  return merged
+    .map(range => `${formatPageNumber(range.start)}~${formatPageNumber(range.end)}`)
+    .join(', ');
 };
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -286,8 +335,8 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
   return (
     <div className="space-y-10 relative">
       {activeReviewGroup && (
-        <div className="fixed inset-0 z-[100] bg-slate-900/95 flex flex-col items-center justify-center p-4 md:p-10 animate-in fade-in zoom-in duration-300">
-          <div className="w-full max-w-4xl flex flex-col h-full gap-6">
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/95 flex flex-col items-center justify-start p-3 md:p-6 animate-in fade-in zoom-in duration-300">
+          <div className="w-full max-w-5xl flex min-h-full flex-col gap-4">
             <div className="flex justify-between items-center text-white">
               <div>
                 <h4 className="text-2xl font-black">{activeReviewGroup.subjectName} 복습 중</h4>
@@ -295,11 +344,9 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                   <span className="px-3 py-1 bg-indigo-500 rounded-xl text-[10px] font-black text-white">
                     {activeReviewGroup.logs.length}개 병합
                   </span>
-                  {activeReviewGroup.logs.map(log => (
-                    <span key={log.id} className="px-3 py-1 bg-white/10 rounded-xl text-xs font-bold text-indigo-200">
-                      {formatPageRange(log)}
-                    </span>
-                  ))}
+                  <span className="px-3 py-1 bg-white/10 rounded-xl text-xs font-bold text-indigo-200">
+                    {getMergedReviewRangeText(activeReviewGroup.logs)}
+                  </span>
                 </div>
               </div>
               <div className="text-right">
@@ -308,42 +355,34 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
               </div>
             </div>
 
-            <div className="grid min-h-0 flex-grow grid-cols-1 gap-4 md:grid-cols-[1fr_1.2fr]">
-              <div className="rounded-3xl border border-slate-700 bg-slate-800 p-6 text-slate-200 shadow-2xl overflow-auto">
-                <p className="mb-4 text-[10px] font-black uppercase tracking-widest text-indigo-300">복습 범위</p>
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <p className="text-lg font-black tracking-tight text-indigo-200">복습 범위</p>
+            <div className="min-h-0 flex-grow">
+              <div className="rounded-xl border border-rose-200 bg-white p-2 shadow-2xl">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900 px-2.5 py-1.5">
+                  <div className="min-w-0 flex flex-1 items-center gap-2">
+                    <span className="shrink-0 text-[10px] font-black text-indigo-300">복습 범위</span>
+                    <span className="min-w-0 break-words text-sm font-black leading-tight text-white">
+                      {getMergedReviewRangeText(activeReviewGroup.logs)}
+                    </span>
+                  </div>
                   <button
                     type="button"
                     onClick={handleCondenseFirst}
-                    className="rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-slate-200 transition-all hover:bg-rose-500 hover:text-white"
+                    className="shrink-0 rounded-md bg-white/10 px-2 py-1 text-[10px] font-black text-slate-200 transition-all hover:bg-rose-500 hover:text-white"
                   >
                     앞부분 축약
                   </button>
                 </div>
-                <div className="space-y-3">
+                <p className="mb-1.5 text-[10px] font-black uppercase tracking-widest text-rose-500">핵심어 메모</p>
+                <div className="space-y-1.5">
                   {activeReviewGroup.logs.map(log => (
-                    <div key={log.id} className="rounded-2xl bg-white/5 p-4">
-                      <p className="text-lg font-black text-white">{formatPageRange(log)}</p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
-                        Step {log.reviewStep || 0} · {new Date(log.timestamp).toLocaleDateString()} 학습
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-rose-200 bg-white p-6 shadow-2xl overflow-auto">
-                <p className="mb-4 text-[10px] font-black uppercase tracking-widest text-rose-500">핵심어 메모</p>
-                <div className="space-y-4">
-                  {activeReviewGroup.logs.map(log => (
-                    <div key={log.id} className="rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
-                      <p className="mb-2 text-xs font-black text-rose-400">{formatPageRange(log)}</p>
+                    <div key={log.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-1.5">
+                      <p className="mb-0.5 text-[10px] font-black text-rose-400">{formatPageRange(log)}</p>
                       <textarea
                         value={getMemoValue(log)}
                         onChange={event => handleMemoChange(log.id, event.target.value)}
                         placeholder="복습하면서 떠오른 핵심어를 바로 수정하세요."
-                        className={`min-h-[150px] w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold leading-relaxed text-slate-800 outline-none focus:border-rose-500 ${getMemoTextSize(getMemoValue(log))}`}
+                        className="w-full resize-none overflow-hidden rounded-md border border-rose-100 bg-white p-2 text-lg font-bold leading-snug text-slate-800 outline-none focus:border-rose-500"
+                        style={{ height: getMemoBoxHeight(getMemoValue(log)), scrollbarWidth: 'none' }}
                       />
                     </div>
                   ))}
@@ -389,7 +428,9 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                     <span className="text-[10px] text-slate-400">{new Date(group.earliestReviewTime).toLocaleDateString()}</span>
                   </div>
                   <h4 className="text-xl font-black text-slate-800">{group.subjectName}</h4>
-                  <p className="text-rose-600 font-black mt-1">{group.logs.map(formatPageRange).join(' · ')}</p>
+                  <p className="mt-2 inline-flex max-w-full rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-black text-rose-600">
+                    {getMergedReviewRangeText(group.logs)}
+                  </p>
                 </div>
               </div>
 
@@ -438,7 +479,9 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                   <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-black">{timeLeftStr}</span>
                 </div>
 
-                <p className="z-10 mt-4 text-indigo-900 font-black text-sm">{group.logs.map(formatPageRange).join(' · ')}</p>
+                <p className="z-10 mt-4 inline-flex max-w-full rounded-xl bg-indigo-50 px-3 py-1.5 text-sm font-black text-indigo-900">
+                  {getMergedReviewRangeText(group.logs)}
+                </p>
                 <button
                   type="button"
                   onClick={() => handleCondense(group)}
