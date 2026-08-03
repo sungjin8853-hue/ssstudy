@@ -7,6 +7,8 @@ interface Props {
   tagDefinitions: TagDefinition[];
   logs: StudyLog[];
   onLogSession: (log: StudyLog) => void;
+  onReviewAction: (logIds: string[], action: 'complete' | 'condense') => void;
+  onUpdateReviewMemo: (logId: string, memo: string) => void;
 }
 
 type TimerDifficulty = 'easy' | 'medium' | 'hard';
@@ -144,6 +146,48 @@ const calculateAmountFromEndPage = (start: number, end: number) => {
   return Number(amount.toFixed(2));
 };
 
+const formatReviewRange = (log: StudyLog) => {
+  if (typeof log.startPage === 'number' && typeof log.endPage === 'number') {
+    return `${formatPageNumber(log.startPage)}~${formatPageNumber(log.endPage)}`;
+  }
+  return `${formatPageNumber(log.pagesRead)}P`;
+};
+
+const getReviewRange = (log: StudyLog) => {
+  if (typeof log.startPage === 'number' && typeof log.endPage === 'number') {
+    return {
+      start: Math.min(log.startPage, log.endPage),
+      end: Math.max(log.startPage, log.endPage)
+    };
+  }
+  if (typeof log.endPage === 'number' && log.pagesRead > 0) {
+    return {
+      start: Math.max(1, log.endPage - log.pagesRead + 1),
+      end: log.endPage
+    };
+  }
+  return null;
+};
+
+const formatMergedReviewRanges = (logs: StudyLog[]) => {
+  const merged = logs
+    .map(getReviewRange)
+    .filter((range): range is { start: number; end: number } => Boolean(range))
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+    .reduce<Array<{ start: number; end: number }>>((ranges, range) => {
+      const previous = ranges[ranges.length - 1];
+      if (previous && range.start <= previous.end + 1) {
+        previous.end = Math.max(previous.end, range.end);
+        return ranges;
+      }
+      ranges.push({ ...range });
+      return ranges;
+    }, []);
+
+  if (merged.length === 0) return logs.map(formatReviewRange).join(', ');
+  return merged.map(range => `${formatPageNumber(range.start)}~${formatPageNumber(range.end)}`).join(', ');
+};
+
 const readReviewSessionPreferences = (): Record<string, boolean> => {
   try {
     return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
@@ -222,7 +266,7 @@ const isToday = (timestamp: string) => {
     && date.getDate() === today.getDate();
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, onLogSession }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, onLogSession, onReviewAction, onUpdateReviewMemo }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState('');
@@ -257,6 +301,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [hiddenTimerPageRows, setHiddenTimerPageRows] = useState<Record<string, boolean>>({});
   const [editingTimerId, setEditingTimerId] = useState<string | null>(null);
   const [isEditingTimers, setIsEditingTimers] = useState(false);
+  const [preSessionReviewLogs, setPreSessionReviewLogs] = useState<StudyLog[]>([]);
+  const [preSessionReviewDrafts, setPreSessionReviewDrafts] = useState<Record<string, string>>({});
+  const [preSessionReviewSeconds, setPreSessionReviewSeconds] = useState(0);
+  const [isPreSessionReviewRunning, setIsPreSessionReviewRunning] = useState(false);
 
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -331,6 +379,22 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     () => calculateRecentCompletedDayAverage(selectedSubjectLogs, recommendedDailyPages).averageTimePerPage,
     [selectedSubjectLogs, recommendedDailyPages]
   );
+
+  const dueReviewLogsForSelectedSubject = useMemo(() => {
+    if (!subjectId || isSubjectReviewDisabled) return [];
+    const now = Date.now();
+    return logs
+      .filter(log => {
+        if (log.subjectId !== subjectId || log.isCondensed || log.reviewEnabled === false || !log.nextReviewDate) return false;
+        const reviewTime = new Date(log.nextReviewDate).getTime();
+        return Number.isFinite(reviewTime) && reviewTime <= now;
+      })
+      .sort((a, b) => {
+        const timeA = a.nextReviewDate ? new Date(a.nextReviewDate).getTime() : 0;
+        const timeB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
+        return timeA - timeB;
+      });
+  }, [logs, subjectId, isSubjectReviewDisabled]);
 
   const selectedTimerSessionPages = selectedSessionTimerId !== 'none' ? sessionTimerPages[selectedSessionTimerId] || 0 : 0;
   const selectedTimerSessionMinutes = selectedSessionTimerId !== 'none' ? (sessionTimerCompletedSeconds[selectedSessionTimerId] || 0) / 60 : 0;
@@ -502,6 +566,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       playPageTurnSound();
     }
   }, [activePageAttackTargetSeconds, attackCompletedPages, isTimerRunning, pageAttackRemainingSeconds, step, timerMode]);
+
+  useEffect(() => {
+    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0) return;
+
+    const interval = window.setInterval(() => {
+      setPreSessionReviewSeconds(prev => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isPreSessionReviewRunning, preSessionReviewLogs.length]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -1116,11 +1190,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     handleTimerEndPageChange(lastRow.timer.id, String(nextEndPage), false);
   };
 
-  const handleStartMeasurement = () => {
-    if (!subjectId) {
-      alert('과목을 먼저 선택해주세요.');
-      return;
-    }
+  const startMeasurementNow = () => {
     unlockSounds();
     markerSoundPagesRef.current.clear();
     halfwaySoundPagesRef.current.clear();
@@ -1144,6 +1214,66 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     lastAttackSecondRef.current = 0;
     setStep('timer');
     setIsTimerRunning(true);
+  };
+
+  const handleStartMeasurement = () => {
+    if (!subjectId) {
+      alert('과목을 먼저 선택해주세요.');
+      return;
+    }
+
+    if (dueReviewLogsForSelectedSubject.length > 0) {
+      setPreSessionReviewDrafts(
+        dueReviewLogsForSelectedSubject.reduce<Record<string, string>>((drafts, log) => {
+          drafts[log.id] = log.reviewMemo || '';
+          return drafts;
+        }, {})
+      );
+      setPreSessionReviewLogs(dueReviewLogsForSelectedSubject);
+      setPreSessionReviewSeconds(0);
+      setIsPreSessionReviewRunning(true);
+      return;
+    }
+
+    startMeasurementNow();
+  };
+
+  const handlePreSessionReviewMemoChange = (logId: string, memo: string) => {
+    setPreSessionReviewDrafts(prev => ({ ...prev, [logId]: memo }));
+    onUpdateReviewMemo(logId, memo);
+  };
+
+  const finishPreSessionReview = () => {
+    if (preSessionReviewLogs.length === 0) return;
+    onReviewAction(preSessionReviewLogs.map(log => log.id), 'complete');
+    setPreSessionReviewLogs([]);
+    setPreSessionReviewDrafts({});
+    setPreSessionReviewSeconds(0);
+    setIsPreSessionReviewRunning(false);
+    startMeasurementNow();
+  };
+
+  const condenseFirstPreSessionReview = () => {
+    if (preSessionReviewLogs.length === 0) return;
+    const [firstLog, ...remainingLogs] = preSessionReviewLogs;
+    onReviewAction([firstLog.id], 'condense');
+    setPreSessionReviewLogs(remainingLogs);
+    setPreSessionReviewDrafts(prev => {
+      const next = { ...prev };
+      delete next[firstLog.id];
+      return next;
+    });
+    if (remainingLogs.length === 0) {
+      setIsPreSessionReviewRunning(false);
+      setPreSessionReviewSeconds(0);
+    }
+  };
+
+  const closePreSessionReview = () => {
+    setPreSessionReviewLogs([]);
+    setPreSessionReviewDrafts({});
+    setPreSessionReviewSeconds(0);
+    setIsPreSessionReviewRunning(false);
   };
 
   const handleTimerComplete = () => {
@@ -1283,6 +1413,80 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   if (step === 'idle') {
     return (
       <div className="animate-fade-in">
+        {preSessionReviewLogs.length > 0 && (
+          <div className="fixed inset-0 z-[9999] overflow-y-auto bg-slate-950/90 p-4 md:p-8">
+            <div className="mx-auto max-w-3xl rounded-3xl border border-rose-100 bg-white p-4 shadow-2xl md:p-6">
+              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">먼저 복습</p>
+                  <h3 className="mt-1 text-2xl font-black text-slate-900">{selectedSubject?.name} 복습 후 학습 시작</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600">
+                    {preSessionReviewLogs.length}개 복습
+                  </span>
+                  <span className="rounded-2xl bg-slate-900 px-3 py-2 font-mono text-lg font-black text-white">
+                    {formatTime(preSessionReviewSeconds)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mb-3 flex flex-col gap-2 rounded-2xl bg-slate-900 px-3 py-2 text-white md:flex-row md:items-center md:justify-between">
+                <div>
+                  <span className="mr-2 text-[10px] font-black text-indigo-300">복습 범위</span>
+                  <span className="text-sm font-black">
+                    {formatMergedReviewRanges(preSessionReviewLogs)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={condenseFirstPreSessionReview}
+                  className="rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-slate-200 transition-all hover:bg-rose-500 hover:text-white"
+                >
+                  앞부분 축약
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {preSessionReviewLogs.map(log => (
+                  <div key={log.id} className="rounded-2xl border border-rose-100 bg-rose-50/70 p-2">
+                    <p className="mb-1 text-xs font-black text-rose-500">{formatReviewRange(log)}</p>
+                    <textarea
+                      value={preSessionReviewDrafts[log.id] ?? log.reviewMemo ?? ''}
+                      onChange={e => handlePreSessionReviewMemoChange(log.id, e.target.value)}
+                      placeholder="복습 핵심어를 확인하거나 수정하세요."
+                      className="h-24 w-full resize-none rounded-xl border border-rose-100 bg-white p-3 text-lg font-bold leading-snug text-slate-800 outline-none focus:border-rose-500"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-5 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsPreSessionReviewRunning(prev => !prev)}
+                  className="flex-1 rounded-2xl bg-slate-100 py-4 text-sm font-black text-slate-500"
+                >
+                  {isPreSessionReviewRunning ? '잠시 중단' : '계속 복습'}
+                </button>
+                <button
+                  type="button"
+                  onClick={closePreSessionReview}
+                  className="flex-1 rounded-2xl bg-slate-100 py-4 text-sm font-black text-slate-400"
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={finishPreSessionReview}
+                  className="flex-[2] rounded-2xl bg-indigo-600 py-4 text-base font-black text-white shadow-lg shadow-indigo-100"
+                >
+                  복습 완료 후 학습 시작
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-8">
           <span className="w-2 h-5 bg-indigo-500 rounded-full"></span>
           학습 세션 시작
@@ -1533,7 +1737,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                     ? `${formatPageNumber(plannedPageCount)}장 목표 · 현재 시간 기준 ${formatPageNumber(timeTargetPages)}장 진행${isUsingOverallAverageForTimer ? ' · 전체 평균 기준' : ''}${isUsingFirstTimerFallback ? ' · 첫 측정 10분 기준' : ''}`
                     : selectedSessionTimerId !== 'none'
                       ? '저장된 평균이 없어 전체 학습 기록이 필요합니다.'
-                      : '최근 5일 안에 하루치 학습량을 끝낸 기록이 필요합니다.'}
+                      : '최근 학습 시간 15시간 안에 시간과 페이지가 있는 기록이 필요합니다.'}
                 </p>
               </div>
             ) : timerMode === 'elapsedTime' ? (

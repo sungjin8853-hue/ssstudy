@@ -76,21 +76,8 @@ const getMergedReviewRangeText = (logs: StudyLog[]) => {
 };
 
 const HOUR_MS = 60 * 60 * 1000;
-const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
-
-const readReviewSessionPreferences = (): Record<string, boolean> => {
-  try {
-    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
-};
 
 const isReviewEnabledForLog = (log: StudyLog, subjectReviewSettings: Map<string, boolean>) => {
-  const sessionReviewPreference = readReviewSessionPreferences()[log.subjectId];
-  if (sessionReviewPreference !== undefined) {
-    return sessionReviewPreference === false;
-  }
   return subjectReviewSettings.get(log.subjectId) !== false && log.reviewEnabled !== false;
 };
 

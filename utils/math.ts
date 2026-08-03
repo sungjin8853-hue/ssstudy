@@ -1,42 +1,48 @@
 import { StudyLog, PredictionInputs, Stats } from '../types';
 
-const RECENT_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+const RECENT_STUDY_MINUTES_LIMIT = 15 * 60;
+
+const takeRecentStudyMinutes = (logs: StudyLog[]) => {
+  let remainingMinutes = RECENT_STUDY_MINUTES_LIMIT;
+  const samples: Array<{ pagesRead: number; timeSpentMinutes: number; timestamp: string }> = [];
+
+  logs
+    .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .some(log => {
+      if (remainingMinutes <= 0) return true;
+
+      const minutes = Math.min(log.timeSpentMinutes, remainingMinutes);
+      const ratio = minutes / log.timeSpentMinutes;
+      samples.push({
+        pagesRead: log.pagesRead * ratio,
+        timeSpentMinutes: minutes,
+        timestamp: log.timestamp
+      });
+      remainingMinutes -= minutes;
+
+      return remainingMinutes <= 0;
+    });
+
+  return samples;
+};
 
 export const calculateRecentCompletedDayAverage = (
   logs: StudyLog[],
   _dailyTargetPages: number
 ): { averageTimePerPage: number; standardDeviation: number } => {
-  const validLogs = logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
+  const recentLogs = takeRecentStudyMinutes(logs);
 
-  if (validLogs.length === 0) {
+  if (recentLogs.length === 0) {
     return { averageTimePerPage: 0, standardDeviation: 0 };
   }
 
-  const cutoff = Date.now() - RECENT_DAYS_MS;
-  const dailyMap = new Map<string, { pages: number; minutes: number }>();
-
-  validLogs
-    .filter(log => new Date(log.timestamp).getTime() >= cutoff)
-    .forEach(log => {
-      const dayKey = new Date(log.timestamp).toLocaleDateString();
-      const current = dailyMap.get(dayKey) || { pages: 0, minutes: 0 };
-      current.pages += log.pagesRead;
-      current.minutes += log.timeSpentMinutes;
-      dailyMap.set(dayKey, current);
-    });
-
-  const completedDays = Array.from(dailyMap.values()).filter(day => day.pages > 0 && day.minutes > 0);
-
-  if (completedDays.length === 0) {
-    return { averageTimePerPage: 0, standardDeviation: 0 };
-  }
-
-  const totalTime = completedDays.reduce((acc, day) => acc + day.minutes, 0);
-  const totalPages = completedDays.reduce((acc, day) => acc + day.pages, 0);
+  const totalTime = recentLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
+  const totalPages = recentLogs.reduce((acc, log) => acc + log.pagesRead, 0);
   const averageTimePerPage = totalPages > 0 ? totalTime / totalPages : 0;
-  const dailySamples = completedDays.map(day => day.minutes / day.pages);
-  const mean = dailySamples.reduce((a, b) => a + b, 0) / dailySamples.length;
-  const variance = dailySamples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / dailySamples.length;
+  const samples = recentLogs.map(log => log.timeSpentMinutes / log.pagesRead);
+  const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+  const variance = samples.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / samples.length;
 
   return {
     averageTimePerPage,

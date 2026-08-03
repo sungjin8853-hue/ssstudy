@@ -52,21 +52,7 @@ const repairTestReviewDate = (log: StudyLog) => {
     : log.nextReviewDate;
 };
 
-const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
-
-const readReviewSessionPreferences = (): Record<string, boolean> => {
-  try {
-    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
-};
-
 const shouldSkipReviewForLog = (log: StudyLog, subject?: Subject) => {
-  const sessionReviewPreference = readReviewSessionPreferences()[log.subjectId];
-  if (sessionReviewPreference !== undefined) {
-    return sessionReviewPreference === true;
-  }
   return log.isCondensed === true || subject?.reviewEnabled === false;
 };
 
@@ -521,7 +507,9 @@ const App: React.FC = () => {
             nextInterval = 28 * 24 * 60 * 60 * 1000 * multiplier;
         }
 
-        const nextDate = new Date(Date.now() + nextInterval);
+        const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
+        const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
+        const nextDate = new Date(nextDateBase + nextInterval);
 
         return {
             ...log,
@@ -653,6 +641,8 @@ const App: React.FC = () => {
                       tagDefinitions={tagDefinitions}
                       logs={logs}
                       onLogSession={handleLogSession}
+                      onReviewAction={handleReviewAction}
+                      onUpdateReviewMemo={handleUpdateReviewMemo}
                     />
                   ) : (
                     <SubjectPlanner onAddSubject={handleAddSubject} />
