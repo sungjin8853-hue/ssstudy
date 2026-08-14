@@ -205,6 +205,19 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleUpdateSubjects = (updatedSubjects: Subject[]) => {
+    const updatedMap = new Map(updatedSubjects.map(subject => [subject.id, subject]));
+    setSubjects(prev => prev.map(subject => updatedMap.get(subject.id) || subject));
+    setLogs(prev => prev.map(log => {
+      const updatedSubject = updatedMap.get(log.subjectId);
+      if (!updatedSubject) return log;
+      return {
+        ...log,
+        subjectNameSnapshot: updatedSubject.name
+      };
+    }));
+  };
+
   const toggleSidebar = () => {
     const next = !isSidebarCollapsed;
     setIsSidebarCollapsed(next);
@@ -625,6 +638,7 @@ const App: React.FC = () => {
                 activeStudyDate={activeStudyDate}
                 onActiveWeekdayChange={setActiveStudyWeekday}
                 onUpdateSubject={handleUpdateSubject} 
+                onUpdateSubjects={handleUpdateSubjects}
                 onDeleteSubject={handleDeleteSubject} 
                 onUpdateTags={handleUpdateTags}
                 onDeleteFolder={handleDeleteFolder}
