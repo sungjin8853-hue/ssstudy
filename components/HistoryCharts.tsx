@@ -28,11 +28,16 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
   const [expandedFolderKeys, setExpandedFolderKeys] = useState<Set<string>>(new Set());
 
   const recentLogsData = useMemo(() => {
-    return logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0).slice(-20).map(log => ({
-      date: new Date(log.timestamp).toLocaleDateString('ko-KR', { day: 'numeric', month: 'short' }),
-      efficiency: Number((log.timeSpentMinutes / log.pagesRead).toFixed(2)),
-      name: subjects.find(subject => subject.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'
-    }));
+    return logs
+      .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 20)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .map(log => ({
+        date: new Date(log.timestamp).toLocaleDateString('ko-KR', { day: 'numeric', month: 'short' }),
+        efficiency: Number((log.timeSpentMinutes / log.pagesRead).toFixed(2)),
+        name: subjects.find(subject => subject.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'
+      }));
   }, [logs, subjects]);
 
   const buildSummary = (items: StudyLog[], id: string, name: string): Summary => {

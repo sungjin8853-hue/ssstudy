@@ -7,6 +7,7 @@ import { ReviewManager } from './components/ReviewManager';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
+import { getLocalDateKey, getStudyDateForWeekday } from './utils/schedule';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -63,6 +64,7 @@ const App: React.FC = () => {
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'review'>('dashboard');
   const [dashboardActionTab, setDashboardActionTab] = useState<'logger' | 'planner'>('logger');
+  const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
 
@@ -79,6 +81,11 @@ const App: React.FC = () => {
     const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
     return d.toLocaleDateString('ko-KR', options);
   }, []);
+
+  const activeStudyDate = useMemo(
+    () => getStudyDateForWeekday(activeStudyWeekday),
+    [activeStudyWeekday]
+  );
 
   // Persistence (Safe Load)
   useEffect(() => {
@@ -102,7 +109,12 @@ const App: React.FC = () => {
             : subject.completedPages,
           targetDate: subject.targetDate,
           tagIds: subject.tagIds,
-          reviewEnabled: subject.reviewEnabled ?? true
+          reviewEnabled: subject.reviewEnabled ?? true,
+          isRequired: subject.isRequired ?? false,
+          scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
+          scheduledWeekdayPages: subject.scheduledWeekdayPages,
+          scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
+          scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay
         })));
       }
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
@@ -112,11 +124,14 @@ const App: React.FC = () => {
         const migratedLogs = loadedLogs.map(log => {
           const subject = loadedSubjects.find(item => item.id === log.subjectId);
           const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], loadedTags);
+          const timestampDate = new Date(log.timestamp);
 
           return {
             ...log,
             subjectNameSnapshot: log.subjectNameSnapshot || subject?.name || '삭제된 과목',
             folderSnapshots: log.folderSnapshots || folderSnapshots,
+            studyDate: log.studyDate || getLocalDateKey(timestampDate),
+            studyWeekday: log.studyWeekday ?? timestampDate.getDay(),
             reviewStep: log.reviewStep ?? 0,
             nextReviewDate: repairTestReviewDate({
               ...log,
@@ -338,6 +353,8 @@ const App: React.FC = () => {
         ...log,
         subjectNameSnapshot: subject?.name || '삭제된 과목',
         folderSnapshots,
+        studyDate: log.studyDate || getLocalDateKey(new Date(log.timestamp)),
+        studyWeekday: log.studyWeekday ?? new Date(log.timestamp).getDay(),
         reviewStep: 0,
         nextReviewDate: !skipReview
           ? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
@@ -365,7 +382,9 @@ const App: React.FC = () => {
     const enrichedLog: StudyLog = {
       ...updatedLog,
       subjectNameSnapshot: subject?.name || updatedLog.subjectNameSnapshot || '삭제된 과목',
-      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions)
+      folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions),
+      studyDate: updatedLog.studyDate || getLocalDateKey(new Date(updatedLog.timestamp)),
+      studyWeekday: updatedLog.studyWeekday ?? new Date(updatedLog.timestamp).getDay()
     };
 
     setLogs(prev => prev.map(l => l.id === updatedLog.id ? enrichedLog : l));
@@ -426,6 +445,8 @@ const App: React.FC = () => {
       ...replacementLog,
       subjectNameSnapshot: subject?.name || replacementLog.subjectNameSnapshot || '삭제된 과목',
       folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions),
+      studyDate: replacementLog.studyDate || getLocalDateKey(new Date(replacementLog.timestamp)),
+      studyWeekday: replacementLog.studyWeekday ?? new Date(replacementLog.timestamp).getDay(),
       reviewStep: replacementLog.reviewStep ?? 0,
       nextReviewDate: !skipReview
         ? replacementLog.nextReviewDate ?? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
@@ -600,6 +621,9 @@ const App: React.FC = () => {
                 subjects={subjects} 
                 logs={logs} 
                 tagDefinitions={tagDefinitions}
+                activeWeekday={activeStudyWeekday}
+                activeStudyDate={activeStudyDate}
+                onActiveWeekdayChange={setActiveStudyWeekday}
                 onUpdateSubject={handleUpdateSubject} 
                 onDeleteSubject={handleDeleteSubject} 
                 onUpdateTags={handleUpdateTags}
@@ -609,6 +633,8 @@ const App: React.FC = () => {
               <TodaySummary
                 logs={logs}
                 subjects={subjects}
+                activeWeekday={activeStudyWeekday}
+                activeStudyDate={activeStudyDate}
                 onAddLog={handleLogSession}
                 onReplaceLogs={handleReplaceLogs}
                 onDeleteLogs={handleDeleteLogs}
@@ -640,6 +666,8 @@ const App: React.FC = () => {
                       subjects={subjects}
                       tagDefinitions={tagDefinitions}
                       logs={logs}
+                      activeWeekday={activeStudyWeekday}
+                      activeStudyDate={activeStudyDate}
                       onLogSession={handleLogSession}
                       onReviewAction={handleReviewAction}
                       onUpdateReviewMemo={handleUpdateReviewMemo}

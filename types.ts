@@ -14,6 +14,11 @@ export interface Subject {
   targetDate: string;
   tagIds?: string[];
   reviewEnabled?: boolean;
+  isRequired?: boolean;
+  scheduledWeekdays?: number[];
+  scheduledWeekdayPages?: Record<string, number>;
+  scheduledWeekdayWeights?: Record<string, number>;
+  scheduledWeekdayRemainderDay?: number;
 }
 
 export interface TestRecord {
@@ -55,6 +60,8 @@ export interface StudyLog {
   endPage?: number;
   timeSpentMinutes: number;
   timestamp: string;
+  studyDate?: string;
+  studyWeekday?: number;
   photoBase64?: string;
   isReviewed?: boolean;
   reviewStep?: number;
@@ -62,13 +69,6 @@ export interface StudyLog {
   isCondensed?: boolean;
   reviewEnabled?: boolean;
   reviewMemo?: string;
-  sessionTimerId?: string;
-  timerBreakdown?: Array<{
-    timerId: string;
-    timerDifficulty?: 'easy' | 'medium' | 'hard';
-    pages: number;
-    timeSpentMinutes: number;
-  }>;
 }
 
 export interface PredictionInputs {

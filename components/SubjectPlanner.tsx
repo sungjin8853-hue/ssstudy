@@ -6,10 +6,29 @@ interface Props {
 }
 
 export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
+  const weekdays = [
+    { id: 1, label: '월' },
+    { id: 2, label: '화' },
+    { id: 3, label: '수' },
+    { id: 4, label: '목' },
+    { id: 5, label: '금' },
+    { id: 6, label: '토' },
+    { id: 0, label: '일' },
+  ];
   const [name, setName] = useState('');
   const [currentPages, setCurrentPages] = useState(0);
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
+  const [isRequired, setIsRequired] = useState(false);
+  const [scheduledWeekdays, setScheduledWeekdays] = useState<number[]>(weekdays.map(day => day.id));
+
+  const toggleWeekday = (dayId: number) => {
+    setScheduledWeekdays(prev => (
+      prev.includes(dayId)
+        ? prev.filter(id => id !== dayId)
+        : [...prev, dayId]
+    ));
+  };
 
   const handleAdd = () => {
     if (!name || !date) return;
@@ -19,11 +38,15 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
       totalPages: pages,
       completedPages: currentPages,
       targetDate: date,
+      isRequired,
+      scheduledWeekdays: scheduledWeekdays.length > 0 ? scheduledWeekdays : weekdays.map(day => day.id),
     });
     setName('');
     setPages(100);
     setCurrentPages(0);
     setDate('');
+    setIsRequired(false);
+    setScheduledWeekdays(weekdays.map(day => day.id));
   };
 
   return (
@@ -74,6 +97,61 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
               />
             </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">중요도</label>
+            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setIsRequired(true)}
+                className={`rounded-xl py-3 text-sm font-black transition-all ${
+                  isRequired
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-400 hover:bg-rose-50 hover:text-rose-500'
+                }`}
+              >
+                필수
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsRequired(false)}
+                className={`rounded-xl py-3 text-sm font-black transition-all ${
+                  !isRequired
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+                }`}
+              >
+                미필수
+              </button>
+            </div>
+            <p className="px-1 text-[10px] font-bold text-slate-400">
+              학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">학습할 요일</label>
+            <div className="grid grid-cols-7 gap-2 rounded-2xl bg-white p-2 border border-slate-200">
+              {weekdays.map(day => {
+                const selected = scheduledWeekdays.includes(day.id);
+                return (
+                  <button
+                    key={day.id}
+                    type="button"
+                    onClick={() => toggleWeekday(day.id)}
+                    className={`rounded-xl py-3 text-sm font-black transition-all ${
+                      selected
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+                    }`}
+                  >
+                    {day.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="px-1 text-[10px] font-bold text-slate-400">
+              선택한 요일 탭에서 이 과목이 표시됩니다. 아무것도 남기지 않으면 매일로 저장됩니다.
+            </p>
           </div>
           <label className="hidden">
             <div>

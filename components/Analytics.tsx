@@ -1,11 +1,24 @@
 import React, { useMemo, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats } from '../utils/math';
+import {
+  calculateWeeklyRequiredPages,
+  distributePagesByWeekdayWeights,
+  getDiffDays,
+  getWeekdayPagePlan,
+  getLogStudyDate,
+  normalizeWeekdayWeights,
+  normalizeWeekdays,
+  WEEKDAYS
+} from '../utils/schedule';
 
 interface Props {
   subjects: Subject[];
   logs: StudyLog[];
   tagDefinitions: TagDefinition[];
+  activeWeekday: number;
+  activeStudyDate: string;
+  onActiveWeekdayChange: (weekday: number) => void;
   onUpdateSubject?: (updated: Subject) => void;
   onDeleteSubject?: (id: string) => void;
   onUpdateTags?: (tags: TagDefinition[]) => void;
@@ -18,20 +31,13 @@ const COLORS = [
   '#8B5CF6', '#06B6D4', '#64748B'
 ];
 
-const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
-
-const readReviewSessionPreferences = (): Record<string, boolean> => {
-  try {
-    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
-};
-
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
   tagDefinitions,
+  activeWeekday,
+  activeStudyDate,
+  onActiveWeekdayChange,
   onUpdateSubject, 
   onDeleteSubject,
   onUpdateTags,
@@ -43,7 +49,15 @@ export const Analytics: React.FC<Props> = ({
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
   
   // 수정 폼 상태 확장 (이름, 총페이지, 목표날짜)
-  const [editForm, setEditForm] = useState<{name: string, totalPages: number, targetDate: string} | null>(null);
+  const [editForm, setEditForm] = useState<{
+    name: string;
+    totalPages: number;
+    targetDate: string;
+    isRequired: boolean;
+    scheduledWeekdays: number[];
+    scheduledWeekdayWeights: Record<string, number>;
+    scheduledWeekdayRemainderDay?: number;
+  } | null>(null);
 
   const toggleFolder = (id: string) => {
     const next = new Set(expandedFolderIds);
@@ -52,16 +66,44 @@ export const Analytics: React.FC<Props> = ({
     setExpandedFolderIds(next);
   };
 
-  const allSubjectStats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  const toggleEditWeekday = (dayId: number) => {
+    setEditForm(prev => {
+      if (!prev) return prev;
+      const nextDays = prev.scheduledWeekdays.includes(dayId)
+        ? prev.scheduledWeekdays.filter(id => id !== dayId)
+        : [...prev.scheduledWeekdays, dayId];
+      const normalizedDays = normalizeWeekdays(nextDays);
+      const nextWeights = {
+        ...prev.scheduledWeekdayWeights,
+        [dayId]: nextDays.includes(dayId) ? (prev.scheduledWeekdayWeights[dayId] || 1) : 0
+      };
+      return {
+        ...prev,
+        scheduledWeekdays: normalizedDays,
+        scheduledWeekdayWeights: normalizeWeekdayWeights(nextWeights, normalizedDays),
+        scheduledWeekdayRemainderDay: normalizedDays.includes(prev.scheduledWeekdayRemainderDay ?? -1)
+          ? prev.scheduledWeekdayRemainderDay
+          : normalizedDays[normalizedDays.length - 1]
+      };
+    });
+  };
 
+  const allSubjectStats = useMemo(() => {
     return subjects.map(sub => {
       const subLogs = logs.filter(l => l.subjectId === sub.id);
       const remaining = Math.max(0, sub.totalPages - sub.completedPages);
-      const target = new Date(sub.targetDate);
-      const diffDays = Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      const recommendedDailyPages = diffDays > 0 ? Math.ceil(remaining / diffDays) : remaining;
+      const diffDays = getDiffDays(sub.targetDate);
+      const activeDayCompletedPages = subLogs
+        .filter(log => getLogStudyDate(log) === activeStudyDate)
+        .reduce((sum, log) => sum + log.pagesRead, 0);
+      const planningRemaining = remaining + activeDayCompletedPages;
+      const scheduledWeekdays = normalizeWeekdays(sub.scheduledWeekdays);
+      const weeklyRequiredPages = calculateWeeklyRequiredPages(planningRemaining, diffDays);
+      const weekdayPagePlan = getWeekdayPagePlan(sub, planningRemaining, diffDays);
+      const recommendedDailyPages = Math.min(
+        remaining,
+        Math.max(0, (weekdayPagePlan[activeWeekday] || 0) - activeDayCompletedPages)
+      );
       const stats = calculateStats(subLogs, remaining, recommendedDailyPages);
 
       return {
@@ -69,12 +111,15 @@ export const Analytics: React.FC<Props> = ({
         stats,
         diffDays,
         remainingPages: remaining,
+        weeklyRequiredPages,
+        weekdayPagePlan,
         recommendedDailyPages,
         dailyTimeNeeded: recommendedDailyPages * stats.averageTimePerPage,
-        totalTimeSpent: stats.totalTimeSpent
+        totalTimeSpent: stats.totalTimeSpent,
+        scheduledWeekdays
       };
     });
-  }, [subjects, logs]);
+  }, [subjects, logs, activeWeekday, activeStudyDate]);
 
   const getRecursiveData = (folderId: string) => {
     const findSubjIds = (fid: string): string[] => {
@@ -94,7 +139,10 @@ export const Analytics: React.FC<Props> = ({
     };
 
     const relatedSubjIds = findSubjIds(folderId);
-    const uniqueSubjs = allSubjectStats.filter(s => relatedSubjIds.includes(s.id));
+    const uniqueSubjs = allSubjectStats.filter(s => (
+      relatedSubjIds.includes(s.id)
+      && normalizeWeekdays(s.scheduledWeekdays).includes(activeWeekday)
+    ));
     const count = uniqueSubjs.length;
 
     return {
@@ -109,28 +157,25 @@ export const Analytics: React.FC<Props> = ({
     };
   };
 
-  const totalFolderDailyTime = useMemo(() => {
-    const rootFolders = tagDefinitions.filter(folder => !folder.parentId);
-    return rootFolders.reduce((sum, folder) => sum + getRecursiveData(folder.id).dailyTime, 0);
-  }, [tagDefinitions, allSubjectStats]);
-
   const dueReviewSummary = useMemo(() => {
     const now = Date.now();
-    const subjectReviewSettings = new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false]));
-    const reviewSessionPreferences = readReviewSessionPreferences();
     const dueLogs = logs.filter(log => {
-      const hasSessionPreference = reviewSessionPreferences[log.subjectId] !== undefined;
-      const enabled = hasSessionPreference
-        ? reviewSessionPreferences[log.subjectId] === false
-        : subjectReviewSettings.get(log.subjectId) !== false && log.reviewEnabled !== false;
       const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
-      return enabled && !log.isCondensed && nextReview <= now;
+      return log.reviewEnabled !== false && !log.isCondensed && nextReview <= now;
     });
     return {
       itemCount: dueLogs.length,
       subjectCount: new Set(dueLogs.map(log => log.subjectId)).size
     };
-  }, [logs, subjects]);
+  }, [logs]);
+
+  const weekdaySubjects = useMemo(() => (
+    allSubjectStats
+      .filter(subject => normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday))
+      .sort((a, b) => b.dailyTimeNeeded - a.dailyTimeNeeded)
+  ), [allSubjectStats, activeWeekday]);
+
+  const weekdayTotalTime = weekdaySubjects.reduce((sum, subject) => sum + subject.dailyTimeNeeded, 0);
 
   const formatTime = (minutes: number) => {
     const h = Math.floor(minutes / 60);
@@ -139,9 +184,23 @@ export const Analytics: React.FC<Props> = ({
   };
 
   const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
-    const folders = tagDefinitions.filter(f => f.parentId === parentId);
+    const folderHasWeekdaySubjects = (folderId: string): boolean => {
+      const childFolderIds = tagDefinitions
+        .filter(folder => folder.parentId === folderId)
+        .map(folder => folder.id);
+
+      return allSubjectStats.some(subject => (
+        subject.tagIds?.includes(folderId)
+        && normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
+      )) || childFolderIds.some(folderHasWeekdaySubjects);
+    };
+
+    const folders = tagDefinitions
+      .filter(f => f.parentId === parentId)
+      .filter(folder => folderHasWeekdaySubjects(folder.id));
     const subjs = allSubjectStats.filter(s => 
-      parentId ? s.tagIds?.includes(parentId) : (!s.tagIds || s.tagIds.length === 0)
+      normalizeWeekdays(s.scheduledWeekdays).includes(activeWeekday)
+      && (parentId ? s.tagIds?.includes(parentId) : (!s.tagIds || s.tagIds.length === 0))
     );
 
     return (
@@ -191,7 +250,7 @@ export const Analytics: React.FC<Props> = ({
                    <StatBox label="평균 효율" value={stats.avgEff.toFixed(1)} unit="m/p" color="text-emerald-400" isDark={isExpanded} />
                    <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
                    <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
-                   <StatBox label="일일 권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
+                   <StatBox label="권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
                    <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} />
                 </div>
 
@@ -223,7 +282,6 @@ export const Analytics: React.FC<Props> = ({
         })}
 
         {subjs.map(sub => {
-          const isMoving = movingItemId === sub.id;
           const isEditing = editingId === sub.id;
           const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
           return (
@@ -246,6 +304,7 @@ export const Analytics: React.FC<Props> = ({
                        <h4 className="truncate text-lg md:text-xl font-black text-slate-900">{sub.name}</h4>
                     )}
                     {isEditing ? (
+                       <>
                        <div className="mt-2 flex flex-wrap items-center gap-2">
                            <span className="text-xs font-bold text-indigo-400">목표일:</span>
                            <input
@@ -254,9 +313,110 @@ export const Analytics: React.FC<Props> = ({
                                onChange={e => setEditForm(prev => prev ? {...prev, targetDate: e.target.value} : null)}
                                className="bg-slate-100 border-b-2 border-indigo-300 text-slate-800 font-bold text-sm py-1 px-2 outline-none rounded-lg"
                            />
+                           <div className="flex rounded-xl bg-slate-100 p-1">
+                             <button
+                               type="button"
+                               onClick={e => {
+                                 e.preventDefault();
+                                 e.stopPropagation();
+                                 setEditForm(prev => prev ? { ...prev, isRequired: true } : null);
+                               }}
+                               className={`rounded-lg px-2.5 py-1 text-[10px] font-black transition-all ${
+                                 editForm?.isRequired ? 'bg-rose-600 text-white' : 'text-slate-400'
+                               }`}
+                             >
+                               필수
+                             </button>
+                             <button
+                               type="button"
+                               onClick={e => {
+                                 e.preventDefault();
+                                 e.stopPropagation();
+                                 setEditForm(prev => prev ? { ...prev, isRequired: false } : null);
+                               }}
+                               className={`rounded-lg px-2.5 py-1 text-[10px] font-black transition-all ${
+                                 !editForm?.isRequired ? 'bg-indigo-600 text-white' : 'text-slate-400'
+                               }`}
+                             >
+                               미필수
+                             </button>
+                           </div>
+                           <div className="flex flex-wrap gap-1">
+                             {WEEKDAYS.map(day => {
+                               const selected = editForm?.scheduledWeekdays.includes(day.id);
+                               return (
+                                 <button
+                                   key={day.id}
+                                   type="button"
+                                   onClick={e => {
+                                     e.preventDefault();
+                                     e.stopPropagation();
+                                     toggleEditWeekday(day.id);
+                                   }}
+                                   className={`rounded-lg px-2.5 py-1 text-[10px] font-black transition-all ${
+                                     selected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'
+                                   }`}
+                                 >
+                                   {day.label}
+                                 </button>
+                               );
+                             })}
+                           </div>
                        </div>
+                       <div className="mt-3 space-y-2 rounded-2xl bg-slate-50 p-3">
+                         <div className="flex flex-wrap items-center gap-2">
+                           <span className="rounded-lg bg-indigo-50 px-2.5 py-1 text-[10px] font-black text-indigo-500">
+                             주간 필요 {sub.weeklyRequiredPages}P
+                           </span>
+                            <span className="rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-600">
+                             비율 {editForm ? editForm.scheduledWeekdays.map(dayId => editForm.scheduledWeekdayWeights[dayId] || 1).join(':') : '-'}
+                           </span>
+                         </div>
+                         <div className="grid grid-cols-7 gap-1.5">
+                           {WEEKDAYS.map(day => {
+                             const selected = editForm?.scheduledWeekdays.includes(day.id);
+                             const previewPlan = editForm
+                               ? distributePagesByWeekdayWeights(
+                                 sub.weeklyRequiredPages,
+                                 editForm.scheduledWeekdays,
+                                 editForm.scheduledWeekdayWeights,
+                                 editForm.scheduledWeekdayRemainderDay
+                               )
+                               : {};
+                             return (
+                               <div key={day.id} className={`rounded-xl border p-1.5 ${selected ? 'border-indigo-200 bg-white' : 'border-slate-100 bg-slate-100 opacity-60'}`}>
+                                 <p className={`mb-1 text-center text-[10px] font-black ${selected ? 'text-indigo-600' : 'text-slate-400'}`}>{day.label}</p>
+                                 <p className="mb-1 text-center text-sm font-black text-slate-900">
+                                   {previewPlan[day.id] || 0}P
+                                 </p>
+                                 <input
+                                   type="number"
+                                   step="1"
+                                   min="1"
+                                   disabled={!selected}
+                                   value={editForm?.scheduledWeekdayWeights[day.id] ?? 1}
+                                   onChange={e => setEditForm(prev => prev ? {
+                                     ...prev,
+                                     scheduledWeekdayWeights: normalizeWeekdayWeights({
+                                       ...prev.scheduledWeekdayWeights,
+                                       [day.id]: Math.max(1, Number(e.target.value) || 1)
+                                     }, prev.scheduledWeekdays),
+                                     scheduledWeekdayRemainderDay: day.id
+                                   } : null)}
+                                   className="w-full rounded-lg bg-slate-50 px-1 py-1 text-center text-xs font-black text-slate-900 outline-none disabled:text-slate-300"
+                                 />
+                                 <p className="mt-1 text-center text-[9px] font-black text-slate-400">비율</p>
+                               </div>
+                             );
+                           })}
+                         </div>
+                       </div>
+                       </>
                     ) : (
-                         <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                          {sub.isRequired && (
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
+                          )}
                           <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
                         </div>
@@ -274,7 +434,12 @@ export const Analytics: React.FC<Props> = ({
                                     ...sub,
                                     name: editForm.name, 
                                     totalPages: Number(editForm.totalPages),
-                                    targetDate: editForm.targetDate
+                                    targetDate: editForm.targetDate,
+                                    isRequired: editForm.isRequired,
+                                    scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
+                                    scheduledWeekdayWeights: normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays),
+                                    scheduledWeekdayRemainderDay: editForm.scheduledWeekdayRemainderDay,
+                                    scheduledWeekdayPages: undefined
                                 });
                             }
                             setEditingId(null);
@@ -286,7 +451,6 @@ export const Analytics: React.FC<Props> = ({
                      </button>
                   ) : (
                     <>
-                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMovingItemId(isMoving ? null : sub.id); }} onMouseDown={e => e.stopPropagation()} className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all cursor-pointer ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
                       <button 
                           onClick={(e) => { 
                             e.preventDefault(); 
@@ -295,7 +459,11 @@ export const Analytics: React.FC<Props> = ({
                             setEditForm({
                               name: sub.name,
                               totalPages: sub.totalPages,
-                              targetDate: sub.targetDate
+                              targetDate: sub.targetDate,
+                              isRequired: sub.isRequired ?? false,
+                              scheduledWeekdays: normalizeWeekdays(sub.scheduledWeekdays),
+                              scheduledWeekdayWeights: normalizeWeekdayWeights(sub.scheduledWeekdayWeights, sub.scheduledWeekdays),
+                              scheduledWeekdayRemainderDay: sub.scheduledWeekdayRemainderDay
                             });
                           }} 
                           onMouseDown={e => e.stopPropagation()}
@@ -323,7 +491,7 @@ export const Analytics: React.FC<Props> = ({
                  <StatBox label="효율(m/p)" value={sub.stats.averageTimePerPage.toFixed(1)} unit="" color="text-indigo-400" />
                  <StatBox label="편차(σ)" value={sub.stats.standardDeviation.toFixed(1)} unit="" color="text-blue-400" />
                  <StatBox label="잔여(P)" value={sub.remainingPages.toString()} unit="P" color="text-amber-500" />
-                 <StatBox label="일일 권장" value={sub.recommendedDailyPages.toString()} unit="P" color="text-slate-800" />
+                 <StatBox label="권장" value={sub.recommendedDailyPages.toString()} unit="P" color="text-slate-800" />
                  <StatBox label="필요 시간" value={formatTime(sub.dailyTimeNeeded)} unit="" color="text-slate-900" />
               </div>
 
@@ -351,13 +519,13 @@ export const Analytics: React.FC<Props> = ({
                  </div>
               </div>
 
-              {isMoving && (
+              {isEditing && (
                 <div className="mt-2 bg-slate-900 p-4 rounded-2xl border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
-                  <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">📄 이동할 폴더</p>
+                  <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">폴더 이동</p>
                   <div className="flex flex-wrap gap-2">
-                     <button onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: []}); setMovingItemId(null); }} className="px-4 py-2 bg-slate-800 hover:bg-indigo-600 text-white rounded-xl font-black text-xs transition-all border border-slate-700">홈</button>
+                     <button onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: []}); }} className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${(!sub.tagIds || sub.tagIds.length === 0) ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}>홈</button>
                      {tagDefinitions.map(t => (
-                       <button key={t.id} onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: [t.id]}); setMovingItemId(null); }} className="px-4 py-2 bg-slate-800 hover:bg-indigo-600 text-white rounded-xl font-black text-xs transition-all border border-slate-700">📂 {t.name}</button>
+                       <button key={t.id} onClick={(e) => { e.stopPropagation(); onUpdateSubject?.({...sub, tagIds: [t.id]}); }} className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${sub.tagIds?.[0] === t.id ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}>📂 {t.name}</button>
                      ))}
                   </div>
                 </div>
@@ -373,8 +541,8 @@ export const Analytics: React.FC<Props> = ({
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="rounded-xl border border-indigo-100 bg-white px-4 py-2 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">폴더 필요시간 총합</p>
-          <p className="mt-0.5 text-xl font-black text-indigo-600">{formatTime(totalFolderDailyTime)}</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">필요시간</p>
+          <p className="mt-0.5 text-xl font-black text-indigo-600">{formatTime(weekdayTotalTime)}</p>
         </div>
         <button
           type="button"
@@ -387,13 +555,6 @@ export const Analytics: React.FC<Props> = ({
             <span className="ml-2 text-xs font-bold text-rose-300">{dueReviewSummary.itemCount}개</span>
           </p>
         </button>
-        <div className="hidden">
-          <h3 className="text-5xl font-black text-slate-900 flex items-center gap-6">
-            <span className="w-5 h-14 bg-indigo-600 rounded-full"></span>
-            학습 탐색기
-          </h3>
-          <p className="text-sm font-black text-slate-400 mt-4 uppercase tracking-[0.3em]">수치 적분 모델 및 통계 지표 기반 통합 분석 엔진</p>
-        </div>
         <button 
           onClick={() => {
             const newId = Math.random().toString(36).substr(2, 9);
@@ -404,6 +565,32 @@ export const Analytics: React.FC<Props> = ({
         >
           ＋ 새 분석 그룹 추가
         </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+        <div className="grid grid-cols-7 gap-1.5">
+          {WEEKDAYS.map(day => {
+            const isActive = activeWeekday === day.id;
+            const count = allSubjectStats.filter(subject => (
+              normalizeWeekdays(subject.scheduledWeekdays).includes(day.id)
+            )).length;
+            return (
+              <button
+                key={day.id}
+                type="button"
+                onClick={() => onActiveWeekdayChange(day.id)}
+                className={`rounded-xl py-2 text-sm font-black transition-all ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+                }`}
+              >
+                <span>{day.label}</span>
+                <span className={`ml-1 text-[9px] ${isActive ? 'text-indigo-100' : 'text-slate-300'}`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="bg-slate-100/70 p-3 md:p-4 rounded-2xl border border-slate-200">

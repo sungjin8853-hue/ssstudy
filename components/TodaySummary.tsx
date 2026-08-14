@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { StudyLog, Subject } from '../types';
+import { getLogStudyDate, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 
 interface Props {
   logs: StudyLog[];
   subjects: Subject[];
+  activeWeekday: number;
+  activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
   onDeleteLogs: (logIds: string[]) => void;
@@ -34,7 +37,7 @@ const calculateAmountFromEndPage = (start: number, end: number) => {
   return Number(amount.toFixed(2));
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onReplaceLogs, onDeleteLogs }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
   const [subjectId, setSubjectId] = useState('');
@@ -42,25 +45,40 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
   const [editMinutes, setEditMinutes] = useState('');
   const [editStartPage, setEditStartPage] = useState(1);
 
-  const todayLogs = useMemo(() => {
-    const today = new Date().toLocaleDateString();
-    return logs.filter(log => new Date(log.timestamp).toLocaleDateString() === today);
-  }, [logs]);
+  const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
+  const selectableSubjects = useMemo(() => (
+    subjects.filter(subject => (
+      subject.completedPages < subject.totalPages
+      && normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
+    ))
+  ), [activeWeekday, subjects]);
+  const modalSubjects = useMemo(() => {
+    if (!editingSummary || selectableSubjects.some(subject => subject.id === editingSummary.subjectId)) {
+      return selectableSubjects;
+    }
+
+    const editingSubject = subjects.find(subject => subject.id === editingSummary.subjectId);
+    return editingSubject ? [editingSubject, ...selectableSubjects] : selectableSubjects;
+  }, [editingSummary, selectableSubjects, subjects]);
+
+  const scopedLogs = useMemo(() => (
+    logs.filter(log => getLogStudyDate(log) === activeStudyDate)
+  ), [activeStudyDate, logs]);
 
   const totals = useMemo(() => {
-    const time = todayLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
-    const pages = todayLogs.reduce((acc, log) => acc + log.pagesRead, 0);
-    const timedPages = todayLogs
+    const time = scopedLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
+    const pages = scopedLogs.reduce((acc, log) => acc + log.pagesRead, 0);
+    const timedPages = scopedLogs
       .filter(log => log.timeSpentMinutes > 0)
       .reduce((acc, log) => acc + log.pagesRead, 0);
     const avgEfficiency = timedPages > 0 ? (time / timedPages).toFixed(1) : '-';
     return { time, pages, avgEfficiency };
-  }, [todayLogs]);
+  }, [scopedLogs]);
 
   const subjectSummaries = useMemo(() => {
     const groups = new Map<string, SubjectSummary>();
 
-    todayLogs.forEach(log => {
+    scopedLogs.forEach(log => {
       const subject = subjects.find(item => item.id === log.subjectId);
       const existing = groups.get(log.subjectId);
       const startPage = log.startPage ?? 0;
@@ -93,10 +111,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
     return Array.from(groups.values()).sort(
       (a, b) => new Date(b.latestTimestamp).getTime() - new Date(a.latestTimestamp).getTime()
     );
-  }, [todayLogs, subjects]);
+  }, [scopedLogs, subjects]);
 
   const openAddModal = () => {
-    const firstSubject = subjects[0];
+    const firstSubject = selectableSubjects[0];
     setModalMode('add');
     setEditingSummary(null);
     setSubjectId(firstSubject?.id || '');
@@ -137,6 +155,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
       startPage: editStartPage,
       endPage: editEndPage,
       timestamp: editingSummary?.latestTimestamp || new Date().toISOString(),
+      studyDate: activeStudyDate,
+      studyWeekday: activeWeekday,
       isReviewed: false,
       isCondensed: editingSummary?.logs.every(log => log.isCondensed) || false
     };
@@ -158,10 +178,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6 px-1">
         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           <span className="p-1.5 bg-green-100 text-green-600 rounded-lg text-xs">📅</span>
-          오늘의 실시간 기록
+          실시간 기록
           <button
             onClick={openAddModal}
-            disabled={subjects.length === 0}
+            disabled={selectableSubjects.length === 0}
             className="ml-2 h-8 w-8 rounded-xl bg-indigo-600 text-white font-black disabled:bg-slate-300 shadow-lg shadow-indigo-100"
             title="기록 추가"
           >
@@ -182,7 +202,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
 
       {subjectSummaries.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-400">
-          오늘 기록이 아직 없습니다. + 버튼으로 직접 추가할 수 있어요.
+          {activeWeekdayLabel}요일 기록이 아직 없습니다. + 버튼으로 직접 추가할 수 있어요.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -249,7 +269,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, onAddLog, onRepl
                   className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg outline-none"
                 >
                   <option value="">과목 선택</option>
-                  {subjects.map(subject => (
+                  {modalSubjects.map(subject => (
                     <option key={subject.id} value={subject.id}>{subject.name}</option>
                   ))}
                 </select>

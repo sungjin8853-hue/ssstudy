@@ -77,18 +77,35 @@ const getMergedReviewRangeText = (logs: StudyLog[]) => {
 
 const HOUR_MS = 60 * 60 * 1000;
 
-const isReviewEnabledForLog = (log: StudyLog, subjectReviewSettings: Map<string, boolean>) => {
-  return subjectReviewSettings.get(log.subjectId) !== false && log.reviewEnabled !== false;
+const isReviewEnabledForLog = (log: StudyLog) => log.reviewEnabled !== false;
+
+const getReviewGroupMinutes = (group: ReviewGroup) => {
+  const measuredMinutes = group.logs.reduce((sum, log) => sum + log.timeSpentMinutes, 0);
+  if (measuredMinutes > 0) return measuredMinutes;
+  return group.logs.reduce((sum, log) => sum + log.pagesRead, 0) * 10;
 };
+
+const sortReviewGroupsByImportance = (groups: ReviewGroup[], subjects: Subject[]) => (
+  [...groups].sort((a, b) => {
+    const subjectA = subjects.find(subject => subject.id === a.subjectId);
+    const subjectB = subjects.find(subject => subject.id === b.subjectId);
+    const requiredDiff = Number(Boolean(subjectB?.isRequired)) - Number(Boolean(subjectA?.isRequired));
+    if (requiredDiff !== 0) return requiredDiff;
+
+    const timeDiff = getReviewGroupMinutes(a) - getReviewGroupMinutes(b);
+    if (timeDiff !== 0) return timeDiff;
+
+    return a.earliestReviewTime - b.earliestReviewTime;
+  })
+);
 
 const buildReviewGroupsLegacy = (logs: StudyLog[], subjects: Subject[], onlyDue: boolean): ReviewGroup[] => {
   const now = Date.now();
-  const subjectReviewSettings = new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false]));
   const groups = new Map<string, ReviewGroup>();
 
   logs
     .filter(log => {
-      const enabled = isReviewEnabledForLog(log, subjectReviewSettings);
+      const enabled = isReviewEnabledForLog(log);
       const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
       return enabled && !log.isCondensed && (onlyDue ? nextReview <= now : nextReview > now);
     })
@@ -114,10 +131,9 @@ const buildReviewGroupsLegacy = (logs: StudyLog[], subjects: Subject[], onlyDue:
 
 const buildReviewGroups = (logs: StudyLog[], subjects: Subject[], onlyDue: boolean): ReviewGroup[] => {
   const now = Date.now();
-  const subjectReviewSettings = new Map(subjects.map(subject => [subject.id, subject.reviewEnabled !== false]));
   const targetLogs = logs
     .filter(log => {
-      const enabled = isReviewEnabledForLog(log, subjectReviewSettings);
+      const enabled = isReviewEnabledForLog(log);
       const nextReview = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : 0;
       return enabled && !log.isCondensed && (onlyDue ? nextReview <= now : nextReview > now);
     })
@@ -145,7 +161,7 @@ const buildReviewGroups = (logs: StudyLog[], subjects: Subject[], onlyDue: boole
       groups.set(log.subjectId, group);
     });
 
-    return Array.from(groups.values()).sort((a, b) => a.earliestReviewTime - b.earliestReviewTime);
+    return sortReviewGroupsByImportance(Array.from(groups.values()), subjects);
   }
 
   const groups: ReviewGroup[] = [];
@@ -212,7 +228,18 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
 
   const finishReviewSession = () => {
     if (!activeReviewGroup) return;
+    const finishedIds = new Set(activeReviewGroup.logs.map(log => log.id));
+    const nextGroup = dueReviewGroups.find(group => (
+      group.logs.every(log => !finishedIds.has(log.id))
+    ));
+
     onReviewAction(activeReviewGroup.logs.map(log => log.id), 'complete');
+
+    if (nextGroup) {
+      startReviewSession(nextGroup);
+      return;
+    }
+
     setActiveReviewGroup(null);
   };
 
