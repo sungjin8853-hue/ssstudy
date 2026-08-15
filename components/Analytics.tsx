@@ -11,6 +11,7 @@ import {
   normalizeWeekdays,
   WEEKDAYS
 } from '../utils/schedule';
+import { buildSequenceDisplaySubjects, getSequenceRootSubject, getSubjectSequence } from '../utils/subjectSequences';
 
 interface Props {
   subjects: Subject[];
@@ -32,6 +33,9 @@ const COLORS = [
   '#8B5CF6', '#06B6D4', '#64748B'
 ];
 
+const UNKNOWN_AVERAGE_MINUTES_PER_PAGE = 10;
+const DETACH_SUBJECT_VALUE = '__detach_subject__';
+
 const calculateFourDaySpeedChange = (logs: StudyLog[]) => {
   const dailySamples = Array.from(
     logs
@@ -47,7 +51,7 @@ const calculateFourDaySpeedChange = (logs: StudyLog[]) => {
       .values()
   ).sort((a, b) => a.date.localeCompare(b.date));
 
-  if (dailySamples.length === 0) {
+  if (dailySamples.length < 2) {
     return {
       firstTimePerPage: 0,
       recentFourDayTimePerPage: 0,
@@ -87,6 +91,7 @@ export const Analytics: React.FC<Props> = ({
   onOpenReview
 }) => {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
+  const [selectedSequenceStageIds, setSelectedSequenceStageIds] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
   const [showAllWeekdays, setShowAllWeekdays] = useState(false);
@@ -104,6 +109,8 @@ export const Analytics: React.FC<Props> = ({
     targetDate: string;
     tagIds: string[];
     isRequired: boolean;
+    sequenceOrderIds: string[];
+    mergeTargetId: string;
     scheduledWeekdays: number[];
     scheduledWeekdayWeights: Record<string, number>;
     scheduledWeekdayRemainderDay?: number;
@@ -114,6 +121,32 @@ export const Analytics: React.FC<Props> = ({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setExpandedFolderIds(next);
+  };
+
+  const removeEditSequenceSubject = (subjectId: string) => {
+    setEditForm(prev => {
+      if (!prev || prev.sequenceOrderIds.length <= 1) return prev;
+      return {
+        ...prev,
+        sequenceOrderIds: prev.sequenceOrderIds.filter(id => id !== subjectId)
+      };
+    });
+  };
+
+  const moveEditSequenceSubject = (subjectId: string, direction: -1 | 1) => {
+    setEditForm(prev => {
+      if (!prev) return prev;
+      const currentIndex = prev.sequenceOrderIds.indexOf(subjectId);
+      const nextIndex = currentIndex + direction;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= prev.sequenceOrderIds.length) return prev;
+
+      const nextOrder = [...prev.sequenceOrderIds];
+      [nextOrder[currentIndex], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[currentIndex]];
+      return {
+        ...prev,
+        sequenceOrderIds: nextOrder
+      };
+    });
   };
 
   const toggleEditWeekday = (dayId: number) => {
@@ -233,9 +266,145 @@ export const Analytics: React.FC<Props> = ({
     setFolderEditForm(null);
   };
 
+  const saveSubjectEdit = (subject: Subject) => {
+    if (!editForm) return;
+
+    const currentOrderIds = editForm.sequenceOrderIds
+      .filter(id => subjects.some(item => item.id === id))
+      .filter((id, index, ids) => ids.indexOf(id) === index);
+    const detachSubjectId = editForm.mergeTargetId === DETACH_SUBJECT_VALUE
+      ? selectedSequenceStageIds[subject.id]
+      : undefined;
+    const isDetachingSubject = Boolean(detachSubjectId && currentOrderIds.length > 1);
+    const mergeTargetSubject = editForm.mergeTargetId
+      && editForm.mergeTargetId !== DETACH_SUBJECT_VALUE
+      ? subjects.find(item => item.id === editForm.mergeTargetId)
+      : undefined;
+    const mergeTargetRoot = mergeTargetSubject
+      ? getSequenceRootSubject(mergeTargetSubject, subjects)
+      : undefined;
+    const targetOrderIds = mergeTargetRoot
+      ? getSubjectSequence(mergeTargetRoot, subjects).map(item => item.id)
+      : [];
+    const isMergingIntoTarget = Boolean(mergeTargetRoot);
+    const sequenceOrderIds = isDetachingSubject
+      ? currentOrderIds.filter(id => id !== detachSubjectId)
+      : mergeTargetRoot
+      ? [
+        ...targetOrderIds,
+        ...currentOrderIds.filter(id => !targetOrderIds.includes(id))
+      ]
+      : currentOrderIds;
+    const rootId = sequenceOrderIds[0] || subject.id;
+    const linkedSubjectIds = sequenceOrderIds.length > 1 ? sequenceOrderIds.slice(1) : [];
+    const scheduledWeekdays = normalizeWeekdays(editForm.scheduledWeekdays);
+    const scheduledWeekdayWeights = normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays);
+    const groupScheduledWeekdays = isMergingIntoTarget
+      ? orderWeekdays(Array.from(new Set(
+        sequenceOrderIds.flatMap(id => {
+          const item = subjects.find(subjectItem => subjectItem.id === id);
+          return id === subject.id
+            ? scheduledWeekdays
+            : normalizeWeekdays(item?.scheduledWeekdays);
+        })
+      )))
+      : scheduledWeekdays;
+    const groupScheduledWeekdayWeights = isMergingIntoTarget
+      ? normalizeWeekdayWeights(undefined, groupScheduledWeekdays)
+      : scheduledWeekdayWeights;
+    const groupScheduledWeekdayRemainderDay = isMergingIntoTarget
+      ? groupScheduledWeekdays[groupScheduledWeekdays.length - 1]
+      : editForm.scheduledWeekdayRemainderDay;
+    const updatedSubject: Subject = {
+      ...subject,
+      name: editForm.name,
+      totalPages: Number(editForm.totalPages),
+      targetDate: editForm.targetDate,
+      tagIds: editForm.tagIds,
+      isRequired: editForm.isRequired,
+      scheduledWeekdays: groupScheduledWeekdays,
+      scheduledWeekdayWeights: groupScheduledWeekdayWeights,
+      scheduledWeekdayRemainderDay: groupScheduledWeekdayRemainderDay,
+      scheduledWeekdayPages: undefined
+    };
+
+    if (onUpdateSubjects) {
+      const previousSequenceIds = new Set(getSubjectSequence(subject, subjects).map(item => item.id));
+      targetOrderIds.forEach(id => previousSequenceIds.add(id));
+      const nextSequenceIdSet = new Set(sequenceOrderIds);
+      onUpdateSubjects(subjects.map(item => {
+        const baseItem = item.id === subject.id ? updatedSubject : item;
+        const nextLinkedIds = baseItem.linkedSubjectIds?.filter(id => !nextSequenceIdSet.has(id));
+
+        if (baseItem.id === rootId) {
+          return {
+            ...baseItem,
+            ...(!isMergingIntoTarget ? {
+              tagIds: editForm.tagIds,
+              isRequired: editForm.isRequired
+            } : {}),
+            scheduledWeekdays: groupScheduledWeekdays,
+            scheduledWeekdayWeights: groupScheduledWeekdayWeights,
+            scheduledWeekdayRemainderDay: groupScheduledWeekdayRemainderDay,
+            scheduledWeekdayPages: undefined,
+            linkedParentId: undefined,
+            linkedSubjectIds: linkedSubjectIds.length > 0 ? linkedSubjectIds : undefined
+          };
+        }
+
+        if (linkedSubjectIds.includes(baseItem.id)) {
+          return {
+            ...baseItem,
+            scheduledWeekdays: groupScheduledWeekdays,
+            scheduledWeekdayWeights: groupScheduledWeekdayWeights,
+            scheduledWeekdayRemainderDay: groupScheduledWeekdayRemainderDay,
+            scheduledWeekdayPages: undefined,
+            linkedParentId: rootId,
+            linkedSubjectIds: undefined
+          };
+        }
+
+        if (
+          previousSequenceIds.has(baseItem.id)
+          || nextSequenceIdSet.has(baseItem.linkedParentId || '')
+        ) {
+          return {
+            ...baseItem,
+            linkedParentId: undefined,
+            linkedSubjectIds: nextLinkedIds && nextLinkedIds.length > 0 ? nextLinkedIds : undefined
+          };
+        }
+
+        if (nextLinkedIds && nextLinkedIds.length !== (baseItem.linkedSubjectIds?.length || 0)) {
+          return {
+            ...baseItem,
+            linkedSubjectIds: nextLinkedIds.length > 0 ? nextLinkedIds : undefined
+          };
+        }
+
+        return baseItem;
+      }));
+    } else {
+      onUpdateSubject?.({
+        ...updatedSubject,
+        linkedParentId: rootId === subject.id ? undefined : rootId,
+        linkedSubjectIds: rootId === subject.id && linkedSubjectIds.length > 0 ? linkedSubjectIds : undefined
+      });
+    }
+
+    setEditingId(null);
+    setEditForm(null);
+    setSelectedSequenceStageIds(prev => ({
+      ...prev,
+      [rootId]: isDetachingSubject ? rootId : subject.id
+    }));
+  };
+
   const allSubjectStats = useMemo(() => {
-    return subjects.map(sub => {
-      const subLogs = logs.filter(l => l.subjectId === sub.id);
+    return buildSequenceDisplaySubjects(subjects).map(sub => {
+      const sequenceIds = sub.sequenceSubjectIds || [sub.id];
+      const subLogs = logs.filter(l => sequenceIds.includes(l.subjectId));
+      const hasTimedLogs = subLogs.some(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
       const remaining = Math.max(0, sub.totalPages - sub.completedPages);
       const diffDays = getDiffDays(sub.targetDate);
       const activeDayCompletedPages = subLogs
@@ -261,9 +430,10 @@ export const Analytics: React.FC<Props> = ({
         weeklyRequiredPages,
         weekdayPagePlan,
         recommendedDailyPages,
-        dailyTimeNeeded: recommendedDailyPages * stats.averageTimePerPage,
+        dailyTimeNeeded: recommendedDailyPages * (stats.averageTimePerPage > 0 ? stats.averageTimePerPage : UNKNOWN_AVERAGE_MINUTES_PER_PAGE),
         totalTimeSpent: stats.totalTimeSpent,
-        scheduledWeekdays
+        scheduledWeekdays,
+        hasTimedLogs
       };
     });
   }, [subjects, logs, activeWeekday, activeStudyDate]);
@@ -276,8 +446,20 @@ export const Analytics: React.FC<Props> = ({
     showAllWeekdays ? subject.weeklyRequiredPages : subject.recommendedDailyPages
   );
 
+  const getEffectiveTimePerPage = (averageTimePerPage: number) => (
+    averageTimePerPage > 0 ? averageTimePerPage : UNKNOWN_AVERAGE_MINUTES_PER_PAGE
+  );
+
+  const formatEfficiency = (averageTimePerPage: number) => (
+    averageTimePerPage > 0 ? averageTimePerPage.toFixed(1) : '측정 필요'
+  );
+
+  const formatDeviation = (standardDeviation: number, averageTimePerPage: number) => (
+    averageTimePerPage > 0 ? standardDeviation.toFixed(1) : '측정 필요'
+  );
+
   const getDisplayNeededMinutes = (subject: { stats: { averageTimePerPage: number }; weeklyRequiredPages: number; recommendedDailyPages: number }) => (
-    getDisplayRecommendedPages(subject) * subject.stats.averageTimePerPage
+    getDisplayRecommendedPages(subject) * getEffectiveTimePerPage(subject.stats.averageTimePerPage)
   );
 
   const getRecursiveData = (folderId: string) => {
@@ -303,13 +485,14 @@ export const Analytics: React.FC<Props> = ({
       && subjectMatchesWeekdayView(s)
     ));
     const count = uniqueSubjs.length;
+    const measuredSubjs = uniqueSubjs.filter(subject => subject.stats.averageTimePerPage > 0);
 
     return {
       count,
       totalPages: uniqueSubjs.reduce((acc, cur) => acc + cur.totalPages, 0),
       completedPages: uniqueSubjs.reduce((acc, cur) => acc + cur.completedPages, 0),
-      avgEff: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / count : 0,
-      avgStd: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.standardDeviation, 0) / count : 0,
+      avgEff: measuredSubjs.length > 0 ? measuredSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / measuredSubjs.length : null,
+      avgStd: measuredSubjs.length > 0 ? measuredSubjs.reduce((acc, cur) => acc + cur.stats.standardDeviation, 0) / measuredSubjs.length : null,
       dailyTime: uniqueSubjs.reduce((acc, cur) => acc + getDisplayNeededMinutes(cur), 0),
       dailyPages: uniqueSubjs.reduce((acc, cur) => acc + getDisplayRecommendedPages(cur), 0),
       remaining: uniqueSubjs.reduce((acc, cur) => acc + cur.remainingPages, 0),
@@ -328,18 +511,15 @@ export const Analytics: React.FC<Props> = ({
     };
   }, [logs]);
 
-  const weekdaySubjects = useMemo(() => (
-    allSubjectStats
-      .filter(subject => subjectMatchesWeekdayView(subject))
-      .sort((a, b) => getDisplayNeededMinutes(b) - getDisplayNeededMinutes(a))
-  ), [allSubjectStats, activeWeekday, showAllWeekdays]);
-
-  const weekdayTotalTime = weekdaySubjects.reduce((sum, subject) => sum + getDisplayNeededMinutes(subject), 0);
-
   const formatTime = (minutes: number) => {
     const h = Math.floor(minutes / 60);
     const m = Math.round(minutes % 60);
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const formatPageNumber = (pages: number) => {
+    const rounded = Math.round(pages * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
   };
 
   const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
@@ -467,8 +647,8 @@ export const Analytics: React.FC<Props> = ({
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                   <StatBox label="평균 효율" value={stats.avgEff.toFixed(1)} unit="m/p" color="text-emerald-400" isDark={isExpanded} />
-                   <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
+                   <StatBox label="평균 효율" value={stats.avgEff !== null ? stats.avgEff.toFixed(1) : '측정 필요'} unit={stats.avgEff !== null ? 'm/p' : ''} color="text-emerald-400" isDark={isExpanded} />
+                   <StatBox label="표준편차(σ)" value={stats.avgStd !== null ? stats.avgStd.toFixed(1) : '측정 필요'} unit="" color="text-blue-400" isDark={isExpanded} />
                    <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
                    <StatBox label="권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
                    <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} large />
@@ -503,7 +683,25 @@ export const Analytics: React.FC<Props> = ({
 
         {subjs.map(sub => {
           const isEditing = editingId === sub.id;
-          const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
+          const baseSubject = subjects.find(subject => subject.id === sub.id) || sub;
+          const sequenceSubjects = sub.sequenceSubjects || [baseSubject];
+          const hasSequence = sequenceSubjects.length > 1;
+          const selectedStageId = selectedSequenceStageIds[sub.id] || sub.sequenceActiveSubjectId || sequenceSubjects[0]?.id;
+          const selectedStage = sequenceSubjects.find(subject => subject.id === selectedStageId) || sequenceSubjects[0];
+          const progressSubject = hasSequence && selectedStage ? selectedStage : sub;
+          const progressPercent = progressSubject.totalPages > 0
+            ? Math.round((progressSubject.completedPages / progressSubject.totalPages) * 100)
+            : 0;
+          const editSequenceOrder = editForm?.sequenceOrderIds || sequenceSubjects.map(subject => subject.id);
+          const editSequenceSubjects = editSequenceOrder
+            .map(id => subjects.find(subject => subject.id === id))
+            .filter(Boolean) as Subject[];
+          const selectedEditStage = editSequenceSubjects.find(stage => stage.id === selectedStage?.id) || editSequenceSubjects[0];
+          const selectedEditIndex = selectedEditStage
+            ? editSequenceSubjects.findIndex(stage => stage.id === selectedEditStage.id)
+            : -1;
+          const mergeTargetSubjects = buildSequenceDisplaySubjects(subjects)
+            .filter(subject => !editSequenceOrder.includes(subject.id));
           return (
             <div key={sub.id} className="flex flex-col gap-3 p-4 bg-white border border-slate-200 rounded-2xl hover:border-indigo-300 transition-all group/subj relative overflow-hidden">
               <div className="flex items-start justify-between gap-3">
@@ -638,6 +836,11 @@ export const Analytics: React.FC<Props> = ({
                             <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
                           )}
                           <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                          {hasSequence && (
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-slate-100 text-slate-500">
+                              {sub.sequenceStageCount}개 탭 · 현재 {sub.sequenceActiveSubjectName}
+                            </span>
+                          )}
                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
                         </div>
                     )}
@@ -649,22 +852,7 @@ export const Analytics: React.FC<Props> = ({
                         onClick={(e) => { 
                             e.preventDefault();
                             e.stopPropagation(); 
-                            if (onUpdateSubject && editForm) {
-                                onUpdateSubject({ 
-                                    ...sub,
-                                    name: editForm.name, 
-                                    totalPages: Number(editForm.totalPages),
-                                    targetDate: editForm.targetDate,
-                                    tagIds: editForm.tagIds,
-                                    isRequired: editForm.isRequired,
-                                    scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
-                                    scheduledWeekdayWeights: normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays),
-                                    scheduledWeekdayRemainderDay: editForm.scheduledWeekdayRemainderDay,
-                                    scheduledWeekdayPages: undefined
-                                });
-                            }
-                            setEditingId(null);
-                            setEditForm(null);
+                            saveSubjectEdit(baseSubject);
                         }} 
                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all cursor-pointer active:scale-95"
                      >
@@ -675,18 +863,21 @@ export const Analytics: React.FC<Props> = ({
                       <button 
                           onClick={(e) => { 
                             e.preventDefault(); 
-                            e.stopPropagation(); 
+                          e.stopPropagation(); 
                             setEditingId(sub.id);
                             setFolderEditForm(null);
+                            setSelectedSequenceStageIds(prev => ({ ...prev, [sub.id]: selectedStageId }));
                             setEditForm({
-                              name: sub.name,
-                              totalPages: sub.totalPages,
-                              targetDate: sub.targetDate,
-                              tagIds: sub.tagIds || [],
-                              isRequired: sub.isRequired ?? false,
-                              scheduledWeekdays: normalizeWeekdays(sub.scheduledWeekdays),
-                              scheduledWeekdayWeights: normalizeWeekdayWeights(sub.scheduledWeekdayWeights, sub.scheduledWeekdays),
-                              scheduledWeekdayRemainderDay: sub.scheduledWeekdayRemainderDay
+                              name: baseSubject.name,
+                              totalPages: baseSubject.totalPages,
+                              targetDate: baseSubject.targetDate,
+                              tagIds: baseSubject.tagIds || [],
+                              isRequired: baseSubject.isRequired ?? false,
+                              sequenceOrderIds: sequenceSubjects.map(subject => subject.id),
+                              mergeTargetId: '',
+                              scheduledWeekdays: normalizeWeekdays(baseSubject.scheduledWeekdays),
+                              scheduledWeekdayWeights: normalizeWeekdayWeights(baseSubject.scheduledWeekdayWeights, baseSubject.scheduledWeekdays),
+                              scheduledWeekdayRemainderDay: baseSubject.scheduledWeekdayRemainderDay
                             });
                           }} 
                           onMouseDown={e => e.stopPropagation()}
@@ -710,9 +901,161 @@ export const Analytics: React.FC<Props> = ({
                 </div>
               </div>
 
+              {hasSequence && !isEditing && selectedStage && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2">
+                  <div className="mb-1 flex items-center justify-between px-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">과목 탭</p>
+                    <p className="text-[9px] font-bold text-slate-300">눌러서 진척도 확인</p>
+                  </div>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {sequenceSubjects.map((stage, index) => {
+                      const isSelected = stage.id === selectedStage.id;
+                      const isActiveStage = stage.id === sub.sequenceActiveSubjectId;
+                      return (
+                        <button
+                          key={stage.id}
+                          type="button"
+                          onClick={() => setSelectedSequenceStageIds(prev => ({ ...prev, [sub.id]: stage.id }))}
+                          className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-sm'
+                              : 'bg-white text-slate-400 hover:text-indigo-500'
+                          }`}
+                        >
+                          {index + 1}. {stage.name}
+                          {isActiveStage && <span className="ml-1 opacity-70">●</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    <div className="min-w-0 rounded-xl bg-white px-3 py-2">
+                      <p className="truncate text-xs font-black text-slate-800">{selectedStage.name}</p>
+                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-black ${
+                        selectedStage.id === sub.sequenceActiveSubjectId
+                          ? 'bg-emerald-50 text-emerald-600'
+                          : 'bg-slate-100 text-slate-400'
+                      }`}>
+                        {selectedStage.id === sub.sequenceActiveSubjectId ? '지금 학습 차례' : '정보 보기'}
+                      </span>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2 text-right">
+                      <p className="text-sm font-black text-indigo-600">
+                        {formatPageNumber(selectedStage.completedPages)} / {formatPageNumber(selectedStage.totalPages)}P
+                      </p>
+                      <p className="mt-1 text-[10px] font-bold text-slate-400">목표 {selectedStage.targetDate}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isEditing && hasSequence && selectedEditStage && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-2">
+                  <div className="mb-1 flex items-center justify-between px-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">묶음 순서</p>
+                    <p className="text-[9px] font-bold text-slate-300">탭 선택 후 조정</p>
+                  </div>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {editSequenceSubjects.map((stage, index) => {
+                      const isSelected = stage.id === selectedEditStage.id;
+                      return (
+                        <button
+                          key={stage.id}
+                          type="button"
+                          onClick={() => setSelectedSequenceStageIds(prev => ({ ...prev, [sub.id]: stage.id }))}
+                          className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition-all ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-sm'
+                              : 'bg-white text-slate-400 hover:text-indigo-500'
+                          }`}
+                        >
+                          {index + 1}. {stage.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 flex flex-col gap-2 rounded-xl bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-900">
+                        {selectedEditIndex + 1}. {selectedEditStage.name}
+                      </p>
+                      <p className="mt-0.5 text-[10px] font-bold text-slate-400">
+                        {formatPageNumber(selectedEditStage.completedPages)} / {formatPageNumber(selectedEditStage.totalPages)}P · 목표 {selectedEditStage.targetDate}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        disabled={selectedEditIndex <= 0}
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          moveEditSequenceSubject(selectedEditStage.id, -1);
+                        }}
+                        className="h-8 rounded-lg bg-slate-100 px-3 text-xs font-black text-slate-500 disabled:opacity-30"
+                      >
+                        앞으로
+                      </button>
+                      <button
+                        type="button"
+                        disabled={selectedEditIndex < 0 || selectedEditIndex === editSequenceSubjects.length - 1}
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          moveEditSequenceSubject(selectedEditStage.id, 1);
+                        }}
+                        className="h-8 rounded-lg bg-slate-100 px-3 text-xs font-black text-slate-500 disabled:opacity-30"
+                      >
+                        뒤로
+                      </button>
+                      <button
+                        type="button"
+                        disabled={editSequenceSubjects.length <= 1}
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          removeEditSequenceSubject(selectedEditStage.id);
+                        }}
+                        className="h-8 rounded-lg bg-rose-50 px-3 text-xs font-black text-rose-400 disabled:opacity-30"
+                      >
+                        밖으로
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isEditing && (hasSequence || mergeTargetSubjects.length > 0) && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="space-y-1">
+                    <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      이동 / 분리
+                    </label>
+                    <select
+                      value={editForm?.mergeTargetId || ''}
+                      onChange={e => setEditForm(prev => prev ? { ...prev, mergeTargetId: e.target.value } : null)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-black text-slate-700 outline-none"
+                    >
+                      <option value="">이 과목을 그대로 둠</option>
+                      {hasSequence && (
+                        <option value={DETACH_SUBJECT_VALUE}>선택한 탭 밖으로 뺌</option>
+                      )}
+                      {mergeTargetSubjects.map(subject => (
+                        <option key={subject.id} value={subject.id}>
+                          {subject.name} 쪽으로 이동
+                        </option>
+                      ))}
+                    </select>
+                    <p className="px-1 text-[10px] font-bold text-slate-400">
+                      선택한 탭을 밖으로 빼거나 다른 과목 쪽으로 이동할 수 있습니다. 합쳐지면 요일은 묶음 전체에 같이 적용됩니다.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-100 sm:grid-cols-4 [&>*:nth-child(2)]:hidden [&>*:nth-child(3)]:hidden">
-                 <StatBox label="효율(m/p)" value={sub.stats.averageTimePerPage.toFixed(1)} unit="" color="text-indigo-400" />
-                 <StatBox label="편차(σ)" value={sub.stats.standardDeviation.toFixed(1)} unit="" color="text-blue-400" />
+                 <StatBox label="효율(m/p)" value={formatEfficiency(sub.stats.averageTimePerPage)} unit="" color="text-indigo-400" />
+                 <StatBox label="편차(σ)" value={formatDeviation(sub.stats.standardDeviation, sub.stats.averageTimePerPage)} unit="" color="text-blue-400" />
                  <StatBox label="잔여(P)" value={sub.remainingPages.toString()} unit="P" color="text-amber-500" />
                  <StatBox label="권장" value={getDisplayRecommendedPages(sub).toString()} unit="P" color="text-slate-800" />
                  <StatBox label="필요 시간" value={formatTime(getDisplayNeededMinutes(sub))} unit="" color="text-slate-900" large />
@@ -726,7 +1069,9 @@ export const Analytics: React.FC<Props> = ({
 
               <div className="space-y-1 px-1">
                  <div className="flex justify-between items-end">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({progressPercent}%)</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      학습 진척도{hasSequence && selectedStage ? ` · ${selectedStage.name}` : ''} ({progressPercent}%)
+                    </p>
                     {isEditing ? (
                         <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1 rounded-xl">
                             <span className="text-xs font-bold text-indigo-400">목표 P 수정:</span>
@@ -740,7 +1085,10 @@ export const Analytics: React.FC<Props> = ({
                             <span className="text-xs font-black text-indigo-400">Page</span>
                         </div>
                     ) : (
-                        <p className="text-base font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                        <p className="text-base font-black text-slate-900">
+                          {formatPageNumber(progressSubject.completedPages)} / {formatPageNumber(progressSubject.totalPages)}
+                          <span className="text-xs text-slate-400 font-bold ml-1">P</span>
+                        </p>
                     )}
                  </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
@@ -790,10 +1138,6 @@ export const Analytics: React.FC<Props> = ({
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="rounded-xl border border-indigo-100 bg-white px-4 py-2 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{showAllWeekdays ? '전체 필요시간' : '필요시간'}</p>
-          <p className="mt-0.5 text-3xl font-black leading-none text-indigo-600">{formatTime(weekdayTotalTime)}</p>
-        </div>
         <button
           type="button"
           onClick={onOpenReview}
@@ -878,11 +1222,22 @@ export const Analytics: React.FC<Props> = ({
   );
 };
 
-const StatBox = ({ label, value, unit, color, isDark, highlight, large }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean, large?: boolean }) => (
-  <div className={`flex flex-col min-w-0 px-2.5 py-2.5 rounded-lg transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
-    <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1 tracking-tight truncate ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
-    <p className={`${large ? 'text-2xl md:text-3xl' : 'text-xl md:text-2xl'} font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
-      {value}<span className="text-[10px] md:text-xs font-bold ml-1 opacity-40">{unit}</span>
-    </p>
-  </div>
-);
+const StatBox = ({ label, value, unit, color, isDark, highlight, large }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean, large?: boolean }) => {
+  const textLength = `${value}${unit}`.length;
+  const valueSize = large
+    ? 'text-2xl md:text-3xl'
+    : textLength >= 6
+      ? 'text-sm md:text-base'
+      : textLength >= 4
+        ? 'text-lg md:text-xl'
+        : 'text-xl md:text-2xl';
+
+  return (
+    <div className={`flex flex-col min-w-0 px-2.5 py-2.5 rounded-lg transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
+      <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1 tracking-tight truncate ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
+      <p className={`${valueSize} font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
+        {value}<span className="text-[10px] md:text-xs font-bold ml-1 opacity-40">{unit}</span>
+      </p>
+    </div>
+  );
+};

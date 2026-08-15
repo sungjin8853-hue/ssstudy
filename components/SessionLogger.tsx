@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateRecentCompletedDayAverage } from '../utils/math';
 import { getDiffDays, getLogStudyDate, getSubjectDayTarget, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { SequenceSubject, buildSequenceDisplaySubjects, resolveActiveStudySubject } from '../utils/subjectSequences';
 
 interface Props {
   subjects: Subject[];
@@ -230,16 +231,24 @@ const getSubjectStudyPlanForDate = (
   targetStudyDate: string,
   today = new Date()
 ) => {
+  const sequenceSubject = subject as SequenceSubject;
+  const activeSubjectId = sequenceSubject.sequenceActiveSubjectId || subject.id;
+  const sequenceIds = sequenceSubject.sequenceSubjectIds || [subject.id];
   const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
   const scopedPages = logs
-    .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
+    .filter(log => sequenceIds.includes(log.subjectId) && getLogStudyDate(log) === targetStudyDate)
     .reduce((sum, log) => sum + log.pagesRead, 0);
   const remainingBeforeStudyDate = remainingPages + scopedPages;
   const diffDays = getDiffDays(subject.targetDate, today);
-  const dayTarget = getSubjectDayTarget(subject, remainingBeforeStudyDate, diffDays, targetWeekday);
+  const dayTarget = getSubjectDayTarget(
+    subject,
+    remainingBeforeStudyDate,
+    diffDays,
+    targetWeekday
+  );
   const remainingDayPages = Math.min(remainingPages, Math.max(0, dayTarget - scopedPages));
   const subjectLogs = logs.filter(log => (
-    log.subjectId === subject.id
+    sequenceIds.includes(log.subjectId)
     && log.pagesRead > 0
     && log.timeSpentMinutes > 0
   ));
@@ -263,8 +272,10 @@ const buildStudyOrderForDate = (
   targetStudyDate: string
 ): StudyOrderItem[] => {
   const today = new Date();
-  return sourceSubjects
-    .filter(subject => subject.completedPages < subject.totalPages)
+  return buildSequenceDisplaySubjects(sourceSubjects, today)
+    .filter(subject => {
+      return subject.completedPages < subject.totalPages;
+    })
     .filter(subject => normalizeWeekdays(subject.scheduledWeekdays).includes(targetWeekday))
     .map(subject => ({
       subject,
@@ -366,7 +377,11 @@ const formatPlanMinutes = (minutes: number) => {
 };
 
 export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onLogSession, onReviewAction, onUpdateReviewMemo }) => {
-  const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
+  const measurableSubjects = useMemo(() => (
+    buildSequenceDisplaySubjects(subjects).filter(subject => {
+      return subject.completedPages < subject.totalPages;
+    })
+  ), [subjects]);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState('');
   const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
@@ -469,6 +484,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     });
   }, [activeWeekday, measurableSubjects, todayStudyRankMap]);
 
+  const selectedDisplaySubject = useMemo(() => (
+    orderedMeasurableSubjects.find(subject => {
+      const sequenceSubject = subject as SequenceSubject;
+      return subject.id === subjectId || sequenceSubject.sequenceActiveSubjectId === subjectId;
+    })
+  ), [orderedMeasurableSubjects, subjectId]);
+
   const recommendedTodayStudy = todayStudyOrder[0] || null;
   const postSaveNextSubject = postSaveNextSubjectId
     ? subjects.find(subject => subject.id === postSaveNextSubjectId)
@@ -494,14 +516,27 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const selectSubjectForMeasurement = (subject: Subject) => {
+    const baseSubject = subjects.find(item => item.id === subject.id) || subject;
+    const activeSubject = resolveActiveStudySubject(baseSubject, subjects);
     setSelectedReviewSubjectId('');
-    setFolderPathIds(getFolderPathForSubject(subject));
-    setSubjectId(subject.id);
+    setFolderPathIds(getFolderPathForSubject(baseSubject));
+    setSubjectId(activeSubject.id);
   };
 
+  const selectedPlanningSubject = selectedDisplaySubject || selectedSubject;
+  const selectedPlanningSubjectIds = selectedDisplaySubject
+    ? ((selectedDisplaySubject as SequenceSubject).sequenceSubjectIds || [selectedDisplaySubject.id])
+    : subjectId
+      ? [subjectId]
+      : [];
+
   const selectedSubjectLogs = useMemo(
-    () => logs.filter(log => log.subjectId === subjectId && log.pagesRead > 0 && log.timeSpentMinutes > 0),
-    [logs, subjectId]
+    () => logs.filter(log => (
+      selectedPlanningSubjectIds.includes(log.subjectId)
+      && log.pagesRead > 0
+      && log.timeSpentMinutes > 0
+    )),
+    [logs, selectedPlanningSubjectIds]
   );
 
   const remainingSubjectPages = selectedSubject
@@ -510,19 +545,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const activeDaySubjectPages = useMemo(
     () => logs
-      .filter(log => log.subjectId === subjectId && getLogStudyDate(log) === activeStudyDate)
+      .filter(log => selectedPlanningSubjectIds.includes(log.subjectId) && getLogStudyDate(log) === activeStudyDate)
       .reduce((sum, log) => sum + log.pagesRead, 0),
-    [activeStudyDate, logs, subjectId]
+    [activeStudyDate, logs, selectedPlanningSubjectIds]
   );
 
   const recommendedDailyPages = useMemo(() => {
-    if (!selectedSubject) return 0;
+    if (!selectedPlanningSubject) return 0;
     const today = new Date();
-    const remainingBeforeActiveDay = remainingSubjectPages + activeDaySubjectPages;
-    const diffDays = getDiffDays(selectedSubject.targetDate, today);
-    const dayTarget = getSubjectDayTarget(selectedSubject, remainingBeforeActiveDay, diffDays, activeWeekday);
-    return Math.min(remainingSubjectPages, Math.max(0, dayTarget - activeDaySubjectPages));
-  }, [activeDaySubjectPages, activeWeekday, selectedSubject, remainingSubjectPages]);
+    const planningRemainingPages = Math.max(0, selectedPlanningSubject.totalPages - selectedPlanningSubject.completedPages);
+    const remainingBeforeActiveDay = planningRemainingPages + activeDaySubjectPages;
+    const diffDays = getDiffDays(selectedPlanningSubject.targetDate, today);
+    const dayTarget = getSubjectDayTarget(selectedPlanningSubject, remainingBeforeActiveDay, diffDays, activeWeekday);
+    return Math.min(planningRemainingPages, Math.max(0, dayTarget - activeDaySubjectPages));
+  }, [activeDaySubjectPages, activeWeekday, selectedPlanningSubject]);
 
   const overallAverage = useMemo(
     () => calculateRecentCompletedDayAverage(selectedSubjectLogs, recommendedDailyPages).averageTimePerPage,
@@ -1312,49 +1348,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     </div>
   ) : null;
 
-  const renderDayPlanSummary = () => (
-    <div className="rounded-[2rem] border border-indigo-100 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">{activeWeekdayLabel}요일 계획</p>
-          <h3 className="text-base font-black text-slate-900">과목별 권장량</h3>
+  const renderDayNeededTimeSummary = () => (
+    <div className="rounded-[1.75rem] border border-indigo-100 bg-white px-5 py-4 shadow-sm">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">{activeWeekdayLabel} 필요시간</p>
+          <p className="mt-1 text-xs font-bold text-slate-400">
+            선택한 요일에 남은 학습량 기준
+          </p>
         </div>
-        <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
-          <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총</p>
-          <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(dayPlanTotalMinutes)}</p>
-        </div>
-      </div>
-
-      <div className="grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-        {todayStudyOrder.length > 0 ? todayStudyOrder.map((item, index) => (
-          <button
-            key={item.subject.id}
-            type="button"
-            onClick={() => selectSubjectForMeasurement(item.subject)}
-            className={`rounded-2xl border px-3 py-2 text-left transition-all ${
-              subjectId === item.subject.id
-                ? 'border-indigo-300 bg-indigo-50'
-                : 'border-slate-100 bg-slate-50 hover:border-indigo-100 hover:bg-indigo-50/60'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-black text-slate-800">
-                {index + 1}. {item.subject.isRequired ? '필수 · ' : ''}{item.subject.name}
-              </span>
-              <span className="shrink-0 rounded-xl bg-white px-2 py-1 text-xs font-black text-indigo-600">
-                {formatPageNumber(item.remainingDayPages)}P
-              </span>
-            </div>
-            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-slate-400">
-              <span>{formatPlanMinutes(item.estimatedMinutes)}</span>
-              <span>완료 {formatPageNumber(item.scopedPages)}P</span>
-            </div>
-          </button>
-        )) : (
-          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-center text-xs font-bold text-slate-400 sm:col-span-2">
-            이 요일에 남은 권장 학습이 없습니다.
-          </div>
-        )}
+        <p className="shrink-0 text-3xl font-black leading-none text-indigo-600">
+          {formatPlanMinutes(dayPlanTotalMinutes)}
+        </p>
       </div>
     </div>
   );
@@ -1368,7 +1373,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           학습 세션 시작
         </h2>
         <div className="mx-auto max-w-2xl space-y-4">
-          {renderDayPlanSummary()}
+          {renderDayNeededTimeSummary()}
           {postSaveNextSubject && (
             <div className="rounded-[1.75rem] border border-emerald-100 bg-emerald-50 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
@@ -1404,17 +1409,17 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               <div className="space-y-3">
                 {selectionLevels.map(level => {
                   const selectedFolder = folderPathIds[level.index];
-                  const parentMatchesSelectedSubject = selectedSubject && (
+                  const parentMatchesSelectedSubject = selectedDisplaySubject && (
                     level.parentId
-                      ? selectedSubject.tagIds?.includes(level.parentId)
-                      : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
+                      ? selectedDisplaySubject.tagIds?.includes(level.parentId)
+                      : !selectedDisplaySubject.tagIds || selectedDisplaySubject.tagIds.length === 0
                   );
                   const value = selectedFolder
                     ? `folder:${selectedFolder}`
                     : level.index === 0 && selectedReviewGroup
                       ? `review:${selectedReviewGroup.subjectId}`
                       : parentMatchesSelectedSubject
-                      ? `subject:${selectedSubject.id}`
+                      ? `subject:${selectedDisplaySubject.id}`
                       : '';
 
                   return (
@@ -1438,7 +1443,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                       ))}
                       {level.subjects.map(subject => (
                         <option key={subject.id} value={`subject:${subject.id}`}>
-                          {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P
+                          {subject.isRequired ? '필수 · ' : ''}{subject.name}
+                          {(subject as SequenceSubject).sequenceStageCount && (subject as SequenceSubject).sequenceStageCount! > 1
+                            ? ` · 현재 ${(subject as SequenceSubject).sequenceActiveSubjectName}`
+                            : ''}
+                          {' '}· 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P
                         </option>
                       ))}
                     </select>
@@ -1472,7 +1481,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                     className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-center text-2xl font-black text-indigo-900 outline-none transition-all focus:ring-4 focus:ring-indigo-500/10"
                   />
                   <p className="mt-3 px-1 text-[10px] font-bold leading-relaxed text-slate-400">
-                    선택한 탭 기준으로 자동 입력됩니다. 필요하면 직접 바꿀 수 있어요.
+                    묶음 전체의 남은 페이지와 목표일 기준으로 자동 입력됩니다. 필요하면 직접 바꿀 수 있어요.
                   </p>
                 </div>
                 <div className="mt-5 border-t border-slate-200 pt-5">

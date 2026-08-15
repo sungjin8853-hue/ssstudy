@@ -15,6 +15,8 @@ export interface Subject {
   tagIds?: string[];
   reviewEnabled?: boolean;
   isRequired?: boolean;
+  linkedSubjectIds?: string[];
+  linkedParentId?: string;
   scheduledWeekdays?: number[];
   scheduledWeekdayPages?: Record<string, number>;
   scheduledWeekdayWeights?: Record<string, number>;
