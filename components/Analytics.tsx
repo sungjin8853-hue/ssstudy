@@ -32,6 +32,46 @@ const COLORS = [
   '#8B5CF6', '#06B6D4', '#64748B'
 ];
 
+const calculateFourDaySpeedChange = (logs: StudyLog[]) => {
+  const dailySamples = Array.from(
+    logs
+      .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
+      .reduce((map, log) => {
+        const key = getLogStudyDate(log);
+        const current = map.get(key) || { date: key, pages: 0, minutes: 0 };
+        current.pages += log.pagesRead;
+        current.minutes += log.timeSpentMinutes;
+        map.set(key, current);
+        return map;
+      }, new Map<string, { date: string; pages: number; minutes: number }>())
+      .values()
+  ).sort((a, b) => a.date.localeCompare(b.date));
+
+  if (dailySamples.length === 0) {
+    return {
+      firstTimePerPage: 0,
+      recentFourDayTimePerPage: 0,
+      speedChangePercent: null as number | null
+    };
+  }
+
+  const firstDay = dailySamples[0];
+  const recentFourDays = dailySamples.slice(-4);
+  const recentPages = recentFourDays.reduce((sum, day) => sum + day.pages, 0);
+  const recentMinutes = recentFourDays.reduce((sum, day) => sum + day.minutes, 0);
+  const firstTimePerPage = firstDay.pages > 0 ? firstDay.minutes / firstDay.pages : 0;
+  const recentFourDayTimePerPage = recentPages > 0 ? recentMinutes / recentPages : 0;
+  const speedChangePercent = firstTimePerPage > 0 && recentFourDayTimePerPage > 0
+    ? ((firstTimePerPage / recentFourDayTimePerPage) - 1) * 100
+    : null;
+
+  return {
+    firstTimePerPage,
+    recentFourDayTimePerPage,
+    speedChangePercent
+  };
+};
+
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
@@ -210,10 +250,12 @@ export const Analytics: React.FC<Props> = ({
         Math.max(0, (weekdayPagePlan[activeWeekday] || 0) - activeDayCompletedPages)
       );
       const stats = calculateStats(subLogs, remaining, recommendedDailyPages);
+      const speedChange = calculateFourDaySpeedChange(subLogs);
 
       return {
         ...sub,
         stats,
+        speedChange,
         diffDays,
         remainingPages: remaining,
         weeklyRequiredPages,
@@ -429,7 +471,7 @@ export const Analytics: React.FC<Props> = ({
                    <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
                    <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
                    <StatBox label="권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
-                   <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} />
+                   <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} large />
                 </div>
 
                 <div className="space-y-2">
@@ -668,12 +710,18 @@ export const Analytics: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-100 [&>*:nth-child(2)]:hidden [&>*:nth-child(3)]:hidden">
+              <div className="grid grid-cols-2 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-100 sm:grid-cols-4 [&>*:nth-child(2)]:hidden [&>*:nth-child(3)]:hidden">
                  <StatBox label="효율(m/p)" value={sub.stats.averageTimePerPage.toFixed(1)} unit="" color="text-indigo-400" />
                  <StatBox label="편차(σ)" value={sub.stats.standardDeviation.toFixed(1)} unit="" color="text-blue-400" />
                  <StatBox label="잔여(P)" value={sub.remainingPages.toString()} unit="P" color="text-amber-500" />
                  <StatBox label="권장" value={getDisplayRecommendedPages(sub).toString()} unit="P" color="text-slate-800" />
-                 <StatBox label="필요 시간" value={formatTime(getDisplayNeededMinutes(sub))} unit="" color="text-slate-900" />
+                 <StatBox label="필요 시간" value={formatTime(getDisplayNeededMinutes(sub))} unit="" color="text-slate-900" large />
+                 <StatBox
+                   label="4일 속도 변화"
+                   value={sub.speedChange.speedChangePercent !== null ? `${sub.speedChange.speedChangePercent >= 0 ? '+' : ''}${sub.speedChange.speedChangePercent.toFixed(0)}%` : '기록 필요'}
+                   unit=""
+                   color={sub.speedChange.speedChangePercent !== null && sub.speedChange.speedChangePercent >= 0 ? 'text-emerald-500' : 'text-rose-500'}
+                 />
               </div>
 
               <div className="space-y-1 px-1">
@@ -744,7 +792,7 @@ export const Analytics: React.FC<Props> = ({
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="rounded-xl border border-indigo-100 bg-white px-4 py-2 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{showAllWeekdays ? '전체 필요시간' : '필요시간'}</p>
-          <p className="mt-0.5 text-xl font-black text-indigo-600">{formatTime(weekdayTotalTime)}</p>
+          <p className="mt-0.5 text-3xl font-black leading-none text-indigo-600">{formatTime(weekdayTotalTime)}</p>
         </div>
         <button
           type="button"
@@ -830,10 +878,10 @@ export const Analytics: React.FC<Props> = ({
   );
 };
 
-const StatBox = ({ label, value, unit, color, isDark, highlight }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean }) => (
+const StatBox = ({ label, value, unit, color, isDark, highlight, large }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean, large?: boolean }) => (
   <div className={`flex flex-col min-w-0 px-2.5 py-2.5 rounded-lg transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
     <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1 tracking-tight truncate ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
-    <p className={`text-xl md:text-2xl font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
+    <p className={`${large ? 'text-2xl md:text-3xl' : 'text-xl md:text-2xl'} font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
       {value}<span className="text-[10px] md:text-xs font-bold ml-1 opacity-40">{unit}</span>
     </p>
   </div>

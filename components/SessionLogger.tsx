@@ -1312,6 +1312,53 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     </div>
   ) : null;
 
+  const renderDayPlanSummary = () => (
+    <div className="rounded-[2rem] border border-indigo-100 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">{activeWeekdayLabel}요일 계획</p>
+          <h3 className="text-base font-black text-slate-900">과목별 권장량</h3>
+        </div>
+        <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
+          <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총</p>
+          <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(dayPlanTotalMinutes)}</p>
+        </div>
+      </div>
+
+      <div className="grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+        {todayStudyOrder.length > 0 ? todayStudyOrder.map((item, index) => (
+          <button
+            key={item.subject.id}
+            type="button"
+            onClick={() => selectSubjectForMeasurement(item.subject)}
+            className={`rounded-2xl border px-3 py-2 text-left transition-all ${
+              subjectId === item.subject.id
+                ? 'border-indigo-300 bg-indigo-50'
+                : 'border-slate-100 bg-slate-50 hover:border-indigo-100 hover:bg-indigo-50/60'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-sm font-black text-slate-800">
+                {index + 1}. {item.subject.isRequired ? '필수 · ' : ''}{item.subject.name}
+              </span>
+              <span className="shrink-0 rounded-xl bg-white px-2 py-1 text-xs font-black text-indigo-600">
+                {formatPageNumber(item.remainingDayPages)}P
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-slate-400">
+              <span>{formatPlanMinutes(item.estimatedMinutes)}</span>
+              <span>완료 {formatPageNumber(item.scopedPages)}P</span>
+            </div>
+          </button>
+        )) : (
+          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-center text-xs font-bold text-slate-400 sm:col-span-2">
+            이 요일에 남은 권장 학습이 없습니다.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   if (step === 'idle') {
     return (
       <div className="animate-fade-in">
@@ -1321,6 +1368,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           학습 세션 시작
         </h2>
         <div className="mx-auto max-w-2xl space-y-4">
+          {renderDayPlanSummary()}
           {postSaveNextSubject && (
             <div className="rounded-[1.75rem] border border-emerald-100 bg-emerald-50 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
@@ -1462,50 +1510,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
             <span className="text-2xl group-hover:rotate-12 transition-transform">⏱️</span>
             {selectedReviewGroup ? '복습 시작' : subjectId ? '측정 엔진 가동' : '과목 없음'}
           </button>
-          <div className="rounded-[2rem] border border-indigo-100 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">{activeWeekdayLabel}요일 계획</p>
-                <h3 className="text-base font-black text-slate-900">과목별 권장량</h3>
-              </div>
-              <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
-                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총</p>
-                <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(dayPlanTotalMinutes)}</p>
-              </div>
-            </div>
-
-            <div className="grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-              {todayStudyOrder.length > 0 ? todayStudyOrder.map((item, index) => (
-                <button
-                  key={item.subject.id}
-                  type="button"
-                  onClick={() => selectSubjectForMeasurement(item.subject)}
-                  className={`rounded-2xl border px-3 py-2 text-left transition-all ${
-                    subjectId === item.subject.id
-                      ? 'border-indigo-300 bg-indigo-50'
-                      : 'border-slate-100 bg-slate-50 hover:border-indigo-100 hover:bg-indigo-50/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-black text-slate-800">
-                      {index + 1}. {item.subject.isRequired ? '필수 · ' : ''}{item.subject.name}
-                    </span>
-                    <span className="shrink-0 rounded-xl bg-white px-2 py-1 text-xs font-black text-indigo-600">
-                      {formatPageNumber(item.remainingDayPages)}P
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-slate-400">
-                    <span>{formatPlanMinutes(item.estimatedMinutes)}</span>
-                    <span>완료 {formatPageNumber(item.scopedPages)}P</span>
-                  </div>
-                </button>
-              )) : (
-                <div className="rounded-2xl bg-slate-50 px-4 py-4 text-center text-xs font-bold text-slate-400 sm:col-span-2">
-                  이 요일에 남은 권장 학습이 없습니다.
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       </div>
     );
