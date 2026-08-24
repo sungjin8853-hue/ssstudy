@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Subject } from '../types';
+import { calculateFreshWeekdayPagePlan, getDiffDays } from '../utils/schedule';
 
 interface Props {
   onAddSubject: (s: Subject) => void;
@@ -32,14 +33,25 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
 
   const handleAdd = () => {
     if (!name || !date) return;
-    onAddSubject({
+    const nextSubject: Subject = {
       id: Math.random().toString(36).substr(2, 9),
       name,
+      createdAt: new Date().toISOString(),
+      planResetDate: new Date().toISOString().slice(0, 10),
       totalPages: pages,
       completedPages: currentPages,
       targetDate: date,
       isRequired,
       scheduledWeekdays: scheduledWeekdays.length > 0 ? scheduledWeekdays : weekdays.map(day => day.id),
+    };
+
+    onAddSubject({
+      ...nextSubject,
+      scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+        nextSubject,
+        Math.max(0, pages - currentPages),
+        getDiffDays(date)
+      )
     });
     setName('');
     setPages(100);

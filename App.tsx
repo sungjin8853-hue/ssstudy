@@ -3,11 +3,10 @@ import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord, TagDe
 import { SubjectPlanner } from './components/SubjectPlanner';
 import { SessionLogger } from './components/SessionLogger';
 import { Analytics } from './components/Analytics';
-import { ReviewManager } from './components/ReviewManager';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
-import { getLocalDateKey, getStudyDateForWeekday } from './utils/schedule';
+import { calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getStudyDateForWeekday } from './utils/schedule';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -24,7 +23,7 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
 };
 
 const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
-const INITIAL_REVIEW_DELAY_MS = 2 * 60 * 60 * 1000;
+const INITIAL_REVIEW_DELAY_MS = 1000;
 const TEST_REVIEW_DELAY_THRESHOLD_MS = 10 * 60 * 1000;
 
 const readSidebarCollapsed = () => {
@@ -62,8 +61,7 @@ const App: React.FC = () => {
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'review'>('dashboard');
-  const [dashboardActionTab, setDashboardActionTab] = useState<'logger' | 'planner'>('logger');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
@@ -97,30 +95,49 @@ const App: React.FC = () => {
       const loadedSubjects: Array<Subject & {
         procedures?: Array<{ totalPages: number; completedPages: number }>;
       }> = savedSubs ? JSON.parse(savedSubs) || [] : [];
+      const loadedLogs: StudyLog[] = savedLogs ? JSON.parse(savedLogs) || [] : [];
       const loadedTags: TagDefinition[] = savedTags ? JSON.parse(savedTags) || [] : [];
       
       if (savedSubs) {
-        setSubjects(loadedSubjects.map(subject => ({
-          id: subject.id,
-          name: subject.name,
-          totalPages: subject.procedures?.[0]?.totalPages ?? subject.totalPages,
-          completedPages: subject.procedures?.length
+        setSubjects(loadedSubjects.map(subject => {
+          const totalPages = subject.procedures?.[0]?.totalPages ?? subject.totalPages;
+          const completedPages = subject.procedures?.length
             ? subject.procedures.reduce((sum, procedure) => sum + procedure.completedPages, 0)
-            : subject.completedPages,
-          targetDate: subject.targetDate,
-          tagIds: subject.tagIds,
-          reviewEnabled: subject.reviewEnabled ?? true,
-          isRequired: subject.isRequired ?? false,
-          scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
-          scheduledWeekdayPages: subject.scheduledWeekdayPages,
-          scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
-          scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay
-        })));
+            : subject.completedPages;
+          const migratedSubject: Subject = {
+            id: subject.id,
+            name: subject.name,
+            createdAt: subject.createdAt ?? (
+              loadedLogs
+                .filter(log => log.subjectId === subject.id)
+                .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())[0]?.timestamp
+              ?? new Date().toISOString()
+            ),
+            planResetDate: subject.planResetDate,
+            totalPages,
+            completedPages,
+            targetDate: subject.targetDate,
+            tagIds: subject.tagIds,
+            reviewEnabled: subject.reviewEnabled ?? true,
+            isRequired: subject.isRequired ?? false,
+            scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
+            scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
+            scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay
+          };
+
+          return {
+            ...migratedSubject,
+            scheduledWeekdayPages: subject.scheduledWeekdayPages ?? calculateFreshWeekdayPagePlan(
+              migratedSubject,
+              Math.max(0, totalPages - completedPages),
+              getDiffDays(subject.targetDate)
+            )
+          };
+        }));
       }
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
       if (savedLogs) {
         // 레거시 데이터 마이그레이션: nextReviewDate가 없으면 timestamp로 초기화
-        const loadedLogs: StudyLog[] = JSON.parse(savedLogs) || [];
         const migratedLogs = loadedLogs.map(log => {
           const subject = loadedSubjects.find(item => item.id === log.subjectId);
           const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], loadedTags);
@@ -191,7 +208,7 @@ const App: React.FC = () => {
 
   const handleAddSubject = (s: Subject) => {
     setSubjects(prev => [...prev, s]);
-    setDashboardActionTab('logger');
+    setActiveTab('dashboard');
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
@@ -591,9 +608,9 @@ const App: React.FC = () => {
         </div>
         
         <div className="space-y-2 flex-grow">
-          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="📊" label="학습 현황" collapsed={isSidebarCollapsed} />
+          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="⏱️" label="학습 실행" collapsed={isSidebarCollapsed} />
+          <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon="⚙️" label="학습 설정" collapsed={isSidebarCollapsed} />
           <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon="📈" label="추이 분석" collapsed={isSidebarCollapsed} />
-          <NavButton active={activeTab === 'review'} onClick={() => setActiveTab('review')} icon="🔄" label="복습 관리" collapsed={isSidebarCollapsed} />
         </div>
 
         {!isSidebarCollapsed && <div className="mt-auto p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
@@ -611,9 +628,9 @@ const App: React.FC = () => {
       </nav>
 
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-lg">
-        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📊</button>
+        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>⏱️</button>
+        <button onClick={() => setActiveTab('settings')} className={`p-2 rounded-xl ${activeTab === 'settings' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>⚙️</button>
         <button onClick={() => setActiveTab('history')} className={`p-2 rounded-xl ${activeTab === 'history' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📈</button>
-        <button onClick={() => setActiveTab('review')} className={`p-2 rounded-xl ${activeTab === 'review' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>🔄</button>
       </nav>
 
       <main className="p-4 md:p-10 max-w-6xl mx-auto">
@@ -621,88 +638,66 @@ const App: React.FC = () => {
           <div>
             <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest">{todayStr}</p>
             <h2 className="text-3xl font-black text-slate-900 mt-1">
-              {activeTab === 'dashboard' ? '학습 데이터 분석' : 
-               activeTab === 'history' ? '학습 추이 및 리포트' : '에빙하우스 복습 관리'}
+              {activeTab === 'dashboard' ? '학습 실행' :
+               activeTab === 'settings' ? '학습 설정' : '학습 추이 및 리포트'}
             </h2>
           </div>
         </header>
 
         <div className="transition-all duration-300">
           {activeTab === 'dashboard' && (
-            <div className="space-y-10 animate-fade-in">
-              <Analytics 
-                subjects={subjects} 
-                logs={logs} 
-                tagDefinitions={tagDefinitions}
-                activeWeekday={activeStudyWeekday}
-                activeStudyDate={activeStudyDate}
-                onActiveWeekdayChange={setActiveStudyWeekday}
-                onUpdateSubject={handleUpdateSubject} 
-                onUpdateSubjects={handleUpdateSubjects}
-                onDeleteSubject={handleDeleteSubject} 
-                onUpdateTags={handleUpdateTags}
-                onDeleteFolder={handleDeleteFolder}
-                onOpenReview={() => setActiveTab('review')}
-              />
-              <TodaySummary
-                logs={logs}
-                subjects={subjects}
-                activeWeekday={activeStudyWeekday}
-                activeStudyDate={activeStudyDate}
-                onAddLog={handleLogSession}
-                onReplaceLogs={handleReplaceLogs}
-                onDeleteLogs={handleDeleteLogs}
-              />
-              
-              <div className="bg-white rounded-[3.5rem] shadow-sm border border-slate-200 overflow-hidden animate-fade-in">
-                <div className="flex bg-slate-50 p-3 m-4 rounded-[2rem] border border-slate-100">
-                  <button 
-                    onClick={() => setDashboardActionTab('logger')}
-                    className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition-all ${
-                      dashboardActionTab === 'logger' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <span>⏱️</span> 학습 기록 측정
-                  </button>
-                  <button 
-                    onClick={() => setDashboardActionTab('planner')}
-                    className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-black text-sm transition-all ${
-                      dashboardActionTab === 'planner' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <span>📅</span> 새 학습 계획 추가
-                  </button>
-                </div>
-                
-                <div className="p-8 md:p-12">
-                  {dashboardActionTab === 'logger' ? (
-                    <SessionLogger
-                      subjects={subjects}
-                      tagDefinitions={tagDefinitions}
-                      logs={logs}
-                      activeWeekday={activeStudyWeekday}
-                      activeStudyDate={activeStudyDate}
-                      onLogSession={handleLogSession}
-                      onReviewAction={handleReviewAction}
-                      onUpdateReviewMemo={handleUpdateReviewMemo}
-                    />
-                  ) : (
-                    <SubjectPlanner onAddSubject={handleAddSubject} />
-                  )}
+            <div className="space-y-6 animate-fade-in">
+              <div className="mx-auto max-w-3xl rounded-[3rem] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
+                <div className="space-y-8">
+                  <TodaySummary
+                    logs={logs}
+                    subjects={subjects}
+                    activeWeekday={activeStudyWeekday}
+                    activeStudyDate={activeStudyDate}
+                    onAddLog={handleLogSession}
+                    onReplaceLogs={handleReplaceLogs}
+                    onDeleteLogs={handleDeleteLogs}
+                  />
+                  <SessionLogger
+                    subjects={subjects}
+                    tagDefinitions={tagDefinitions}
+                    logs={logs}
+                    activeWeekday={activeStudyWeekday}
+                    activeStudyDate={activeStudyDate}
+                    onActiveWeekdayChange={setActiveStudyWeekday}
+                    onLogSession={handleLogSession}
+                    onUpdateSubjects={handleUpdateSubjects}
+                    onReviewAction={handleReviewAction}
+                    onUpdateReviewMemo={handleUpdateReviewMemo}
+                  />
                 </div>
               </div>
             </div>
           )}
 
-          {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
-          {activeTab === 'review' && (
-            <ReviewManager
-              logs={logs}
-              subjects={subjects}
-              onReviewAction={handleReviewAction}
-              onUpdateReviewMemo={handleUpdateReviewMemo}
-            />
+          {activeTab === 'settings' && (
+            <div className="space-y-8 animate-fade-in">
+              <Analytics
+                subjects={subjects}
+                logs={logs}
+                tagDefinitions={tagDefinitions}
+                activeWeekday={activeStudyWeekday}
+                activeStudyDate={activeStudyDate}
+                onActiveWeekdayChange={setActiveStudyWeekday}
+                onUpdateSubject={handleUpdateSubject}
+                onUpdateSubjects={handleUpdateSubjects}
+                onDeleteSubject={handleDeleteSubject}
+                onUpdateTags={handleUpdateTags}
+                onDeleteFolder={handleDeleteFolder}
+                onOpenReview={() => setActiveTab('dashboard')}
+              />
+              <div className="mx-auto max-w-3xl rounded-[3rem] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
+                <SubjectPlanner onAddSubject={handleAddSubject} />
+              </div>
+            </div>
           )}
+
+          {activeTab === 'history' && <HistoryCharts subjects={subjects} logs={logs} />}
         </div>
       </main>
     </div>

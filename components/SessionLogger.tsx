@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateRecentCompletedDayAverage } from '../utils/math';
-import { getDiffDays, getLogStudyDate, getSubjectDayTarget, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 
 interface Props {
   subjects: Subject[];
@@ -9,7 +9,9 @@ interface Props {
   logs: StudyLog[];
   activeWeekday: number;
   activeStudyDate: string;
+  onActiveWeekdayChange: (weekday: number) => void;
   onLogSession: (log: StudyLog) => void;
+  onUpdateSubjects?: (subjects: Subject[]) => void;
   onReviewAction: (logIds: string[], action: 'complete' | 'condense') => void;
   onUpdateReviewMemo: (logId: string, memo: string) => void;
 }
@@ -22,8 +24,10 @@ interface SessionTimer {
 interface StudyOrderItem {
   subject: Subject;
   scopedPages: number;
+  carryoverPages: number;
   remainingDayPages: number;
   averageTimePerPage: number;
+  speedChangePercent: number | null;
   estimatedMinutes: number;
 }
 
@@ -35,6 +39,24 @@ interface ReviewQueueGroup {
   earliestReviewTime: number;
   estimatedMinutes: number;
 }
+
+type StudyRunQueueItem =
+  | {
+      kind: 'review';
+      key: string;
+      reviewGroup: ReviewQueueGroup;
+      isRequired: boolean;
+      estimatedMinutes: number;
+      name: string;
+    }
+  | {
+      kind: 'study';
+      key: string;
+      studyItem: StudyOrderItem;
+      isRequired: boolean;
+      estimatedMinutes: number;
+      name: string;
+    };
 
 type Step = 'idle' | 'timer' | 'pages';
 type TimerMode = 'remainingPages' | 'elapsedTime' | 'sessionMemo';
@@ -139,6 +161,35 @@ const calculateAmountFromEndPage = (start: number, end: number) => {
   return Number(amount.toFixed(2));
 };
 
+const calculateSpeedChangePercent = (logs: StudyLog[]) => {
+  const dailySamples = Array.from(
+    logs
+      .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
+      .reduce((map, log) => {
+        const key = getLogStudyDate(log);
+        const current = map.get(key) || { date: key, pages: 0, minutes: 0 };
+        current.pages += log.pagesRead;
+        current.minutes += log.timeSpentMinutes;
+        map.set(key, current);
+        return map;
+      }, new Map<string, { date: string; pages: number; minutes: number }>())
+      .values()
+  ).sort((a, b) => a.date.localeCompare(b.date));
+
+  if (dailySamples.length < 2) return null;
+
+  const firstDay = dailySamples[0];
+  const recentFourDays = dailySamples.slice(-4);
+  const recentPages = recentFourDays.reduce((sum, day) => sum + day.pages, 0);
+  const recentMinutes = recentFourDays.reduce((sum, day) => sum + day.minutes, 0);
+  const firstTimePerPage = firstDay.pages > 0 ? firstDay.minutes / firstDay.pages : 0;
+  const recentTimePerPage = recentPages > 0 ? recentMinutes / recentPages : 0;
+
+  return firstTimePerPage > 0 && recentTimePerPage > 0
+    ? ((firstTimePerPage / recentTimePerPage) - 1) * 100
+    : null;
+};
+
 const formatReviewRange = (log: StudyLog) => {
   if (typeof log.startPage === 'number' && typeof log.endPage === 'number') {
     return `${formatPageNumber(log.startPage)}~${formatPageNumber(log.endPage)}`;
@@ -230,14 +281,13 @@ const getSubjectStudyPlanForDate = (
   targetStudyDate: string,
   today = new Date()
 ) => {
-  const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
-  const scopedPages = logs
-    .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
-    .reduce((sum, log) => sum + log.pagesRead, 0);
-  const remainingBeforeStudyDate = remainingPages + scopedPages;
-  const diffDays = getDiffDays(subject.targetDate, today);
-  const dayTarget = getSubjectDayTarget(subject, remainingBeforeStudyDate, diffDays, targetWeekday);
-  const remainingDayPages = Math.min(remainingPages, Math.max(0, dayTarget - scopedPages));
+  const { scopedPages, remainingDayPages } = getSubjectDayRemainingPages(
+    subject,
+    logs,
+    targetWeekday,
+    targetStudyDate,
+    today
+  );
   const subjectLogs = logs.filter(log => (
     log.subjectId === subject.id
     && log.pagesRead > 0
@@ -250,8 +300,10 @@ const getSubjectStudyPlanForDate = (
 
   return {
     scopedPages,
+    carryoverPages: 0,
     remainingDayPages,
     averageTimePerPage,
+    speedChangePercent: calculateSpeedChangePercent(subjectLogs),
     estimatedMinutes
   };
 };
@@ -263,13 +315,29 @@ const buildStudyOrderForDate = (
   targetStudyDate: string
 ): StudyOrderItem[] => {
   const today = new Date();
+  const todayDateKey = getLocalDateKey(today);
   return sourceSubjects
     .filter(subject => subject.completedPages < subject.totalPages)
-    .filter(subject => normalizeWeekdays(subject.scheduledWeekdays).includes(targetWeekday))
-    .map(subject => ({
-      subject,
-      ...getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today)
-    }))
+    .map(subject => {
+      const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today);
+      const carryoverPages = getPastCarryoverPages(subject, sourceLogs, targetStudyDate, todayDateKey);
+      const remainingSubjectPages = Math.max(0, subject.totalPages - subject.completedPages);
+      const remainingDayPages = Math.min(
+        remainingSubjectPages,
+        Math.max(0, basePlan.remainingDayPages + carryoverPages)
+      );
+      const estimatedMinutes = remainingDayPages * (
+        basePlan.averageTimePerPage > 0 ? basePlan.averageTimePerPage : UNKNOWN_AVERAGE_MINUTES_PER_PAGE
+      );
+
+      return {
+        subject,
+        ...basePlan,
+        carryoverPages,
+        remainingDayPages,
+        estimatedMinutes
+      };
+    })
     .filter(item => item.remainingDayPages > 0)
     .sort((a, b) => {
       const requiredDiff = Number(Boolean(b.subject.isRequired)) - Number(Boolean(a.subject.isRequired));
@@ -296,13 +364,19 @@ const buildDueReviewGroups = (
 ): ReviewQueueGroup[] => {
   const groups = new Map<string, ReviewQueueGroup>();
 
+  const seenLogIds = new Set<string>();
+
   sourceLogs
     .filter(log => {
       const nextReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
-      return log.reviewEnabled !== false
+      const isDue = log.reviewEnabled !== false
         && !log.isCondensed
         && Number.isFinite(nextReviewTime)
         && nextReviewTime <= nowMs;
+
+      if (!isDue || seenLogIds.has(log.id)) return false;
+      seenLogIds.add(log.id);
+      return true;
     })
     .sort((a, b) => {
       const timeA = a.nextReviewDate ? new Date(a.nextReviewDate).getTime() : 0;
@@ -365,7 +439,19 @@ const formatPlanMinutes = (minutes: number) => {
   return rest > 0 ? `${hours}시간 ${rest}분` : `${hours}시간`;
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onLogSession, onReviewAction, onUpdateReviewMemo }) => {
+const formatStudySpeed = (minutesPerPage: number) => (
+  minutesPerPage > 0 ? `${minutesPerPage.toFixed(1)}분/P` : '측정 필요'
+);
+
+const formatStudyEfficiency = (minutesPerPage: number) => (
+  minutesPerPage > 0 ? `${Math.round(60 / minutesPerPage)}P/h` : '-'
+);
+
+const formatSpeedChangePercent = (percent: number) => (
+  `${percent >= 0 ? '+' : ''}${Math.round(percent)}%`
+);
+
+export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onActiveWeekdayChange, onLogSession, onUpdateSubjects, onReviewAction, onUpdateReviewMemo }) => {
   const measurableSubjects = subjects.filter(subject => subject.completedPages < subject.totalPages);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState('');
@@ -386,6 +472,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [sessionMemo, setSessionMemo] = useState('');
   const [reviewMemo, setReviewMemo] = useState('');
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
+  const [isManualPickerOpen, setIsManualPickerOpen] = useState(false);
   const [selectedSessionTimerId, setSelectedSessionTimerId] = useState('none');
   const [attackCompletedPages, setAttackCompletedPages] = useState(0);
   const [pageElapsedSeconds, setPageElapsedSeconds] = useState(0);
@@ -402,6 +489,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [preSessionReviewMode, setPreSessionReviewMode] = useState<PreSessionReviewMode>('before-study');
   const [resumeStudyTimerAfterReview, setResumeStudyTimerAfterReview] = useState(false);
   const [dismissedReviewSignature, setDismissedReviewSignature] = useState('');
+  const [handledReviewLogIds, setHandledReviewLogIds] = useState<string[]>([]);
   const [postSaveNextSubjectId, setPostSaveNextSubjectId] = useState<string | null>(null);
   const [pendingImmediateStartSubjectId, setPendingImmediateStartSubjectId] = useState<string | null>(null);
   const [selectedReviewSubjectId, setSelectedReviewSubjectId] = useState('');
@@ -428,18 +516,28 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   );
 
   const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
-  const dayPlanTotalMinutes = useMemo(
-    () => todayStudyOrder.reduce((sum, item) => sum + item.estimatedMinutes, 0),
-    [todayStudyOrder]
-  );
 
-  const dueReviewGroups = useMemo(
+  const rawDueReviewGroups = useMemo(
     () => buildDueReviewGroups(logs, subjects, nowMs),
     [logs, nowMs, subjects]
   );
 
+  const dueReviewGroups = useMemo(() => {
+    const handledIds = new Set(handledReviewLogIds);
+    return buildDueReviewGroups(
+      handledIds.size > 0
+        ? logs.filter(log => !handledIds.has(log.id))
+        : logs,
+      subjects,
+      nowMs
+    );
+  }, [handledReviewLogIds, logs, nowMs, subjects]);
+
   const selectedReviewGroup = selectedReviewSubjectId
     ? dueReviewGroups.find(group => group.subjectId === selectedReviewSubjectId)
+    : undefined;
+  const dueReviewGroupForSelectedSubject = subjectId
+    ? dueReviewGroups.find(group => group.subjectId === subjectId)
     : undefined;
 
   const todayStudyRankMap = useMemo(() => (
@@ -449,6 +547,47 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const todayStudyPlanMap = useMemo(() => (
     new Map(todayStudyOrder.map(item => [item.subject.id, item]))
   ), [todayStudyOrder]);
+
+  const runQueueItems = useMemo<StudyRunQueueItem[]>(() => {
+    const reviewItems: StudyRunQueueItem[] = dueReviewGroups.map(group => ({
+      kind: 'review',
+      key: `review-${group.subjectId}`,
+      reviewGroup: group,
+      isRequired: Boolean(group.subject?.isRequired),
+      estimatedMinutes: group.estimatedMinutes,
+      name: group.subjectName
+    }));
+
+    const studyItems: StudyRunQueueItem[] = todayStudyOrder.map(item => ({
+      kind: 'study',
+      key: `study-${item.subject.id}`,
+      studyItem: item,
+      isRequired: Boolean(item.subject.isRequired),
+      estimatedMinutes: item.estimatedMinutes,
+      name: item.subject.name
+    }));
+
+    return [...reviewItems, ...studyItems].sort((a, b) => {
+      const reviewDiff = Number(a.kind !== 'review') - Number(b.kind !== 'review');
+      if (reviewDiff !== 0) return reviewDiff;
+
+      const requiredDiff = Number(b.isRequired) - Number(a.isRequired);
+      if (requiredDiff !== 0) return requiredDiff;
+
+      const timeDiff = a.estimatedMinutes - b.estimatedMinutes;
+      if (timeDiff !== 0) return timeDiff;
+
+      return a.name.localeCompare(b.name, 'ko');
+    });
+  }, [dueReviewGroups, todayStudyOrder]);
+
+  const runQueueTotalMinutes = useMemo(
+    () => runQueueItems.reduce((sum, item) => sum + item.estimatedMinutes, 0),
+    [runQueueItems]
+  );
+
+  const runQueueReviewCount = runQueueItems.filter(item => item.kind === 'review').length;
+  const runQueueStudyCount = runQueueItems.filter(item => item.kind === 'study').length;
 
   const orderedMeasurableSubjects = useMemo(() => {
     const activeWeekdaySubjects = measurableSubjects.filter(subject => (
@@ -469,7 +608,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     });
   }, [activeWeekday, measurableSubjects, todayStudyRankMap]);
 
-  const recommendedTodayStudy = todayStudyOrder[0] || null;
+  const recommendedTodayStudy = runQueueItems.find(item => item.kind === 'study')?.studyItem || null;
   const postSaveNextSubject = postSaveNextSubjectId
     ? subjects.find(subject => subject.id === postSaveNextSubjectId)
     : undefined;
@@ -517,33 +656,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const recommendedDailyPages = useMemo(() => {
     if (!selectedSubject) return 0;
+    const selectedPlan = todayStudyPlanMap.get(selectedSubject.id);
+    if (selectedPlan) return selectedPlan.remainingDayPages;
+
     const today = new Date();
     const remainingBeforeActiveDay = remainingSubjectPages + activeDaySubjectPages;
     const diffDays = getDiffDays(selectedSubject.targetDate, today);
     const dayTarget = getSubjectDayTarget(selectedSubject, remainingBeforeActiveDay, diffDays, activeWeekday);
     return Math.min(remainingSubjectPages, Math.max(0, dayTarget - activeDaySubjectPages));
-  }, [activeDaySubjectPages, activeWeekday, selectedSubject, remainingSubjectPages]);
+  }, [activeDaySubjectPages, activeWeekday, selectedSubject, remainingSubjectPages, todayStudyPlanMap]);
 
   const overallAverage = useMemo(
     () => calculateRecentCompletedDayAverage(selectedSubjectLogs, recommendedDailyPages).averageTimePerPage,
     [selectedSubjectLogs, recommendedDailyPages]
   );
-
-  const dueReviewLogsForSelectedSubject = useMemo(() => {
-    if (!subjectId || isSubjectReviewDisabled) return [];
-    const now = Date.now();
-    return logs
-      .filter(log => {
-        if (log.subjectId !== subjectId || log.isCondensed || log.reviewEnabled === false || !log.nextReviewDate) return false;
-        const reviewTime = new Date(log.nextReviewDate).getTime();
-        return Number.isFinite(reviewTime) && reviewTime <= now;
-      })
-      .sort((a, b) => {
-        const timeA = a.nextReviewDate ? new Date(a.nextReviewDate).getTime() : 0;
-        const timeB = b.nextReviewDate ? new Date(b.nextReviewDate).getTime() : 0;
-        return timeA - timeB;
-      });
-  }, [logs, subjectId, isSubjectReviewDisabled]);
 
   const averageTimePerPage = overallAverage;
 
@@ -585,6 +711,17 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (handledReviewLogIds.length === 0) return;
+
+    const stillDueIds = new Set(rawDueReviewGroups.flatMap(group => group.logs.map(log => log.id)));
+    const nextHandledIds = handledReviewLogIds.filter(id => stillDueIds.has(id));
+
+    if (nextHandledIds.length !== handledReviewLogIds.length) {
+      setHandledReviewLogIds(nextHandledIds);
+    }
+  }, [handledReviewLogIds, rawDueReviewGroups]);
 
   useEffect(() => {
     selectedSessionTimerIdRef.current = selectedSessionTimerId;
@@ -743,29 +880,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [orderedMeasurableSubjects, subjectId]);
 
   useEffect(() => {
-    if (step !== 'idle') return;
-
-    if (dueReviewGroups.length === 0) {
-      if (selectedReviewSubjectId) setSelectedReviewSubjectId('');
-      return;
-    }
-
-    if (subjectId || pendingImmediateStartSubjectId) return;
-
-    if (!selectedReviewSubjectId || !dueReviewGroups.some(group => group.subjectId === selectedReviewSubjectId)) {
-      setSelectedReviewSubjectId(dueReviewGroups[0].subjectId);
-      setFolderPathIds([]);
-      setSubjectId('');
-    }
-  }, [dueReviewGroups, pendingImmediateStartSubjectId, selectedReviewSubjectId, step, subjectId]);
-
-  useEffect(() => {
     if (step !== 'idle' || !subjectId) return;
 
     const stillHasScheduledWork = todayStudyOrder.some(item => item.subject.id === subjectId);
     if (stillHasScheduledWork) return;
 
-    const nextStudy = todayStudyOrder[0];
+    const nextStudy = recommendedTodayStudy;
     if (nextStudy) {
       selectSubjectForMeasurement(nextStudy.subject);
       return;
@@ -773,7 +893,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     setFolderPathIds([]);
     setSubjectId('');
-  }, [step, subjectId, todayStudyOrder, tagDefinitions]);
+  }, [step, subjectId, todayStudyOrder, recommendedTodayStudy, tagDefinitions]);
 
   useEffect(() => {
     if (step !== 'idle') return;
@@ -789,6 +909,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSelectedReviewSubjectId('');
     setFolderPathIds([]);
     setSubjectId('');
+    setHandledReviewLogIds([]);
     setPendingAutoAdvanceLogId(null);
   }, [activeStudyDate, activeWeekday]);
 
@@ -1015,6 +1136,45 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setIsPreSessionReviewRunning(true);
   };
 
+  const startStudyOrderItem = (item: StudyOrderItem) => {
+    selectSubjectForMeasurement(item.subject);
+    setPlannedPageCount(Math.max(1, item.remainingDayPages || 1));
+    setPostSaveNextSubjectId(null);
+
+    const reviewGroup = dueReviewGroups.find(group => group.subjectId === item.subject.id);
+    if (reviewGroup) {
+      openPreSessionReview(reviewGroup, 'before-study');
+      return;
+    }
+
+    setPendingImmediateStartSubjectId(item.subject.id);
+  };
+
+  const startReviewGroup = (group: ReviewQueueGroup) => {
+    setSelectedReviewSubjectId(group.subjectId);
+    setSubjectId('');
+    setFolderPathIds([]);
+    setPostSaveNextSubjectId(null);
+    openPreSessionReview(group, 'before-study');
+  };
+
+  const handleRefreshStudyPlans = () => {
+    if (!onUpdateSubjects) return;
+
+    const resetDateKey = getLocalDateKey();
+    const updatedSubjects = subjects.map(subject => ({
+      ...subject,
+      planResetDate: resetDateKey,
+      scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+        subject,
+        Math.max(0, subject.totalPages - subject.completedPages),
+        getDiffDays(subject.targetDate)
+      )
+    }));
+
+    onUpdateSubjects(updatedSubjects);
+  };
+
   const handleStartMeasurement = () => {
     if (selectedReviewGroup) {
       openPreSessionReview(selectedReviewGroup, 'before-study');
@@ -1026,8 +1186,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       return;
     }
 
-    if (dueReviewGroups.length > 0) {
-      openPreSessionReview(dueReviewGroups[0], 'before-study');
+    if (dueReviewGroupForSelectedSubject) {
+      openPreSessionReview(dueReviewGroupForSelectedSubject, 'before-study');
       return;
     }
 
@@ -1041,38 +1201,34 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const finishPreSessionReview = () => {
     if (preSessionReviewLogs.length === 0) return;
-    const finishedIds = new Set(preSessionReviewLogs.map(log => log.id));
-    const nextReviewGroup = dueReviewGroups.find(group => (
-      group.logs.every(log => !finishedIds.has(log.id))
-    ));
+    const finishedLogIds = preSessionReviewLogs.map(log => log.id);
     const shouldStartStudyAfterReview = preSessionReviewMode === 'before-study' && subjectId;
     const shouldResumeTimer = preSessionReviewMode === 'interrupt' && resumeStudyTimerAfterReview;
 
-    onReviewAction(preSessionReviewLogs.map(log => log.id), 'complete');
+    setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...finishedLogIds])));
+    onReviewAction(finishedLogIds, 'complete');
     clearPreSessionReview();
 
-    if (nextReviewGroup) {
-      setSelectedReviewSubjectId(nextReviewGroup.subjectId);
-      setSubjectId('');
-      setFolderPathIds([]);
-      openPreSessionReview(nextReviewGroup, preSessionReviewMode);
-      return;
-    }
-
     if (shouldStartStudyAfterReview) {
+      setSelectedReviewSubjectId('');
       startMeasurementNow();
       return;
     }
 
     setSelectedReviewSubjectId('');
+    if (shouldResumeTimer) {
+      setIsTimerRunning(true);
+      return;
+    }
+
     setFolderPathIds([]);
     setSubjectId('');
-    if (shouldResumeTimer) setIsTimerRunning(true);
   };
 
   const condenseFirstPreSessionReview = () => {
     if (preSessionReviewLogs.length === 0) return;
     const [firstLog, ...remainingLogs] = preSessionReviewLogs;
+    setHandledReviewLogIds(prev => Array.from(new Set([...prev, firstLog.id])));
     onReviewAction([firstLog.id], 'condense');
     setPreSessionReviewLogs(remainingLogs);
     setPreSessionReviewDrafts(prev => {
@@ -1081,16 +1237,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       return next;
     });
     if (remainingLogs.length === 0) {
-      const condensedIds = new Set([firstLog.id]);
-      const nextReviewGroup = dueReviewGroups.find(group => (
-        group.logs.every(log => !condensedIds.has(log.id))
-      ));
-
-      if (nextReviewGroup) {
-        openPreSessionReview(nextReviewGroup, preSessionReviewMode);
-        return;
-      }
-
       clearPreSessionReview();
     }
   };
@@ -1113,28 +1259,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   useEffect(() => {
-    if (step !== 'timer' || preSessionReviewLogs.length > 0 || dueReviewGroups.length === 0) return;
-
-    const nextReviewGroup = dueReviewGroups[0];
-    const signature = getReviewGroupSignature(nextReviewGroup.logs);
-    if (signature && signature === dismissedReviewSignature) return;
-
-    setResumeStudyTimerAfterReview(isTimerRunning);
-    setIsTimerRunning(false);
-    openPreSessionReview(nextReviewGroup, 'interrupt');
-  }, [dismissedReviewSignature, dueReviewGroups, isTimerRunning, preSessionReviewLogs.length, step]);
-
-  useEffect(() => {
     if (step !== 'idle' || !pendingImmediateStartSubjectId || subjectId !== pendingImmediateStartSubjectId) return;
 
     setPendingImmediateStartSubjectId(null);
-    if (dueReviewGroups.length > 0) {
-      openPreSessionReview(dueReviewGroups[0], 'before-study');
-      return;
-    }
-
     startMeasurementNow();
-  }, [dueReviewGroups, pendingImmediateStartSubjectId, step, subjectId]);
+  }, [pendingImmediateStartSubjectId, step, subjectId]);
 
   const handleTimerComplete = () => {
     if (startTimeRef.current !== null) {
@@ -1312,49 +1441,188 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     </div>
   ) : null;
 
-  const renderDayPlanSummary = () => (
+  const renderStudyRunBoard = () => (
     <div className="rounded-[2rem] border border-indigo-100 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">{activeWeekdayLabel}요일 계획</p>
-          <h3 className="text-base font-black text-slate-900">과목별 권장량</h3>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="mt-1 text-lg font-black text-slate-900">{activeWeekdayLabel}요일 할 일</h3>
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black">
+            <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-500">복습 {runQueueReviewCount}개</span>
+            <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-indigo-500">학습 {runQueueStudyCount}개</span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-400">중요도순</span>
+          </div>
         </div>
-        <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
-          <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총</p>
-          <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(dayPlanTotalMinutes)}</p>
+        <div className="flex shrink-0 items-stretch gap-2">
+          <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
+            <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총 예상</p>
+            <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(runQueueTotalMinutes)}</p>
+          </div>
         </div>
       </div>
 
-      <div className="grid max-h-44 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-        {todayStudyOrder.length > 0 ? todayStudyOrder.map((item, index) => (
-          <button
-            key={item.subject.id}
-            type="button"
-            onClick={() => selectSubjectForMeasurement(item.subject)}
-            className={`rounded-2xl border px-3 py-2 text-left transition-all ${
-              subjectId === item.subject.id
-                ? 'border-indigo-300 bg-indigo-50'
-                : 'border-slate-100 bg-slate-50 hover:border-indigo-100 hover:bg-indigo-50/60'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm font-black text-slate-800">
-                {index + 1}. {item.subject.isRequired ? '필수 · ' : ''}{item.subject.name}
-              </span>
-              <span className="shrink-0 rounded-xl bg-white px-2 py-1 text-xs font-black text-indigo-600">
-                {formatPageNumber(item.remainingDayPages)}P
-              </span>
-            </div>
-            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-slate-400">
-              <span>{formatPlanMinutes(item.estimatedMinutes)}</span>
-              <span>완료 {formatPageNumber(item.scopedPages)}P</span>
-            </div>
-          </button>
-        )) : (
-          <div className="rounded-2xl bg-slate-50 px-4 py-4 text-center text-xs font-bold text-slate-400 sm:col-span-2">
-            이 요일에 남은 권장 학습이 없습니다.
+      <div className="mb-4 grid grid-cols-4 gap-1.5 sm:grid-cols-7">
+        {WEEKDAYS.map(day => {
+          const isActive = activeWeekday === day.id;
+          return (
+            <button
+              key={day.id}
+              type="button"
+              onClick={() => {
+                onActiveWeekdayChange(day.id);
+                setSelectedReviewSubjectId('');
+                setSubjectId('');
+                setFolderPathIds([]);
+              }}
+              className={`rounded-xl py-2 text-sm font-black transition-all ${
+                isActive
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+              }`}
+            >
+              {day.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+        {runQueueItems.map((queueItem, index) => {
+          if (queueItem.kind === 'review') {
+            const group = queueItem.reviewGroup;
+            return (
+              <button
+                key={queueItem.key}
+                type="button"
+                onClick={() => startReviewGroup(group)}
+                className="w-full rounded-[1.75rem] border-2 border-rose-200 bg-rose-50/80 p-5 text-left transition-all hover:border-rose-400 hover:bg-rose-50"
+              >
+                <div className="flex gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-sm font-black text-rose-500">
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-rose-500">복습</span>
+                      {queueItem.isRequired && (
+                        <span className="rounded-lg bg-rose-100 px-2 py-1 text-[10px] font-black text-rose-600">필수</span>
+                      )}
+                    </div>
+                    <h4 className="mt-2 truncate text-lg font-black text-slate-900">{group.subjectName}</h4>
+                    <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+                      <div className="rounded-2xl bg-white px-3 py-3">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-rose-300">범위</p>
+                        <p className="mt-0.5 truncate text-sm font-black text-rose-600">
+                          {formatMergedReviewRanges(group.logs)}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl bg-white px-3 py-3 text-right">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-rose-300">시간</p>
+                        <p className="mt-0.5 text-sm font-black text-slate-800">{formatPlanMinutes(group.estimatedMinutes)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </button>
+            );
+          }
+
+          const item = queueItem.studyItem;
+          return (
+            <button
+              key={queueItem.key}
+              type="button"
+              onClick={() => startStudyOrderItem(item)}
+              className={`w-full rounded-[1.75rem] border p-5 text-left transition-all ${
+                subjectId === item.subject.id
+                  ? 'border-indigo-300 bg-indigo-50'
+                  : 'border-slate-100 bg-slate-50 hover:border-indigo-200 hover:bg-indigo-50/70'
+              }`}
+            >
+              <div className="flex gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-sm font-black text-indigo-500">
+                  {index + 1}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-indigo-500">학습</span>
+                        {item.subject.isRequired && (
+                          <span className="rounded-lg bg-indigo-100 px-2 py-1 text-[10px] font-black text-indigo-600">필수</span>
+                        )}
+                        {item.carryoverPages > 0 && (
+                          <span className="rounded-lg bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-600">이월 {formatPageNumber(item.carryoverPages)}P</span>
+                        )}
+                      </div>
+                      <h4 className="mt-2 truncate text-lg font-black text-slate-900">{item.subject.name}</h4>
+                    </div>
+                    <span className="shrink-0 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white">
+                      시작
+                    </span>
+                  </div>
+
+                  <div className={`mt-4 grid gap-2 ${item.speedChangePercent !== null ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
+                    <div className="rounded-2xl bg-white px-3 py-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">권장</p>
+                      <p className="mt-0.5 text-xl font-black leading-none text-indigo-600">
+                        {formatPageNumber(item.remainingDayPages)}P
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-white px-3 py-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">필요</p>
+                      <p className="mt-0.5 text-xl font-black leading-none text-slate-800">
+                        {formatPlanMinutes(item.estimatedMinutes)}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-white px-3 py-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">시작</p>
+                      <p className="mt-0.5 text-xl font-black leading-none text-slate-800">
+                        p.{formatPageNumber(item.subject.completedPages + 1)}
+                      </p>
+                    </div>
+                    {item.speedChangePercent !== null && (
+                      <div className={`rounded-2xl px-3 py-3 ${
+                        item.speedChangePercent >= 0 ? 'bg-emerald-50' : 'bg-rose-50'
+                      }`}>
+                        <p className={`text-[9px] font-black uppercase tracking-widest ${
+                          item.speedChangePercent >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                        }`}>
+                          {item.speedChangePercent >= 0 ? '속도증가' : '속도변화'}
+                        </p>
+                        <p className={`mt-0.5 text-2xl font-black leading-none ${
+                          item.speedChangePercent >= 0 ? 'text-emerald-600' : 'text-rose-500'
+                        }`}>
+                          {formatSpeedChangePercent(item.speedChangePercent)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] font-black">
+                    <span className="rounded-lg bg-white px-2 py-1 text-emerald-600">속도 {formatStudySpeed(item.averageTimePerPage)}</span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-blue-500">효율 {formatStudyEfficiency(item.averageTimePerPage)}</span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+
+        {runQueueItems.length === 0 && (
+          <div className="rounded-2xl bg-slate-50 px-4 py-6 text-center text-xs font-bold text-slate-400">
+            이 요일에 바로 실행할 학습이 없습니다.
           </div>
         )}
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={handleRefreshStudyPlans}
+          className="rounded-xl bg-slate-100 px-3 py-2 text-[10px] font-black text-slate-400 transition-all hover:bg-amber-50 hover:text-amber-600"
+        >
+          계획 갱신
+        </button>
       </div>
     </div>
   );
@@ -1363,12 +1631,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return (
       <div className="animate-fade-in">
         {renderPreSessionReviewOverlay()}
-        <h2 className="mb-5 flex items-center gap-2 text-xl font-black text-slate-800">
-          <span className="h-5 w-2 rounded-full bg-indigo-500"></span>
-          학습 세션 시작
-        </h2>
         <div className="mx-auto max-w-2xl space-y-4">
-          {renderDayPlanSummary()}
+          {renderStudyRunBoard()}
           {postSaveNextSubject && (
             <div className="rounded-[1.75rem] border border-emerald-100 bg-emerald-50 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
@@ -1398,118 +1662,129 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               </div>
             </div>
           )}
-          <div className="rounded-[2rem] border border-slate-100 bg-slate-50 p-5">
-            <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">측정할 과목 선택</label>
-            <div className="rounded-3xl border border-slate-200 bg-white p-3">
-              <div className="space-y-3">
-                {selectionLevels.map(level => {
-                  const selectedFolder = folderPathIds[level.index];
-                  const parentMatchesSelectedSubject = selectedSubject && (
-                    level.parentId
-                      ? selectedSubject.tagIds?.includes(level.parentId)
-                      : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
-                  );
-                  const value = selectedFolder
-                    ? `folder:${selectedFolder}`
-                    : level.index === 0 && selectedReviewGroup
-                      ? `review:${selectedReviewGroup.subjectId}`
-                      : parentMatchesSelectedSubject
-                      ? `subject:${selectedSubject.id}`
-                      : '';
-
-                  return (
-                    <select
-                      key={`${level.parentId || 'root'}-${level.index}`}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-lg font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10"
-                      value={value}
-                      onChange={e => handleFolderSelectionChange(level.index, e.target.value)}
-                    >
-                      <option value="">{level.index === 0 ? '최상위 선택' : '하위 항목 선택'}</option>
-                      {level.index === 0 && dueReviewGroups.map(group => (
-                        <option key={`review:${group.subjectId}`} value={`review:${group.subjectId}`}>
-                          복습 · {group.subjectName} · {group.logs.length}개 · {formatMergedReviewRanges(group.logs)}
-                        </option>
-                      ))}
-                      {level.index === 0 && dueReviewGroups.length > 0 && (level.folders.length > 0 || level.subjects.length > 0) && (
-                        <option disabled value="review-divider">──────── 학습 과목 ────────</option>
-                      )}
-                      {level.folders.map(folder => (
-                        <option key={folder.id} value={`folder:${folder.id}`}>폴더 {folder.name}</option>
-                      ))}
-                      {level.subjects.map(subject => (
-                        <option key={subject.id} value={`subject:${subject.id}`}>
-                          {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P
-                        </option>
-                      ))}
-                    </select>
-                  );
-                })}
-                {selectionLevels.length === 0 && (
-                <div className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-400">측정할 과목이 없어요.</div>
-              )}
-              </div>
-            </div>
-            <select
-              className="hidden"
-              value={subjectId}
-              onChange={e => setSubjectId(e.target.value)}
+          <div className="rounded-[2rem] border border-slate-100 bg-white p-3 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setIsManualPickerOpen(prev => !prev)}
+              className="flex w-full items-center justify-between rounded-[1.5rem] bg-slate-50 px-4 py-3 text-left transition-all hover:bg-indigo-50"
             >
-              <option value="">과목을 선택하세요...</option>
-              {orderedMeasurableSubjects.map(subject => (
-                <option key={subject.id} value={subject.id}>{subject.name}</option>
-              ))}
-            </select>
-            {!selectedReviewGroup && (
-              <>
-                <div className="mt-5 border-t border-slate-200 pt-5">
-                  <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">권장 장수</label>
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    value={plannedPageCount}
-                    onChange={e => setPlannedPageCount(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-center text-2xl font-black text-indigo-900 outline-none transition-all focus:ring-4 focus:ring-indigo-500/10"
-                  />
-                  <p className="mt-3 px-1 text-[10px] font-bold leading-relaxed text-slate-400">
-                    선택한 탭 기준으로 자동 입력됩니다. 필요하면 직접 바꿀 수 있어요.
-                  </p>
-                </div>
-                <div className="mt-5 border-t border-slate-200 pt-5">
-                  <div className="mb-3 flex items-center justify-between">
-                    <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">세션 메모</label>
-                    <button
-                      type="button"
-                      onClick={toggleMemoCollapsed}
-                      className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform"
-                      title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
-                    >
-                      <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
-                    </button>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">직접 선택</p>
+              </div>
+              <span className={`text-2xl font-black text-indigo-500 transition-transform ${isManualPickerOpen ? 'rotate-90' : ''}`}>›</span>
+            </button>
+
+            {isManualPickerOpen && (
+              <div className="mt-3 rounded-[1.5rem] bg-slate-50 p-4">
+                <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">측정할 과목 선택</label>
+                <div className="rounded-3xl border border-slate-200 bg-white p-3">
+                  <div className="space-y-3">
+                    {selectionLevels.map(level => {
+                      const selectedFolder = folderPathIds[level.index];
+                      const parentMatchesSelectedSubject = selectedSubject && (
+                        level.parentId
+                          ? selectedSubject.tagIds?.includes(level.parentId)
+                          : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
+                      );
+                      const value = selectedFolder
+                        ? `folder:${selectedFolder}`
+                        : level.index === 0 && selectedReviewGroup
+                          ? `review:${selectedReviewGroup.subjectId}`
+                          : parentMatchesSelectedSubject
+                          ? `subject:${selectedSubject.id}`
+                          : '';
+
+                      return (
+                        <select
+                          key={`${level.parentId || 'root'}-${level.index}`}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-base font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10"
+                          value={value}
+                          onChange={e => handleFolderSelectionChange(level.index, e.target.value)}
+                        >
+                          <option value="">{level.index === 0 ? '최상위 선택' : '하위 항목 선택'}</option>
+                          {level.index === 0 && dueReviewGroups.map(group => (
+                            <option key={`review:${group.subjectId}`} value={`review:${group.subjectId}`}>
+                              복습 · {group.subjectName} · {group.logs.length}개 · {formatMergedReviewRanges(group.logs)}
+                            </option>
+                          ))}
+                          {level.index === 0 && dueReviewGroups.length > 0 && (level.folders.length > 0 || level.subjects.length > 0) && (
+                            <option disabled value="review-divider">──────── 학습 과목 ────────</option>
+                          )}
+                          {level.folders.map(folder => (
+                            <option key={folder.id} value={`folder:${folder.id}`}>폴더 {folder.name}</option>
+                          ))}
+                          {level.subjects.map(subject => (
+                            <option key={subject.id} value={`subject:${subject.id}`}>
+                              {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })}
+                    {selectionLevels.length === 0 && (
+                      <div className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-400">측정할 과목이 없어요.</div>
+                    )}
                   </div>
-                  {!isMemoCollapsed && (
-                    <>
-                      <textarea
-                        value={sessionMemo}
-                        onChange={e => handleMemoChange(e.target.value)}
-                        placeholder="이번 과목에서 기억할 것, 풀이 전략, 다음에 볼 내용..."
-                        className={`h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 ${getMemoTextSize(sessionMemo)}`}
-                      />
-                      <p className="mt-2 px-1 text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
-                    </>
-                  )}
                 </div>
-              </>
+                <select
+                  className="hidden"
+                  value={subjectId}
+                  onChange={e => setSubjectId(e.target.value)}
+                >
+                  <option value="">과목을 선택하세요...</option>
+                  {orderedMeasurableSubjects.map(subject => (
+                    <option key={subject.id} value={subject.id}>{subject.name}</option>
+                  ))}
+                </select>
+                {!selectedReviewGroup && (
+                  <>
+                    <div className="mt-5 border-t border-slate-200 pt-5">
+                      <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">권장 장수</label>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={plannedPageCount}
+                        onChange={e => setPlannedPageCount(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-center text-2xl font-black text-indigo-900 outline-none transition-all focus:ring-4 focus:ring-indigo-500/10"
+                      />
+                    </div>
+                    <div className="mt-5 border-t border-slate-200 pt-5">
+                      <div className="mb-3 flex items-center justify-between">
+                        <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">세션 메모</label>
+                        <button
+                          type="button"
+                          onClick={toggleMemoCollapsed}
+                          className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform"
+                          title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
+                        >
+                          <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
+                        </button>
+                      </div>
+                      {!isMemoCollapsed && (
+                        <>
+                          <textarea
+                            value={sessionMemo}
+                            onChange={e => handleMemoChange(e.target.value)}
+                            placeholder="세션 메모"
+                            className={`h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 ${getMemoTextSize(sessionMemo)}`}
+                          />
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={handleStartMeasurement}
+                  disabled={!selectedReviewGroup && !subjectId}
+                  className="mt-5 flex w-full items-center justify-center gap-3 rounded-2xl bg-indigo-600 py-5 text-lg font-black text-white shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 disabled:shadow-none disabled:hover:bg-slate-300 group"
+                >
+                  <span className="text-2xl transition-transform group-hover:rotate-12">⏱️</span>
+                  {selectedReviewGroup ? '복습 시작' : subjectId ? '측정 엔진 가동' : '과목 없음'}
+                </button>
+              </div>
             )}
           </div>
-          <button
-            onClick={handleStartMeasurement}
-            disabled={!selectedReviewGroup && !subjectId}
-            className="w-full py-5 bg-indigo-600 disabled:bg-slate-300 disabled:shadow-none text-white rounded-2xl font-black text-lg hover:bg-indigo-700 disabled:hover:bg-slate-300 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 group"
-          >
-            <span className="text-2xl group-hover:rotate-12 transition-transform">⏱️</span>
-            {selectedReviewGroup ? '복습 시작' : subjectId ? '측정 엔진 가동' : '과목 없음'}
-          </button>
         </div>
       </div>
     );

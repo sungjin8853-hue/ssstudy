@@ -9,6 +9,8 @@ export interface TagDefinition {
 export interface Subject {
   id: string;
   name: string;
+  createdAt?: string;
+  planResetDate?: string;
   totalPages: number;
   completedPages: number;
   targetDate: string;

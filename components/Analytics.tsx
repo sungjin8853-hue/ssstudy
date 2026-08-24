@@ -2,9 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats } from '../utils/math';
 import {
+  calculateFreshWeekdayPagePlan,
   calculateWeeklyRequiredPages,
   distributePagesByWeekdayWeights,
   getDiffDays,
+  getLocalDateKey,
+  getPastCarryoverPages,
   getWeekdayPagePlan,
   getLogStudyDate,
   normalizeWeekdayWeights,
@@ -188,13 +191,24 @@ export const Analytics: React.FC<Props> = ({
     const scheduledWeekdayWeights = normalizeWeekdayWeights(undefined, scheduledWeekdays);
     const scheduledWeekdayRemainderDay = scheduledWeekdays[scheduledWeekdays.length - 1];
 
-    const updatedSubjects = getSubjectsInFolder(folderId).map(subject => ({
+    const updatedSubjects = getSubjectsInFolder(folderId).map(subject => {
+      const nextSubject = {
         ...subject,
         scheduledWeekdays,
         scheduledWeekdayWeights,
         scheduledWeekdayRemainderDay,
         scheduledWeekdayPages: undefined
-      }));
+      };
+
+      return {
+        ...nextSubject,
+        scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+          nextSubject,
+          Math.max(0, nextSubject.totalPages - nextSubject.completedPages),
+          getDiffDays(nextSubject.targetDate)
+        )
+      };
+    });
 
     if (onUpdateSubjects) {
       onUpdateSubjects(updatedSubjects);
@@ -234,6 +248,8 @@ export const Analytics: React.FC<Props> = ({
   };
 
   const allSubjectStats = useMemo(() => {
+    const todayDateKey = getLocalDateKey();
+
     return subjects.map(sub => {
       const subLogs = logs.filter(l => l.subjectId === sub.id);
       const remaining = Math.max(0, sub.totalPages - sub.completedPages);
@@ -245,9 +261,11 @@ export const Analytics: React.FC<Props> = ({
       const scheduledWeekdays = normalizeWeekdays(sub.scheduledWeekdays);
       const weeklyRequiredPages = calculateWeeklyRequiredPages(planningRemaining, diffDays);
       const weekdayPagePlan = getWeekdayPagePlan(sub, planningRemaining, diffDays);
+      const carryoverPages = getPastCarryoverPages(sub, logs, activeStudyDate, todayDateKey);
       const recommendedDailyPages = Math.min(
         remaining,
         Math.max(0, (weekdayPagePlan[activeWeekday] || 0) - activeDayCompletedPages)
+        + carryoverPages
       );
       const stats = calculateStats(subLogs, remaining, recommendedDailyPages);
       const speedChange = calculateFourDaySpeedChange(subLogs);
@@ -260,6 +278,7 @@ export const Analytics: React.FC<Props> = ({
         remainingPages: remaining,
         weeklyRequiredPages,
         weekdayPagePlan,
+        carryoverPages,
         recommendedDailyPages,
         dailyTimeNeeded: recommendedDailyPages * stats.averageTimePerPage,
         totalTimeSpent: stats.totalTimeSpent,
@@ -268,8 +287,10 @@ export const Analytics: React.FC<Props> = ({
     });
   }, [subjects, logs, activeWeekday, activeStudyDate]);
 
-  const subjectMatchesWeekdayView = (subject: { scheduledWeekdays?: number[] }) => (
-    showAllWeekdays || normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
+  const subjectMatchesWeekdayView = (subject: { scheduledWeekdays?: number[]; carryoverPages?: number }) => (
+    showAllWeekdays
+    || normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
+    || (subject.carryoverPages || 0) > 0
   );
 
   const getDisplayRecommendedPages = (subject: { weeklyRequiredPages: number; recommendedDailyPages: number }) => (
@@ -638,6 +659,9 @@ export const Analytics: React.FC<Props> = ({
                             <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
                           )}
                           <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                          {sub.carryoverPages > 0 && (
+                            <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-100 text-amber-600">이월 {sub.carryoverPages}P</span>
+                          )}
                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
                         </div>
                     )}
@@ -650,7 +674,7 @@ export const Analytics: React.FC<Props> = ({
                             e.preventDefault();
                             e.stopPropagation(); 
                             if (onUpdateSubject && editForm) {
-                                onUpdateSubject({ 
+                                const updatedSubject: Subject = {
                                     ...sub,
                                     name: editForm.name, 
                                     totalPages: Number(editForm.totalPages),
@@ -661,6 +685,14 @@ export const Analytics: React.FC<Props> = ({
                                     scheduledWeekdayWeights: normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays),
                                     scheduledWeekdayRemainderDay: editForm.scheduledWeekdayRemainderDay,
                                     scheduledWeekdayPages: undefined
+                                };
+                                onUpdateSubject({
+                                    ...updatedSubject,
+                                    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+                                        updatedSubject,
+                                        Math.max(0, updatedSubject.totalPages - updatedSubject.completedPages),
+                                        getDiffDays(updatedSubject.targetDate)
+                                    )
                                 });
                             }
                             setEditingId(null);

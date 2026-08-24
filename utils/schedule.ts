@@ -99,17 +99,22 @@ export const distributePagesByWeekdayWeights = (
   return plan;
 };
 
-export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
+export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
   const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
   const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, diffDays);
-  const weightPlan = distributePagesByWeekdayWeights(
+  return distributePagesByWeekdayWeights(
     weeklyRequiredPages,
     selectedDays,
     subject.scheduledWeekdayWeights,
     subject.scheduledWeekdayRemainderDay
   );
+};
+
+export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
+  const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
+  const weightPlan = calculateFreshWeekdayPagePlan(subject, remainingPages, diffDays);
   const storedPlan = subject.scheduledWeekdayPages || {};
-  const hasLegacyStoredPlan = !subject.scheduledWeekdayWeights && Object.keys(storedPlan).length > 0;
+  const hasStoredPlan = Object.keys(storedPlan).length > 0;
   const plan: Record<string, number> = {};
 
   WEEKDAYS.forEach(day => {
@@ -119,7 +124,7 @@ export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, dif
     }
 
     const storedValue = Number(storedPlan[day.id]);
-    plan[day.id] = hasLegacyStoredPlan && Number.isFinite(storedValue)
+    plan[day.id] = hasStoredPlan && Number.isFinite(storedValue)
       ? Math.max(0, Math.round(storedValue))
       : weightPlan[day.id] || 0;
   });
@@ -138,4 +143,84 @@ export const cleanWeekdayPagePlan = (plan: Record<string, number>, days?: number
 export const getSubjectDayTarget = (subject: Subject, remainingPages: number, diffDays: number, dayId: number) => {
   const plan = getWeekdayPagePlan(subject, remainingPages, diffDays);
   return Math.min(Math.max(0, Math.ceil(remainingPages)), Math.max(0, plan[dayId] || 0));
+};
+
+export const parseStudyDate = (dateKey: string) => {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(year, month - 1, day);
+};
+
+export const getSubjectPlanStartDateKey = (
+  subject: Subject,
+  logs: StudyLog[],
+  fallbackDateKey: string
+) => {
+  if (subject.planResetDate) return subject.planResetDate;
+
+  if (subject.createdAt) {
+    const createdAt = new Date(subject.createdAt);
+    if (Number.isFinite(createdAt.getTime())) return getLocalDateKey(createdAt);
+  }
+
+  return logs
+    .filter(log => log.subjectId === subject.id)
+    .map(getLogStudyDate)
+    .sort()[0] || fallbackDateKey;
+};
+
+export const getSubjectDayRemainingPages = (
+  subject: Subject,
+  logs: StudyLog[],
+  targetWeekday: number,
+  targetStudyDate: string,
+  today = new Date()
+) => {
+  const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
+  const scopedPages = logs
+    .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
+    .reduce((sum, log) => sum + log.pagesRead, 0);
+  const remainingBeforeStudyDate = remainingPages + scopedPages;
+  const diffDays = getDiffDays(subject.targetDate, today);
+  const dayTarget = getSubjectDayTarget(subject, remainingBeforeStudyDate, diffDays, targetWeekday);
+  const remainingDayPages = Math.min(remainingPages, Math.max(0, dayTarget - scopedPages));
+
+  return {
+    scopedPages,
+    remainingDayPages
+  };
+};
+
+export const getPastCarryoverPages = (
+  subject: Subject,
+  logs: StudyLog[],
+  targetStudyDate: string,
+  todayDateKey = getLocalDateKey()
+) => {
+  const selectedWeekdays = normalizeWeekdays(subject.scheduledWeekdays);
+  const startDateKey = getSubjectPlanStartDateKey(subject, logs, targetStudyDate);
+  const carryoverCutoffDateKey = targetStudyDate < todayDateKey ? targetStudyDate : todayDateKey;
+  const targetDate = parseStudyDate(carryoverCutoffDateKey);
+  const cursor = parseStudyDate(startDateKey);
+  let carryoverPages = 0;
+  let guard = 0;
+
+  while (cursor < targetDate && guard < 3650) {
+    const cursorDateKey = getLocalDateKey(cursor);
+    const cursorWeekday = cursor.getDay();
+
+    if (selectedWeekdays.includes(cursorWeekday)) {
+      carryoverPages += getSubjectDayRemainingPages(
+        subject,
+        logs,
+        cursorWeekday,
+        cursorDateKey,
+        new Date(cursor)
+      ).remainingDayPages;
+    }
+
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+
+  return carryoverPages;
 };
