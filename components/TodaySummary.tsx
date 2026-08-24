@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { StudyLog, Subject } from '../types';
 import { getLogStudyDate, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
-import { SequenceSubject, buildSequenceDisplaySubjects, resolveActiveStudySubject } from '../utils/subjectSequences';
 
 interface Props {
   logs: StudyLog[];
@@ -47,25 +46,18 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
   const [editStartPage, setEditStartPage] = useState(1);
 
   const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
-  const getActiveSubjectForDisplay = (subject: Subject) => {
-    const baseSubject = subjects.find(item => item.id === subject.id) || subject;
-    return resolveActiveStudySubject(baseSubject, subjects);
-  };
   const selectableSubjects = useMemo(() => (
-    buildSequenceDisplaySubjects(subjects).filter(subject => {
-      return subject.completedPages < subject.totalPages
+    subjects.filter(subject => (
+      subject.completedPages < subject.totalPages
       && normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
-    })
+    ))
   ), [activeWeekday, subjects]);
   const modalSubjects = useMemo(() => {
     if (!editingSummary || selectableSubjects.some(subject => subject.id === editingSummary.subjectId)) {
       return selectableSubjects;
     }
 
-    const editingSubject = buildSequenceDisplaySubjects(subjects).find(subject => (
-      subject.id === editingSummary.subjectId
-      || (subject as SequenceSubject).sequenceSubjectIds?.includes(editingSummary.subjectId)
-    ));
+    const editingSubject = subjects.find(subject => subject.id === editingSummary.subjectId);
     return editingSubject ? [editingSubject, ...selectableSubjects] : selectableSubjects;
   }, [editingSummary, selectableSubjects, subjects]);
 
@@ -123,12 +115,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
 
   const openAddModal = () => {
     const firstSubject = selectableSubjects[0];
-    const activeSubject = firstSubject ? getActiveSubjectForDisplay(firstSubject) : undefined;
     setModalMode('add');
     setEditingSummary(null);
-    setSubjectId(activeSubject?.id || '');
+    setSubjectId(firstSubject?.id || '');
     setEditMinutes('');
-    const start = activeSubject ? activeSubject.completedPages + 1 : 1;
+    const start = firstSubject ? firstSubject.completedPages + 1 : 1;
     setEditStartPage(start);
     setEditEndPage(start);
   };
@@ -180,12 +171,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
   };
 
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
-  const selectedDisplaySubject = modalSubjects.find(subject => {
-    const sequenceSubject = subject as SequenceSubject;
-    return subject.id === subjectId
-      || sequenceSubject.sequenceActiveSubjectId === subjectId
-      || sequenceSubject.sequenceSubjectIds?.includes(subjectId);
-  });
   const calculatedPages = editEndPage > 0 ? calculateAmountFromEndPage(editStartPage, editEndPage) : 0;
 
   return (
@@ -271,11 +256,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">과목</label>
                 <select
-                  value={selectedDisplaySubject?.id || subjectId}
+                  value={subjectId}
                   onChange={e => {
-                    const nextDisplaySubject = modalSubjects.find(subject => subject.id === e.target.value);
-                    const nextSubject = nextDisplaySubject ? getActiveSubjectForDisplay(nextDisplaySubject) : undefined;
-                    setSubjectId(nextSubject?.id || e.target.value);
+                    const nextSubject = subjects.find(subject => subject.id === e.target.value);
+                    setSubjectId(e.target.value);
                     if (modalMode === 'add' && nextSubject) {
                       const start = nextSubject.completedPages + 1;
                       setEditStartPage(start);
@@ -286,12 +270,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
                 >
                   <option value="">과목 선택</option>
                   {modalSubjects.map(subject => (
-                    <option key={subject.id} value={subject.id}>
-                      {subject.name}
-                      {(subject as SequenceSubject).sequenceStageCount && (subject as SequenceSubject).sequenceStageCount! > 1
-                        ? ` · 현재 ${(subject as SequenceSubject).sequenceActiveSubjectName}`
-                        : ''}
-                    </option>
+                    <option key={subject.id} value={subject.id}>{subject.name}</option>
                   ))}
                 </select>
               </div>

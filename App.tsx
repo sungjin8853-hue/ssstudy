@@ -111,8 +111,6 @@ const App: React.FC = () => {
           tagIds: subject.tagIds,
           reviewEnabled: subject.reviewEnabled ?? true,
           isRequired: subject.isRequired ?? false,
-          linkedSubjectIds: subject.linkedSubjectIds,
-          linkedParentId: subject.linkedParentId,
           scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
           scheduledWeekdayPages: subject.scheduledWeekdayPages,
           scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
