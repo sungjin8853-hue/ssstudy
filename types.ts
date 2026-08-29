@@ -9,13 +9,16 @@ export interface TagDefinition {
 export interface Subject {
   id: string;
   name: string;
+  materialType?: 'problem' | 'concept';
   createdAt?: string;
   planResetDate?: string;
   totalPages: number;
   completedPages: number;
   targetDate: string;
+  initialAverageTimePerPage?: number;
   tagIds?: string[];
   reviewEnabled?: boolean;
+  reviewSubjectIds?: string[];
   isRequired?: boolean;
   scheduledWeekdays?: number[];
   scheduledWeekdayPages?: Record<string, number>;
@@ -70,6 +73,20 @@ export interface StudyLog {
   nextReviewDate?: string;
   isCondensed?: boolean;
   reviewEnabled?: boolean;
+  reviewSubjectId?: string;
+  reviewTimeSpentMinutes?: number;
+  reviewCompletedPages?: number;
+  basicReviewTimeRecords?: Array<{
+    minutes: number;
+    pages: number;
+    timestamp: string;
+  }>;
+  reviewSubjectTimeRecords?: Array<{
+    subjectId: string;
+    minutes: number;
+    pages: number;
+    timestamp: string;
+  }>;
   reviewMemo?: string;
 }
 

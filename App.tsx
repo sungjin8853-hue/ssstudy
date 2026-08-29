@@ -63,6 +63,7 @@ const App: React.FC = () => {
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
+  const [dashboardDetailSubjectId, setDashboardDetailSubjectId] = useState('');
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
 
@@ -107,6 +108,7 @@ const App: React.FC = () => {
           const migratedSubject: Subject = {
             id: subject.id,
             name: subject.name,
+            materialType: subject.materialType ?? 'problem',
             createdAt: subject.createdAt ?? (
               loadedLogs
                 .filter(log => log.subjectId === subject.id)
@@ -117,8 +119,12 @@ const App: React.FC = () => {
             totalPages,
             completedPages,
             targetDate: subject.targetDate,
+            initialAverageTimePerPage: subject.initialAverageTimePerPage,
             tagIds: subject.tagIds,
             reviewEnabled: subject.reviewEnabled ?? true,
+            reviewSubjectIds: Array.isArray(subject.reviewSubjectIds)
+              ? subject.reviewSubjectIds.filter(id => id !== subject.id)
+              : [],
             isRequired: subject.isRequired ?? false,
             scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
             scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
@@ -208,7 +214,6 @@ const App: React.FC = () => {
 
   const handleAddSubject = (s: Subject) => {
     setSubjects(prev => [...prev, s]);
-    setActiveTab('dashboard');
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
@@ -247,6 +252,10 @@ const App: React.FC = () => {
       '과목은 목록에서 삭제되지만 기존 학습 기록과 누적 통계는 유지됩니다.',
       () => {
         setSubjects(prev => prev.filter(s => s.id !== id));
+        setSubjects(prev => prev.map(subject => ({
+          ...subject,
+          reviewSubjectIds: (subject.reviewSubjectIds || []).filter(reviewSubjectId => reviewSubjectId !== id)
+        })));
         setTestCategories(prev => prev.filter(c => c.subjectId !== id));
       }
     );
@@ -528,9 +537,15 @@ const App: React.FC = () => {
   };
 
   // 복습 액션 처리 (완료 또는 축약)
-  const handleReviewAction = (logIds: string | string[], action: 'complete' | 'condense') => {
+  const handleReviewAction = (logIds: string | string[], action: 'complete' | 'condense', reviewTimeSpentMinutes = 0) => {
     const targetIds = new Set(Array.isArray(logIds) ? logIds : [logIds]);
-    setLogs(prev => prev.map(log => {
+    setLogs(prev => {
+      const targetLogs = prev.filter(log => targetIds.has(log.id));
+      const totalReviewPages = targetLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+      const shouldRecordReviewTime = action === 'complete' && reviewTimeSpentMinutes > 0 && totalReviewPages > 0;
+      const completedAt = new Date().toISOString();
+
+      return prev.map(log => {
         if (!targetIds.has(log.id)) return log;
 
         if (action === 'condense') {
@@ -561,18 +576,139 @@ const App: React.FC = () => {
         const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
         const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
         const nextDate = new Date(nextDateBase + nextInterval);
+        const reviewTimeShare = shouldRecordReviewTime
+          ? reviewTimeSpentMinutes * (Math.max(0, log.pagesRead) / totalReviewPages)
+          : 0;
 
         return {
             ...log,
             isReviewed: true, // 레거시 호환용
             reviewStep: currentStep + 1,
-            nextReviewDate: nextDate.toISOString()
+            nextReviewDate: nextDate.toISOString(),
+            reviewSubjectId: undefined,
+            reviewTimeSpentMinutes: (log.reviewTimeSpentMinutes || 0) + reviewTimeShare,
+            reviewCompletedPages: (log.reviewCompletedPages || 0) + (shouldRecordReviewTime ? Math.max(0, log.pagesRead) : 0),
+            basicReviewTimeRecords: shouldRecordReviewTime
+              ? [
+                ...(log.basicReviewTimeRecords || (
+                  (log.reviewTimeSpentMinutes || 0) > 0 && (log.reviewCompletedPages || 0) > 0
+                    ? [{
+                      minutes: log.reviewTimeSpentMinutes || 0,
+                      pages: log.reviewCompletedPages || 0,
+                      timestamp: log.timestamp
+                    }]
+                    : []
+                )),
+                {
+                  minutes: reviewTimeShare,
+                  pages: Math.max(0, log.pagesRead),
+                  timestamp: completedAt
+                }
+              ]
+              : log.basicReviewTimeRecords
         };
-    }));
+      });
+    });
   };
 
   const handleUpdateReviewMemo = (logId: string, memo: string) => {
     setLogs(prev => prev.map(log => log.id === logId ? { ...log, reviewMemo: memo } : log));
+  };
+
+  const handleAdvanceReviewSubject = (
+    logIds: string[],
+    completedReviewSubjectId: string,
+    nextReviewSubjectId: string | null,
+    reviewTimeSpentMinutes: number
+  ) => {
+    const targetIds = new Set(logIds);
+    setLogs(prev => {
+      const targetLogs = prev.filter(log => targetIds.has(log.id));
+      const totalReviewPages = targetLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+      const shouldRecordReviewTime = reviewTimeSpentMinutes > 0 && totalReviewPages > 0;
+      const completedAt = new Date().toISOString();
+
+      return prev.map(log => {
+        if (!targetIds.has(log.id)) return log;
+
+        const pageCount = Math.max(0, log.pagesRead);
+        const reviewTimeShare = shouldRecordReviewTime
+          ? reviewTimeSpentMinutes * (pageCount / totalReviewPages)
+          : 0;
+        const reviewSubjectTimeRecords = shouldRecordReviewTime
+          ? [
+            ...(log.reviewSubjectTimeRecords || []),
+            {
+              subjectId: completedReviewSubjectId,
+              minutes: reviewTimeShare,
+              pages: pageCount,
+              timestamp: completedAt
+            }
+          ]
+          : log.reviewSubjectTimeRecords;
+
+        if (nextReviewSubjectId) {
+          return {
+            ...log,
+            reviewSubjectId: nextReviewSubjectId,
+            reviewSubjectTimeRecords
+          };
+        }
+
+        const currentStep = log.reviewStep || 0;
+        let nextInterval = 0;
+        if (currentStep === 0) nextInterval = 1 * 24 * 60 * 60 * 1000;
+        else if (currentStep === 1) nextInterval = 4 * 24 * 60 * 60 * 1000;
+        else if (currentStep === 2) nextInterval = 7 * 24 * 60 * 60 * 1000;
+        else if (currentStep === 3) nextInterval = 14 * 24 * 60 * 60 * 1000;
+        else if (currentStep === 4) nextInterval = 28 * 24 * 60 * 60 * 1000;
+        else nextInterval = 28 * 24 * 60 * 60 * 1000 * Math.pow(2, currentStep - 4);
+
+        const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
+        const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
+
+        return {
+          ...log,
+          isReviewed: true,
+          reviewStep: currentStep + 1,
+          nextReviewDate: new Date(nextDateBase + nextInterval).toISOString(),
+          reviewSubjectId: undefined,
+          reviewSubjectTimeRecords
+        };
+      });
+    });
+  };
+
+  const handleRecordReviewSubjectTime = (
+    logIds: string[],
+    completedReviewSubjectId: string,
+    reviewTimeSpentMinutes: number
+  ) => {
+    const targetIds = new Set(logIds);
+    setLogs(prev => {
+      const targetLogs = prev.filter(log => targetIds.has(log.id));
+      const totalReviewPages = targetLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+      const shouldRecordReviewTime = reviewTimeSpentMinutes > 0 && totalReviewPages > 0;
+      const completedAt = new Date().toISOString();
+
+      return prev.map(log => {
+        if (!targetIds.has(log.id) || !shouldRecordReviewTime) return log;
+
+        const pageCount = Math.max(0, log.pagesRead);
+        return {
+          ...log,
+          reviewSubjectTimeRecords: [
+            ...(log.reviewSubjectTimeRecords || []),
+            {
+              subjectId: completedReviewSubjectId,
+              minutes: reviewTimeSpentMinutes * (pageCount / totalReviewPages),
+              pages: pageCount,
+              timestamp: completedAt
+            }
+          ]
+        };
+      });
+    });
   };
 
   return (
@@ -652,6 +788,9 @@ const App: React.FC = () => {
                   <TodaySummary
                     logs={logs}
                     subjects={subjects}
+                    tagDefinitions={tagDefinitions}
+                    detailSubjectId={dashboardDetailSubjectId}
+                    onDetailSubjectChange={setDashboardDetailSubjectId}
                     activeWeekday={activeStudyWeekday}
                     activeStudyDate={activeStudyDate}
                     onAddLog={handleLogSession}
@@ -665,9 +804,13 @@ const App: React.FC = () => {
                     activeWeekday={activeStudyWeekday}
                     activeStudyDate={activeStudyDate}
                     onActiveWeekdayChange={setActiveStudyWeekday}
+                    detailSubjectId={dashboardDetailSubjectId}
+                    onDetailSubjectChange={setDashboardDetailSubjectId}
                     onLogSession={handleLogSession}
                     onUpdateSubjects={handleUpdateSubjects}
                     onReviewAction={handleReviewAction}
+                    onAdvanceReviewSubject={handleAdvanceReviewSubject}
+                    onRecordReviewSubjectTime={handleRecordReviewSubjectTime}
                     onUpdateReviewMemo={handleUpdateReviewMemo}
                   />
                 </div>
@@ -684,6 +827,7 @@ const App: React.FC = () => {
                 activeWeekday={activeStudyWeekday}
                 activeStudyDate={activeStudyDate}
                 onActiveWeekdayChange={setActiveStudyWeekday}
+                onAddSubject={handleAddSubject}
                 onUpdateSubject={handleUpdateSubject}
                 onUpdateSubjects={handleUpdateSubjects}
                 onDeleteSubject={handleDeleteSubject}

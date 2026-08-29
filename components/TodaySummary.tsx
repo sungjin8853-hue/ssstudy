@@ -1,10 +1,23 @@
 import React, { useMemo, useState } from 'react';
-import { StudyLog, Subject } from '../types';
-import { getLogStudyDate, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { StudyLog, Subject, TagDefinition } from '../types';
+import { calculateRecentTimedPageAverage, calculateStats } from '../utils/math';
+import {
+  calculateWeeklyRequiredPages,
+  getDiffDays,
+  getLocalDateKey,
+  getLogStudyDate,
+  normalizeWeekdays,
+  parseStudyDate,
+  WEEKDAYS
+} from '../utils/schedule';
 
 interface Props {
   logs: StudyLog[];
   subjects: Subject[];
+  tagDefinitions: TagDefinition[];
+  detailSubjectId: string;
+  onDetailSubjectChange: (subjectId: string) => void;
   activeWeekday: number;
   activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
@@ -37,7 +50,7 @@ const calculateAmountFromEndPage = (start: number, end: number) => {
   return Number(amount.toFixed(2));
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, detailSubjectId, onDetailSubjectChange, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
   const [subjectId, setSubjectId] = useState('');
@@ -113,6 +126,125 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
     );
   }, [scopedLogs, subjects]);
 
+  const reviewSubjectOwnerMap = useMemo(() => {
+    const owners = new Map<string, Subject>();
+    subjects.forEach(subject => {
+      (subject.reviewSubjectIds || []).forEach(reviewSubjectId => {
+        if (!owners.has(reviewSubjectId)) owners.set(reviewSubjectId, subject);
+      });
+    });
+    return owners;
+  }, [subjects]);
+
+  const reviewSubjectIdSet = useMemo(
+    () => new Set(reviewSubjectOwnerMap.keys()),
+    [reviewSubjectOwnerMap]
+  );
+
+  const detailSubjects = useMemo(() => (
+    [...subjects].sort((a, b) => {
+      const reviewDifference = Number(reviewSubjectIdSet.has(a.id)) - Number(reviewSubjectIdSet.has(b.id));
+      return reviewDifference || a.name.localeCompare(b.name, 'ko');
+    })
+  ), [reviewSubjectIdSet, subjects]);
+
+  const detailData = useMemo(() => {
+    const subject = subjects.find(item => item.id === detailSubjectId);
+    if (!subject) return null;
+
+    const owner = reviewSubjectOwnerMap.get(subject.id);
+    const subjectLogs = logs.filter(log => log.subjectId === subject.id);
+    const reviewSamples = logs.flatMap(log => (log.reviewSubjectTimeRecords || [])
+      .filter(record => record.subjectId === subject.id)
+      .map(record => ({
+        pagesRead: record.pages,
+        timeSpentMinutes: record.minutes,
+        timestamp: record.timestamp,
+        studyDate: getLocalDateKey(new Date(record.timestamp))
+      })));
+    const samples = [
+      ...subjectLogs.map(log => ({
+        pagesRead: log.pagesRead,
+        timeSpentMinutes: log.timeSpentMinutes,
+        timestamp: log.timestamp,
+        studyDate: getLogStudyDate(log)
+      })),
+      ...reviewSamples
+    ];
+    const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
+    const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, getDiffDays(subject.targetDate));
+    const dailyAveragePages = weeklyRequiredPages / 7;
+    const measuredEfficiency = calculateRecentTimedPageAverage(samples).averageTimePerPage;
+    const normalEfficiency = calculateStats(
+      subjectLogs,
+      remainingPages,
+      dailyAveragePages,
+      subject.initialAverageTimePerPage
+    ).averageTimePerPage;
+    const efficiency = measuredEfficiency || normalEfficiency;
+    const dailyAverageMinutes = dailyAveragePages * efficiency;
+
+    const todayKey = getLocalDateKey();
+    const weekStart = parseStudyDate(todayKey);
+    weekStart.setDate(weekStart.getDate() - 6);
+    const dayKeys = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(weekStart);
+      date.setDate(date.getDate() + index);
+      return getLocalDateKey(date);
+    });
+    const weekStartKey = dayKeys[0];
+    const weeklySamples = samples.filter(sample => sample.studyDate >= weekStartKey && sample.studyDate <= todayKey);
+    const weeklyPages = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.pagesRead), 0);
+    const weeklyMinutes = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.timeSpentMinutes), 0);
+    const efficiencyTrend = dayKeys.map(date => {
+      const daySamples = weeklySamples.filter(sample => (
+        sample.studyDate === date && sample.pagesRead > 0 && sample.timeSpentMinutes > 0
+      ));
+      const pages = daySamples.reduce((sum, sample) => sum + sample.pagesRead, 0);
+      const minutes = daySamples.reduce((sum, sample) => sum + sample.timeSpentMinutes, 0);
+      return {
+        date,
+        label: date.slice(5).replace('-', '/'),
+        value: pages > 0 ? minutes / pages : null
+      };
+    });
+
+    const folderIds = subject.tagIds?.length ? subject.tagIds : (owner?.tagIds || []);
+    const folderId = folderIds[0];
+    const folder = tagDefinitions.find(tag => tag.id === folderId);
+    const folderSubjects = subjects.filter(candidate => {
+      if (reviewSubjectIdSet.has(candidate.id)) return false;
+      return folderId
+        ? candidate.tagIds?.includes(folderId)
+        : !candidate.tagIds || candidate.tagIds.length === 0;
+    });
+    const folderDailyMinutes = folderSubjects.reduce((sum, candidate) => {
+      const candidateLogs = logs.filter(log => log.subjectId === candidate.id);
+      const candidateRemaining = Math.max(0, candidate.totalPages - candidate.completedPages);
+      const candidateWeeklyPages = calculateWeeklyRequiredPages(candidateRemaining, getDiffDays(candidate.targetDate));
+      const candidateEfficiency = calculateStats(
+        candidateLogs,
+        candidateRemaining,
+        candidateWeeklyPages / 7,
+        candidate.initialAverageTimePerPage
+      ).averageTimePerPage;
+      return sum + (candidateWeeklyPages / 7) * candidateEfficiency;
+    }, 0);
+
+    return {
+      subject,
+      owner,
+      dailyAveragePages,
+      dailyAverageMinutes,
+      efficiency,
+      weeklyPages,
+      weeklyMinutes,
+      efficiencyTrend,
+      folderName: folder?.name || '미분류',
+      folderDailyMinutes
+    };
+  }, [detailSubjectId, logs, reviewSubjectIdSet, reviewSubjectOwnerMap, subjects, tagDefinitions]);
+
   const openAddModal = () => {
     const firstSubject = selectableSubjects[0];
     setModalMode('add');
@@ -175,76 +307,116 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
 
   return (
     <section className="animate-fade-in">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6 px-1">
-        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <span className="p-1.5 bg-green-100 text-green-600 rounded-lg text-xs">📅</span>
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <h3 className="flex items-center gap-2 text-base font-black text-slate-800">
           실시간 기록
           <button
             onClick={openAddModal}
             disabled={selectableSubjects.length === 0}
-            className="ml-2 h-8 w-8 rounded-xl bg-indigo-600 text-white font-black disabled:bg-slate-300 shadow-lg shadow-indigo-100"
+            className="h-7 w-7 rounded-lg bg-indigo-600 text-sm font-black text-white disabled:bg-slate-300"
             title="기록 추가"
           >
             +
           </button>
         </h3>
-        <div className="flex gap-4">
-          <div className="text-right">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">누적 학습</p>
-            <p className="text-sm font-black text-slate-700">{formatNumber(totals.time)}분 / {formatNumber(totals.pages)}P</p>
-          </div>
-          <div className="text-right border-l pl-4 border-slate-200">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">평균 효율</p>
-            <p className="text-sm font-black text-indigo-600">{totals.avgEfficiency === '-' ? '-' : `${totals.avgEfficiency}분/P`}</p>
-          </div>
-        </div>
+        <p className="shrink-0 text-sm font-black text-slate-500">
+          {formatNumber(totals.pages)}P · {formatNumber(totals.time)}분
+        </p>
       </div>
 
       {subjectSummaries.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-400">
-          {activeWeekdayLabel}요일 기록이 아직 없습니다. + 버튼으로 직접 추가할 수 있어요.
+        <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-5 text-center text-xs font-bold text-slate-400">
+          {activeWeekdayLabel}요일 기록이 없습니다.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
           {subjectSummaries.map(summary => {
-            const efficiency = summary.pages > 0 && summary.minutes > 0 ? `${(summary.minutes / summary.pages).toFixed(2)}분/P` : '-';
-
             return (
-              <div key={summary.subjectId} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between group hover:border-indigo-300 transition-all">
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-lg">📝</div>
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-bold text-slate-400 truncate w-36">{summary.name}</p>
-                    <p className="text-base font-black text-slate-800">
-                      {formatNumber(summary.pages)}P <span className="text-xs font-normal text-slate-400">({formatNumber(summary.minutes)}분)</span>
-                    </p>
-                    <p className="mt-1 text-[10px] font-bold text-slate-300">
-                      {summary.logs.length}회 합산 · p.{formatNumber(summary.startPage)} ~ p.{formatNumber(summary.endPage)}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  <span className="text-xs font-bold text-indigo-600">{efficiency}</span>
-                  <div className="flex gap-1">
+              <div
+                key={summary.subjectId}
+                role="button"
+                tabIndex={0}
+                onClick={() => onDetailSubjectChange(summary.subjectId)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') onDetailSubjectChange(summary.subjectId);
+                }}
+                className={`flex min-w-0 cursor-pointer items-center gap-2 rounded-xl border bg-white px-3 py-2 transition-all ${
+                  detailSubjectId === summary.subjectId
+                    ? 'border-indigo-400 bg-indigo-50'
+                    : 'border-slate-200 hover:border-indigo-300'
+                }`}
+              >
+                <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-800">{summary.name}</p>
+                <p className="shrink-0 text-sm font-black text-indigo-600">{formatNumber(summary.pages)}P</p>
+                <p className="w-20 shrink-0 text-right text-sm font-black text-slate-600">{formatNumber(summary.minutes)}분</p>
+                <div className="flex shrink-0 gap-0.5">
                     <button
-                      onClick={() => openEditModal(summary)}
+                      onClick={event => {
+                        event.stopPropagation();
+                        openEditModal(summary);
+                      }}
                       title="합산 기록 수정"
-                      className="p-1.5 text-slate-300 hover:text-indigo-600 transition-colors"
+                      className="p-1 text-slate-300 transition-colors hover:text-indigo-600"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                     </button>
                     <button
-                      onClick={() => onDeleteLogs(summary.logs.map(log => log.id))}
+                      onClick={event => {
+                        event.stopPropagation();
+                        onDeleteLogs(summary.logs.map(log => log.id));
+                      }}
                       title="합산 기록 삭제"
-                      className="p-1.5 text-slate-300 hover:text-rose-600 transition-colors"
+                      className="p-1 text-slate-300 transition-colors hover:text-rose-600"
                     >
                       ×
                     </button>
-                  </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      <div className="mt-5 mb-4">
+        <select
+          value={detailSubjectId}
+          onChange={event => onDetailSubjectChange(event.target.value)}
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none transition-all focus:border-indigo-400 sm:max-w-sm"
+        >
+          <option value="">과목 데이터 선택</option>
+          {detailSubjects.map(subject => {
+            const owner = reviewSubjectOwnerMap.get(subject.id);
+            return (
+              <option key={subject.id} value={subject.id}>
+                {owner ? `${subject.name} · ${owner.name} 복습` : subject.name}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+
+      {detailData && (
+        <div id="subject-live-detail" className="mb-5 rounded-3xl border border-indigo-100 bg-white p-4 shadow-sm md:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-lg font-black text-slate-900">{detailData.subject.name}</p>
+              {detailData.owner && (
+                <p className="mt-1 text-[10px] font-black text-rose-500">{detailData.owner.name} 복습과목</p>
+              )}
+            </div>
+            <p className="text-sm font-black text-emerald-600">
+              효율 {detailData.efficiency > 0 ? `${detailData.efficiency.toFixed(1)}분/P` : '-'}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <SubjectDataBox label="하루 평균 공부량" value={`${formatNumber(detailData.dailyAveragePages)}P`} color="text-indigo-600" />
+            <SubjectDataBox label="하루 평균 공부시간" value={`${formatNumber(detailData.dailyAverageMinutes)}분`} color="text-violet-600" />
+            <SubjectDataBox label="최근 7일" value={`${formatNumber(detailData.weeklyMinutes)}분 · ${formatNumber(detailData.weeklyPages)}P`} color="text-slate-900" />
+            <SubjectDataBox label={`${detailData.folderName} 하루 평균`} value={`${formatNumber(detailData.folderDailyMinutes)}분`} color="text-amber-600" />
+          </div>
+
+          <SubjectEfficiencyTrend points={detailData.efficiencyTrend} />
         </div>
       )}
 
@@ -303,5 +475,72 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, activeWeekday, a
         </div>
       )}
     </section>
+  );
+};
+
+const SubjectDataBox = ({ label, value, color }: { label: string; value: string; color: string }) => (
+  <div className="min-w-0 rounded-2xl bg-slate-50 px-3 py-3">
+    <p className="truncate text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p>
+    <p className={`mt-1 truncate text-lg font-black ${color}`}>{value}</p>
+  </div>
+);
+
+const SubjectEfficiencyTrend = ({ points }: { points: { date: string; label: string; value: number | null }[] }) => {
+  const measuredValues = points.flatMap(point => point.value === null ? [] : [point.value]);
+  const averageValue = measuredValues.length > 0
+    ? measuredValues.reduce((sum, value) => sum + value, 0) / measuredValues.length
+    : 0;
+  const chartData = points.map(point => ({
+    date: point.label,
+    efficiency: point.value === null ? undefined : Number(point.value.toFixed(2)),
+    average: measuredValues.length > 0 ? Number(averageValue.toFixed(2)) : undefined
+  }));
+
+  return (
+    <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">효율 추이</p>
+        <div className="flex items-center gap-3 text-[9px] font-black">
+          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />실제 효율</span>
+          <span className="flex items-center gap-1 text-rose-500"><i className="h-2 w-2 rounded-full bg-rose-500" />최근 평균</span>
+        </div>
+      </div>
+      {measuredValues.length === 0 ? (
+        <div className="flex h-48 items-center justify-center text-sm font-black text-slate-300">기록 없음</div>
+      ) : (
+        <div className="h-56 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <XAxis dataKey="date" fontSize={9} tickLine={false} axisLine={false} />
+              <YAxis fontSize={9} tickLine={false} axisLine={false} />
+              <Tooltip
+                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}
+                formatter={(value: number, name: string) => [`${Number(value).toFixed(2)}분/P`, name === 'efficiency' ? '실제 효율' : '최근 평균']}
+              />
+              <Line
+                name="실제 효율"
+                type="monotone"
+                dataKey="efficiency"
+                stroke="#3b82f6"
+                strokeWidth={3}
+                dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
+                activeDot={{ r: 6 }}
+                connectNulls
+              />
+              <Line
+                name="최근 평균"
+                type="monotone"
+                dataKey="average"
+                stroke="#f43f5e"
+                strokeWidth={2.5}
+                strokeDasharray="7 5"
+                dot={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
   );
 };

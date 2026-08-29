@@ -196,10 +196,11 @@ export const getPastCarryoverPages = (
   targetStudyDate: string,
   todayDateKey = getLocalDateKey()
 ) => {
+  if (targetStudyDate !== todayDateKey) return 0;
+
   const selectedWeekdays = normalizeWeekdays(subject.scheduledWeekdays);
   const startDateKey = getSubjectPlanStartDateKey(subject, logs, targetStudyDate);
-  const carryoverCutoffDateKey = targetStudyDate < todayDateKey ? targetStudyDate : todayDateKey;
-  const targetDate = parseStudyDate(carryoverCutoffDateKey);
+  const targetDate = parseStudyDate(todayDateKey);
   const cursor = parseStudyDate(startDateKey);
   let carryoverPages = 0;
   let guard = 0;
