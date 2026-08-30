@@ -588,14 +588,16 @@ const App: React.FC = () => {
                     ? [{
                       minutes: log.reviewTimeSpentMinutes || 0,
                       pages: log.reviewCompletedPages || 0,
-                      timestamp: log.timestamp
+                      timestamp: log.timestamp,
+                      reviewNumber: Math.max(1, currentStep)
                     }]
                     : []
                 )),
                 {
                   minutes: reviewTimeShare,
                   pages: Math.max(0, log.pagesRead),
-                  timestamp: completedAt
+                  timestamp: completedAt,
+                  reviewNumber: currentStep + 1
                 }
               ]
               : log.basicReviewTimeRecords

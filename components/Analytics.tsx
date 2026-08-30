@@ -467,22 +467,8 @@ export const Analytics: React.FC<Props> = ({
   };
 
   const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
-    const folderHasWeekdaySubjects = (folderId: string): boolean => {
-      if (editingId === folderId || movingItemId === folderId) return true;
-
-      const childFolderIds = tagDefinitions
-        .filter(folder => folder.parentId === folderId)
-        .map(folder => folder.id);
-
-      return visibleSubjectStats.some(subject => (
-        subject.tagIds?.includes(folderId)
-        && subjectMatchesWeekdayView(subject)
-      )) || childFolderIds.some(folderHasWeekdaySubjects);
-    };
-
     const folders = tagDefinitions
-      .filter(f => f.parentId === parentId)
-      .filter(folder => folderHasWeekdaySubjects(folder.id));
+      .filter(f => f.parentId === parentId);
     const subjs = visibleSubjectStats.filter(s =>
       subjectMatchesWeekdayView(s)
       && (parentId ? s.tagIds?.includes(parentId) : (!s.tagIds || s.tagIds.length === 0))

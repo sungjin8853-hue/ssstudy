@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StudyLog, Subject, TagDefinition } from '../types';
-import { calculateRecentTimedPageAverage, calculateStats } from '../utils/math';
+import { calculateBasicReviewEfficiencyByNumber, calculateRecentTimedPageAverage, calculateStats } from '../utils/math';
+import { BASIC_REVIEW_DETAIL_PREFIX } from '../utils/review';
 import {
   getActiveSubjectStage,
   calculateWeeklyRequiredPages,
@@ -59,6 +60,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   const [editEndPage, setEditEndPage] = useState(0);
   const [editMinutes, setEditMinutes] = useState('');
   const [editStartPage, setEditStartPage] = useState(1);
+  const isBasicReviewDetail = detailSubjectId.startsWith(BASIC_REVIEW_DETAIL_PREFIX);
+  const resolvedDetailSubjectId = isBasicReviewDetail
+    ? detailSubjectId.slice(BASIC_REVIEW_DETAIL_PREFIX.length)
+    : detailSubjectId;
 
   const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
   const selectableSubjects = useMemo(() => (
@@ -151,7 +156,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   ), [reviewSubjectIdSet, subjects]);
 
   const detailData = useMemo(() => {
-    const subject = subjects.find(item => item.id === detailSubjectId);
+    const subject = subjects.find(item => item.id === resolvedDetailSubjectId);
     if (!subject) return null;
 
     const owner = reviewSubjectOwnerMap.get(subject.id);
@@ -234,6 +239,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
         studyMinutes: minutes
       };
     });
+    const basicReviewTrend = isBasicReviewDetail
+      ? calculateBasicReviewEfficiencyByNumber(logs, subject.id)
+      : [];
 
     const folderIds = subject.tagIds?.length ? subject.tagIds : (owner?.tagIds || []);
     const folderId = folderIds[0];
@@ -260,6 +268,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     return {
       subject,
       owner,
+      isBasicReviewDetail,
       activeStage,
       activeStagePageCount,
       activeStageCompletedPages,
@@ -270,10 +279,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       weeklyPages,
       weeklyMinutes,
       efficiencyTrend,
+      basicReviewTrend,
       folderName: folder?.name || '미분류',
       folderDailyMinutes
     };
-  }, [detailSubjectId, logs, reviewSubjectIdSet, reviewSubjectOwnerMap, subjects, tagDefinitions]);
+  }, [isBasicReviewDetail, logs, resolvedDetailSubjectId, reviewSubjectIdSet, reviewSubjectOwnerMap, subjects, tagDefinitions]);
 
   const openAddModal = () => {
     const firstSubject = selectableSubjects[0];
@@ -414,6 +424,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
           className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none transition-all focus:border-indigo-400 sm:max-w-sm"
         >
           <option value="">과목 데이터 선택</option>
+          {isBasicReviewDetail && detailData && (
+            <option value={detailSubjectId}>{detailData.subject.name} · 기본 복습</option>
+          )}
           {detailSubjects.map(subject => {
             const owner = reviewSubjectOwnerMap.get(subject.id);
             return (
@@ -427,50 +440,60 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
 
       {detailData && (
         <div id="subject-live-detail" className="mb-5 rounded-3xl border border-indigo-100 bg-white p-4 shadow-sm md:p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className={`flex flex-wrap items-center justify-between gap-2 ${detailData.isBasicReviewDetail ? 'mb-2' : 'mb-4'}`}>
             <div className="min-w-0">
-              <p className="truncate text-lg font-black text-slate-900">{detailData.subject.name}</p>
+              <p className="truncate text-lg font-black text-slate-900">
+                {detailData.subject.name}{detailData.isBasicReviewDetail ? ' · 기본 복습' : ''}
+              </p>
               {detailData.owner && (
                 <p className="mt-1 text-[10px] font-black text-rose-500">{detailData.owner.name} 복습과목</p>
               )}
             </div>
-            <p className="text-sm font-black text-emerald-600">
-              효율 {detailData.efficiency > 0 ? `${detailData.efficiency.toFixed(1)}분/P` : '-'}
-            </p>
-          </div>
-
-          <div className="mb-2 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
-            <div className="flex flex-wrap items-end justify-between gap-2">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">학습 진척도</p>
-                <p className="mt-1 text-base font-black text-slate-900">
-                  {detailData.activeStage
-                    ? `${detailData.activeStage.name} · p.${formatNumber(detailData.activeStage.startPage)}~${formatNumber(detailData.activeStage.endPage)}`
-                    : '전체 완료'}
-                </p>
-              </div>
-              <p className="text-lg font-black text-indigo-600">
-                {detailData.activeStage
-                  ? `${formatNumber(detailData.activeStageCompletedPages)} / ${formatNumber(detailData.activeStagePageCount)}P · ${detailData.activeStageProgress}%`
-                  : '100%'}
+            {!detailData.isBasicReviewDetail && (
+              <p className="text-sm font-black text-emerald-600">
+                효율 {detailData.efficiency > 0 ? `${detailData.efficiency.toFixed(1)}분/P` : '-'}
               </p>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-              <div
-                className="h-full rounded-full bg-indigo-500 transition-all duration-500"
-                style={{ width: `${detailData.activeStageProgress}%` }}
-              />
-            </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <SubjectDataBox label="하루 평균 공부량" value={`${formatNumber(detailData.dailyAveragePages)}P`} color="text-indigo-600" />
-            <SubjectDataBox label="하루 평균 공부시간" value={`${formatNumber(detailData.dailyAverageMinutes)}분`} color="text-violet-600" />
-            <SubjectDataBox label="최근 7일" value={`${formatNumber(detailData.weeklyMinutes)}분 · ${formatNumber(detailData.weeklyPages)}P`} color="text-slate-900" />
-            <SubjectDataBox label={`${detailData.folderName} 하루 평균`} value={`${formatNumber(detailData.folderDailyMinutes)}분`} color="text-amber-600" />
-          </div>
+          {detailData.isBasicReviewDetail ? (
+            <BasicReviewEfficiencyTrend points={detailData.basicReviewTrend} />
+          ) : (
+            <>
+              <div className="mb-2 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">학습 진척도</p>
+                    <p className="mt-1 text-base font-black text-slate-900">
+                      {detailData.activeStage
+                        ? `${detailData.activeStage.name} · p.${formatNumber(detailData.activeStage.startPage)}~${formatNumber(detailData.activeStage.endPage)}`
+                        : '전체 완료'}
+                    </p>
+                  </div>
+                  <p className="text-lg font-black text-indigo-600">
+                    {detailData.activeStage
+                      ? `${formatNumber(detailData.activeStageCompletedPages)} / ${formatNumber(detailData.activeStagePageCount)}P · ${detailData.activeStageProgress}%`
+                      : '100%'}
+                  </p>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                    style={{ width: `${detailData.activeStageProgress}%` }}
+                  />
+                </div>
+              </div>
 
-          <SubjectEfficiencyTrend points={detailData.efficiencyTrend} />
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <SubjectDataBox label="하루 평균 공부량" value={`${formatNumber(detailData.dailyAveragePages)}P`} color="text-indigo-600" />
+                <SubjectDataBox label="하루 평균 공부시간" value={`${formatNumber(detailData.dailyAverageMinutes)}분`} color="text-violet-600" />
+                <SubjectDataBox label="최근 7일" value={`${formatNumber(detailData.weeklyMinutes)}분 · ${formatNumber(detailData.weeklyPages)}P`} color="text-slate-900" />
+                <SubjectDataBox label={`${detailData.folderName} 하루 평균`} value={`${formatNumber(detailData.folderDailyMinutes)}분`} color="text-amber-600" />
+              </div>
+
+              <SubjectEfficiencyTrend points={detailData.efficiencyTrend} />
+            </>
+          )}
         </div>
       )}
 
@@ -609,6 +632,72 @@ const SubjectEfficiencyTrend = ({ points }: {
             </LineChart>
           </ResponsiveContainer>
         </div>
+      )}
+    </div>
+  );
+};
+
+const BasicReviewEfficiencyTrend = ({ points }: {
+  points: Array<{
+    reviewNumber: number;
+    averageTimePerPage: number;
+    totalMinutes: number;
+    totalPages: number;
+    sampleCount: number;
+  }>;
+}) => {
+  const chartData = points.map(point => ({
+    review: `${point.reviewNumber}회`,
+    efficiency: Number(point.averageTimePerPage.toFixed(2)),
+    pages: point.totalPages,
+    samples: point.sampleCount
+  }));
+
+  return (
+    <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50/50 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">기본 복습 회차별 평균 효율</p>
+        <span className="text-[9px] font-black text-rose-400">낮을수록 빠름</span>
+      </div>
+      {chartData.length === 0 ? (
+        <div className="flex h-36 items-center justify-center text-sm font-black text-rose-200">복습 기록 없음</div>
+      ) : (
+        <>
+          <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+            {chartData.map(point => (
+              <div key={point.review} className="shrink-0 rounded-xl border border-rose-100 bg-white px-3 py-2">
+                <p className="text-[9px] font-black text-rose-400">{point.review} 복습</p>
+                <p className="mt-0.5 text-base font-black text-rose-600">{formatNumber(point.efficiency)}분/P</p>
+              </div>
+            ))}
+          </div>
+          <div className="h-48 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#fecdd3" />
+                <XAxis dataKey="review" fontSize={9} tickLine={false} axisLine={false} />
+                <YAxis fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}`} />
+                <Tooltip
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}
+                  formatter={(value: number, name: string) => (
+                    name === 'efficiency'
+                      ? [`${formatNumber(Number(value))}분/P`, '평균 효율']
+                      : [value, name]
+                  )}
+                />
+                <Line
+                  name="평균 효율"
+                  type="monotone"
+                  dataKey="efficiency"
+                  stroke="#e11d48"
+                  strokeWidth={3}
+                  dot={{ r: 4, fill: '#e11d48', strokeWidth: 0 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </>
       )}
     </div>
   );

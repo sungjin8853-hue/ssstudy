@@ -1,4 +1,4 @@
-import { StudyLog, PredictionInputs, Stats } from '../types';
+import { StudyLog, PredictionInputs, Stats, Subject } from '../types';
 
 const RECENT_STUDY_MINUTES_LIMIT = 15 * 60;
 
@@ -62,30 +62,85 @@ export const calculateRecentCompletedDayAverage = (
   return calculateRecentTimedPageAverage(logs);
 };
 
-export const calculateBasicReviewAverageTimePerPage = (logs: StudyLog[], parentSubjectId: string) => {
+export interface BasicReviewEfficiencyPoint {
+  reviewNumber: number;
+  averageTimePerPage: number;
+  totalMinutes: number;
+  totalPages: number;
+  sampleCount: number;
+}
+
+export const calculateBasicReviewEfficiencyByNumber = (
+  logs: StudyLog[],
+  parentSubjectId: string
+): BasicReviewEfficiencyPoint[] => {
   const samples = logs
     .filter(log => log.subjectId === parentSubjectId)
-    .flatMap<TimedPageSample>(log => {
+    .flatMap(log => {
       if (log.basicReviewTimeRecords?.length) {
-        return log.basicReviewTimeRecords.map(record => ({
-          pagesRead: record.pages,
-          timeSpentMinutes: record.minutes,
-          timestamp: record.timestamp
+        return log.basicReviewTimeRecords.map((record, index) => ({
+          reviewNumber: Math.max(1, Math.round(record.reviewNumber ?? index + 1)),
+          pages: record.pages,
+          minutes: record.minutes
         }));
       }
 
       if ((log.reviewTimeSpentMinutes || 0) > 0 && (log.reviewCompletedPages || 0) > 0) {
         return [{
-          pagesRead: log.reviewCompletedPages || 0,
-          timeSpentMinutes: log.reviewTimeSpentMinutes || 0,
-          timestamp: log.timestamp
+          reviewNumber: Math.max(1, Math.round(log.reviewStep || 1)),
+          pages: log.reviewCompletedPages || 0,
+          minutes: log.reviewTimeSpentMinutes || 0
         }];
       }
 
       return [];
-    });
+    })
+    .filter(sample => sample.pages > 0 && sample.minutes > 0);
 
-  return calculateRecentTimedPageAverage(samples).averageTimePerPage;
+  const grouped = new Map<number, {
+    totalMinutes: number;
+    totalPages: number;
+    sampleCount: number;
+  }>();
+
+  samples.forEach(sample => {
+    const current = grouped.get(sample.reviewNumber) || {
+      totalMinutes: 0,
+      totalPages: 0,
+      sampleCount: 0
+    };
+    current.totalMinutes += sample.minutes;
+    current.totalPages += sample.pages;
+    current.sampleCount += 1;
+    grouped.set(sample.reviewNumber, current);
+  });
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([reviewNumber, value]) => ({
+      reviewNumber,
+      averageTimePerPage: value.totalPages > 0 ? value.totalMinutes / value.totalPages : 0,
+      totalMinutes: value.totalMinutes,
+      totalPages: value.totalPages,
+      sampleCount: value.sampleCount
+    }));
+};
+
+export const calculateBasicReviewAverageTimePerPage = (
+  logs: StudyLog[],
+  parentSubjectId: string,
+  reviewNumber?: number
+) => {
+  const points = calculateBasicReviewEfficiencyByNumber(logs, parentSubjectId);
+
+  if (reviewNumber !== undefined) {
+    return points.find(point => point.reviewNumber === reviewNumber)?.averageTimePerPage || 0;
+  }
+
+  const totalMinutes = points.reduce((sum, point) => sum + point.totalMinutes, 0);
+  const totalPages = points.reduce((sum, point) => sum + point.totalPages, 0);
+
+  return totalPages > 0 ? totalMinutes / totalPages : 0;
 };
 
 export const calculateSubjectReviewAverageTimePerPage = (
@@ -106,25 +161,75 @@ export const calculateSubjectReviewAverageTimePerPage = (
   return calculateRecentTimedPageAverage(samples).averageTimePerPage;
 };
 
-export const resolveBasicReviewAverageTimePerPage = (logs: StudyLog[], parentSubjectId: string) => {
-  const basicReviewAverage = calculateBasicReviewAverageTimePerPage(logs, parentSubjectId);
+export const resolveBasicReviewAverageTimePerPage = (
+  logs: StudyLog[],
+  parentSubjectId: string,
+  subjects: Subject[] = [],
+  reviewNumber?: number
+) => {
+  const basicReviewAverage = calculateBasicReviewAverageTimePerPage(
+    logs,
+    parentSubjectId,
+    reviewNumber
+  );
   if (basicReviewAverage > 0) return basicReviewAverage;
 
-  return calculateRecentCompletedDayAverage(
-    logs.filter(log => log.subjectId === parentSubjectId),
-    0
-  ).averageTimePerPage;
+  const parentSubject = subjects.find(subject => subject.id === parentSubjectId);
+  const lastReviewSubject = [...(parentSubject?.reviewSubjectIds || [])]
+    .reverse()
+    .map(subjectId => subjects.find(subject => subject.id === subjectId))
+    .find((subject): subject is Subject => Boolean(subject));
+  const fallbackSubjects = [lastReviewSubject, parentSubject]
+    .filter((subject, index, items): subject is Subject => (
+      Boolean(subject) && items.findIndex(item => item?.id === subject?.id) === index
+    ));
+
+  for (const fallbackSubject of fallbackSubjects) {
+    const measuredAverage = calculateRecentCompletedDayAverage(
+      logs.filter(log => log.subjectId === fallbackSubject.id),
+      0
+    ).averageTimePerPage;
+    const studyAverage = measuredAverage || fallbackSubject.initialAverageTimePerPage || 0;
+    if (studyAverage > 0) return studyAverage / 2;
+  }
+
+  return 0;
+};
+
+export const calculateBasicReviewGroupTiming = (
+  logs: StudyLog[],
+  parentSubjectId: string,
+  subjects: Subject[],
+  reviewLogs: StudyLog[]
+) => {
+  const totalPages = reviewLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+  const estimatedMinutes = reviewLogs.reduce((sum, log) => {
+    const reviewNumber = (log.reviewStep || 0) + 1;
+    const average = resolveBasicReviewAverageTimePerPage(
+      logs,
+      parentSubjectId,
+      subjects,
+      reviewNumber
+    );
+    return sum + Math.max(0, log.pagesRead) * average;
+  }, 0);
+
+  return {
+    averageTimePerPage: totalPages > 0 ? estimatedMinutes / totalPages : 0,
+    estimatedMinutes
+  };
 };
 
 export const resolveSubjectReviewAverageTimePerPage = (
   logs: StudyLog[],
   parentSubjectId: string,
-  reviewSubjectId: string
+  reviewSubjectId: string,
+  subjects: Subject[] = []
 ) => {
   const subjectReviewAverage = calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId);
   if (subjectReviewAverage > 0) return subjectReviewAverage;
 
-  return resolveBasicReviewAverageTimePerPage(logs, parentSubjectId);
+  return resolveBasicReviewAverageTimePerPage(logs, parentSubjectId, subjects);
 };
 
 export const calculateStats = (

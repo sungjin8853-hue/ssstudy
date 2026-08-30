@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import {
+  calculateBasicReviewGroupTiming,
   calculateRecentCompletedDayAverage,
-  resolveBasicReviewAverageTimePerPage,
   resolveSubjectReviewAverageTimePerPage
 } from '../utils/math';
+import { getReviewDetailKey } from '../utils/review';
 import { calculateFreshWeekdayPagePlan, getActiveSubjectStage, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 
 interface Props {
@@ -492,16 +493,33 @@ const buildDueReviewGroups = (
 
   return Array.from(groups.values())
     .map(group => {
-      const reviewPages = group.logs.reduce((sum, log) => sum + log.pagesRead, 0);
-      const averageTimePerPage = group.reviewType === 'subject'
-        ? resolveSubjectReviewAverageTimePerPage(sourceLogs, group.parentSubjectId, group.subjectId)
-        : resolveBasicReviewAverageTimePerPage(sourceLogs, group.parentSubjectId);
+      const reviewPages = group.logs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+      const subjectReviewAverage = group.reviewType === 'subject'
+        ? resolveSubjectReviewAverageTimePerPage(
+          sourceLogs,
+          group.parentSubjectId,
+          group.subjectId,
+          sourceSubjects
+        )
+        : 0;
+      const basicReviewTiming = group.reviewType === 'basic'
+        ? calculateBasicReviewGroupTiming(
+          sourceLogs,
+          group.parentSubjectId,
+          sourceSubjects,
+          group.logs
+        )
+        : null;
+      const estimatedMinutes = basicReviewTiming?.estimatedMinutes
+        ?? reviewPages * subjectReviewAverage;
+      const averageTimePerPage = basicReviewTiming?.averageTimePerPage
+        ?? (reviewPages > 0 ? estimatedMinutes / reviewPages : subjectReviewAverage);
 
       return {
         ...group,
         logs: sortReviewLogsByRange(group.logs),
         averageTimePerPage,
-        estimatedMinutes: reviewPages * averageTimePerPage
+        estimatedMinutes
       };
     })
     .sort((a, b) => {
@@ -1726,19 +1744,21 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         {runQueueItems.map((queueItem, index) => {
           if (queueItem.kind === 'review') {
             const group = queueItem.reviewGroup;
+            const reviewDetailKey = getReviewDetailKey(
+              group.reviewType,
+              group.parentSubjectId,
+              group.subjectId
+            );
             return (
               <button
                 key={queueItem.key}
                 type="button"
                 onClick={() => {
-                  const reviewDetailSubjectId = group.reviewType === 'subject'
-                    ? group.subjectId
-                    : group.parentSubjectId;
-                  if (detailSubjectId === reviewDetailSubjectId) startReviewGroup(group);
-                  else onDetailSubjectChange(reviewDetailSubjectId);
+                  if (detailSubjectId === reviewDetailKey) startReviewGroup(group);
+                  else onDetailSubjectChange(reviewDetailKey);
                 }}
                 className={`w-full rounded-[1.75rem] border-2 p-5 text-left transition-all ${
-                  detailSubjectId === (group.reviewType === 'subject' ? group.subjectId : group.parentSubjectId)
+                  detailSubjectId === reviewDetailKey
                     ? 'border-rose-500 bg-rose-100 ring-2 ring-rose-100'
                     : 'border-rose-200 bg-rose-50/80 hover:border-rose-400 hover:bg-rose-50'
                 }`}
@@ -1762,7 +1782,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                       )}
                     </div>
                     <span className="mt-2 inline-flex rounded-xl bg-rose-600 px-3 py-2 text-xs font-black text-white">
-                      {detailSubjectId === (group.reviewType === 'subject' ? group.subjectId : group.parentSubjectId)
+                      {detailSubjectId === reviewDetailKey
                         ? '다시 눌러 시작'
                         : '보기'}
                     </span>

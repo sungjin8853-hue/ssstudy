@@ -90,6 +90,7 @@ export interface StudyLog {
     minutes: number;
     pages: number;
     timestamp: string;
+    reviewNumber?: number;
   }>;
   reviewSubjectTimeRecords?: Array<{
     subjectId: string;
