@@ -6,7 +6,7 @@ import { Analytics } from './components/Analytics';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
-import { calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getStudyDateForWeekday } from './utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount } from './utils/schedule';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -101,10 +101,12 @@ const App: React.FC = () => {
       
       if (savedSubs) {
         setSubjects(loadedSubjects.map(subject => {
-          const totalPages = subject.procedures?.[0]?.totalPages ?? subject.totalPages;
-          const completedPages = subject.procedures?.length
+          const startPage = Math.max(1, Number(subject.startPage) || 1);
+          const totalPages = Math.max(startPage, subject.procedures?.[0]?.totalPages ?? subject.totalPages);
+          const rawCompletedPages = subject.procedures?.length
             ? subject.procedures.reduce((sum, procedure) => sum + procedure.completedPages, 0)
             : subject.completedPages;
+          const completedPages = Math.min(totalPages, Math.max(startPage - 1, rawCompletedPages));
           const migratedSubject: Subject = {
             id: subject.id,
             name: subject.name,
@@ -116,6 +118,7 @@ const App: React.FC = () => {
               ?? new Date().toISOString()
             ),
             planResetDate: subject.planResetDate,
+            startPage,
             totalPages,
             completedPages,
             targetDate: subject.targetDate,
@@ -128,14 +131,25 @@ const App: React.FC = () => {
             isRequired: subject.isRequired ?? false,
             scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
             scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
-            scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay
+            scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay,
+            followUpSubjects: Array.isArray(subject.followUpSubjects)
+              ? subject.followUpSubjects.map(followUp => ({
+                  id: followUp.id || Math.random().toString(36).slice(2, 11),
+                  name: followUp.name || '후행과목',
+                  startPage: Math.max(1, Number(followUp.startPage) || 1),
+                  endPage: Math.max(Number(followUp.startPage) || 1, Number(followUp.endPage) || Number(followUp.startPage) || 1),
+                  completedPage: Number.isFinite(Number(followUp.completedPage))
+                    ? Number(followUp.completedPage)
+                    : Math.max(0, (Number(followUp.startPage) || 1) - 1)
+                }))
+              : []
           };
 
           return {
             ...migratedSubject,
             scheduledWeekdayPages: subject.scheduledWeekdayPages ?? calculateFreshWeekdayPagePlan(
               migratedSubject,
-              Math.max(0, totalPages - completedPages),
+              getSubjectRemainingPageCount(migratedSubject),
               getDiffDays(subject.targetDate)
             )
           };
@@ -343,7 +357,7 @@ const App: React.FC = () => {
         const targetSubIds = record.subjectIds || [];
         if (targetSubIds.length > 0) {
           setSubjects(sPrev => sPrev.map(s => 
-            targetSubIds.includes(s.id) ? { ...s, completedPages: s.completedPages + record.b } : s
+            targetSubIds.includes(s.id) ? adjustSubjectProgress(s, record.b) : s
           ));
         }
         
@@ -368,7 +382,7 @@ const App: React.FC = () => {
         const targetSubIds = recordToDelete?.subjectIds || [];
         if (targetSubIds.length > 0 && recordToDelete) {
           setSubjects(sPrev => sPrev.map(s => 
-            targetSubIds.includes(s.id) ? { ...s, completedPages: Math.max(0, s.completedPages - recordToDelete.b) } : s
+            targetSubIds.includes(s.id) ? adjustSubjectProgress(s, -recordToDelete.b) : s
           ));
         }
 
@@ -404,10 +418,7 @@ const App: React.FC = () => {
     setLogs(prev => [...prev, newLog]);
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
-        return {
-          ...sub,
-          completedPages: Math.min(sub.totalPages, sub.completedPages + log.pagesRead)
-        };
+        return adjustSubjectProgress(sub, log.pagesRead);
       }
       return sub;
     }));
@@ -430,24 +441,15 @@ const App: React.FC = () => {
     setSubjects(prev => prev.map(sub => {
       if (oldLog.subjectId === updatedLog.subjectId && sub.id === updatedLog.subjectId) {
         const pageDiff = updatedLog.pagesRead - oldLog.pagesRead;
-        return {
-          ...sub,
-          completedPages: Math.min(sub.totalPages, Math.max(0, sub.completedPages + pageDiff))
-        };
+        return adjustSubjectProgress(sub, pageDiff);
       }
 
       if (oldLog.subjectId !== updatedLog.subjectId && sub.id === oldLog.subjectId) {
-        return {
-          ...sub,
-          completedPages: Math.max(0, sub.completedPages - oldLog.pagesRead)
-        };
+        return adjustSubjectProgress(sub, -oldLog.pagesRead);
       }
 
       if (oldLog.subjectId !== updatedLog.subjectId && sub.id === updatedLog.subjectId) {
-        return {
-          ...sub,
-          completedPages: Math.min(sub.totalPages, sub.completedPages + updatedLog.pagesRead)
-        };
+        return adjustSubjectProgress(sub, updatedLog.pagesRead);
       }
 
       return sub;
@@ -466,10 +468,7 @@ const App: React.FC = () => {
       });
       setSubjects(prev => prev.map(subject => {
         if (subject.id !== logToDelete.subjectId) return subject;
-        return {
-          ...subject,
-          completedPages: Math.max(0, subject.completedPages - logToDelete.pagesRead)
-        };
+        return adjustSubjectProgress(subject, -logToDelete.pagesRead);
       }));
     });
   };
@@ -503,10 +502,7 @@ const App: React.FC = () => {
 
       if (removedPages === 0 && addedPages === 0) return subjectItem;
 
-      return {
-        ...subjectItem,
-        completedPages: Math.min(subjectItem.totalPages, Math.max(0, subjectItem.completedPages - removedPages + addedPages))
-      };
+      return adjustSubjectProgress(subjectItem, -removedPages + addedPages);
     }));
   };
 
@@ -528,10 +524,7 @@ const App: React.FC = () => {
 
         if (removedPages === 0) return subjectItem;
 
-        return {
-          ...subjectItem,
-          completedPages: Math.max(0, subjectItem.completedPages - removedPages)
-        };
+        return adjustSubjectProgress(subjectItem, -removedPages);
       }));
     });
   };

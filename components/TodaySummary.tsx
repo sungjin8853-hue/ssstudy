@@ -3,10 +3,12 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { StudyLog, Subject, TagDefinition } from '../types';
 import { calculateRecentTimedPageAverage, calculateStats } from '../utils/math';
 import {
+  getActiveSubjectStage,
   calculateWeeklyRequiredPages,
   getDiffDays,
   getLocalDateKey,
   getLogStudyDate,
+  getSubjectRemainingPageCount,
   normalizeWeekdays,
   parseStudyDate,
   WEEKDAYS
@@ -61,7 +63,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
   const selectableSubjects = useMemo(() => (
     subjects.filter(subject => (
-      subject.completedPages < subject.totalPages
+      getSubjectRemainingPageCount(subject) > 0
       && normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
     ))
   ), [activeWeekday, subjects]);
@@ -171,7 +173,20 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       })),
       ...reviewSamples
     ];
-    const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
+    const activeStage = getActiveSubjectStage(subject);
+    const activeStagePageCount = activeStage
+      ? Math.max(0, activeStage.endPage - activeStage.startPage + 1)
+      : 0;
+    const activeStageCompletedPages = activeStage
+      ? Math.min(
+          activeStagePageCount,
+          Math.max(0, activeStage.completedPage - activeStage.startPage + 1)
+        )
+      : 0;
+    const activeStageProgress = activeStagePageCount > 0
+      ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
+      : 100;
+    const remainingPages = getSubjectRemainingPageCount(subject);
     const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, getDiffDays(subject.targetDate));
     const dailyAveragePages = weeklyRequiredPages / 7;
     const measuredEfficiency = calculateRecentTimedPageAverage(samples).averageTimePerPage;
@@ -196,16 +211,27 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     const weeklySamples = samples.filter(sample => sample.studyDate >= weekStartKey && sample.studyDate <= todayKey);
     const weeklyPages = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.pagesRead), 0);
     const weeklyMinutes = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.timeSpentMinutes), 0);
-    const efficiencyTrend = dayKeys.map(date => {
-      const daySamples = weeklySamples.filter(sample => (
-        sample.studyDate === date && sample.pagesRead > 0 && sample.timeSpentMinutes > 0
-      ));
-      const pages = daySamples.reduce((sum, sample) => sum + sample.pagesRead, 0);
-      const minutes = daySamples.reduce((sum, sample) => sum + sample.timeSpentMinutes, 0);
+    const monthStart = parseStudyDate(todayKey);
+    monthStart.setDate(monthStart.getDate() - 30);
+    const monthStartKey = getLocalDateKey(monthStart);
+    const monthlyStudyDates = [...new Set(samples
+      .filter(sample => (
+        sample.studyDate >= monthStartKey
+        && sample.studyDate <= todayKey
+        && sample.pagesRead > 0
+      ))
+      .map(sample => sample.studyDate))]
+      .sort();
+    const efficiencyTrend = monthlyStudyDates.map(date => {
+      const daySamples = samples.filter(sample => sample.studyDate === date && sample.pagesRead > 0);
+      const timedSamples = daySamples.filter(sample => sample.timeSpentMinutes > 0);
+      const timedPages = timedSamples.reduce((sum, sample) => sum + sample.pagesRead, 0);
+      const minutes = timedSamples.reduce((sum, sample) => sum + sample.timeSpentMinutes, 0);
       return {
         date,
         label: date.slice(5).replace('-', '/'),
-        value: pages > 0 ? minutes / pages : null
+        efficiency: timedPages > 0 ? minutes / timedPages : null,
+        studyMinutes: minutes
       };
     });
 
@@ -220,7 +246,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     });
     const folderDailyMinutes = folderSubjects.reduce((sum, candidate) => {
       const candidateLogs = logs.filter(log => log.subjectId === candidate.id);
-      const candidateRemaining = Math.max(0, candidate.totalPages - candidate.completedPages);
+      const candidateRemaining = getSubjectRemainingPageCount(candidate);
       const candidateWeeklyPages = calculateWeeklyRequiredPages(candidateRemaining, getDiffDays(candidate.targetDate));
       const candidateEfficiency = calculateStats(
         candidateLogs,
@@ -234,6 +260,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     return {
       subject,
       owner,
+      activeStage,
+      activeStagePageCount,
+      activeStageCompletedPages,
+      activeStageProgress,
       dailyAveragePages,
       dailyAverageMinutes,
       efficiency,
@@ -251,7 +281,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     setEditingSummary(null);
     setSubjectId(firstSubject?.id || '');
     setEditMinutes('');
-    const start = firstSubject ? firstSubject.completedPages + 1 : 1;
+    const start = firstSubject ? (getActiveSubjectStage(firstSubject)?.currentPage || firstSubject.totalPages) : 1;
     setEditStartPage(start);
     setEditEndPage(start);
   };
@@ -409,6 +439,30 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
             </p>
           </div>
 
+          <div className="mb-2 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">학습 진척도</p>
+                <p className="mt-1 text-base font-black text-slate-900">
+                  {detailData.activeStage
+                    ? `${detailData.activeStage.name} · p.${formatNumber(detailData.activeStage.startPage)}~${formatNumber(detailData.activeStage.endPage)}`
+                    : '전체 완료'}
+                </p>
+              </div>
+              <p className="text-lg font-black text-indigo-600">
+                {detailData.activeStage
+                  ? `${formatNumber(detailData.activeStageCompletedPages)} / ${formatNumber(detailData.activeStagePageCount)}P · ${detailData.activeStageProgress}%`
+                  : '100%'}
+              </p>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+              <div
+                className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                style={{ width: `${detailData.activeStageProgress}%` }}
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <SubjectDataBox label="하루 평균 공부량" value={`${formatNumber(detailData.dailyAveragePages)}P`} color="text-indigo-600" />
             <SubjectDataBox label="하루 평균 공부시간" value={`${formatNumber(detailData.dailyAverageMinutes)}분`} color="text-violet-600" />
@@ -433,7 +487,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                     const nextSubject = subjects.find(subject => subject.id === e.target.value);
                     setSubjectId(e.target.value);
                     if (modalMode === 'add' && nextSubject) {
-                      const start = nextSubject.completedPages + 1;
+                      const start = getActiveSubjectStage(nextSubject)?.currentPage || nextSubject.totalPages;
                       setEditStartPage(start);
                       setEditEndPage(start);
                     }
@@ -485,24 +539,23 @@ const SubjectDataBox = ({ label, value, color }: { label: string; value: string;
   </div>
 );
 
-const SubjectEfficiencyTrend = ({ points }: { points: { date: string; label: string; value: number | null }[] }) => {
-  const measuredValues = points.flatMap(point => point.value === null ? [] : [point.value]);
-  const averageValue = measuredValues.length > 0
-    ? measuredValues.reduce((sum, value) => sum + value, 0) / measuredValues.length
-    : 0;
+const SubjectEfficiencyTrend = ({ points }: {
+  points: { date: string; label: string; efficiency: number | null; studyMinutes: number }[];
+}) => {
+  const measuredValues = points.flatMap(point => point.efficiency === null ? [] : [point.efficiency]);
   const chartData = points.map(point => ({
     date: point.label,
-    efficiency: point.value === null ? undefined : Number(point.value.toFixed(2)),
-    average: measuredValues.length > 0 ? Number(averageValue.toFixed(2)) : undefined
+    efficiency: point.efficiency === null ? undefined : Number(point.efficiency.toFixed(2)),
+    studyMinutes: Number(point.studyMinutes.toFixed(2))
   }));
 
   return (
     <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">효율 추이</p>
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">최근 한 달 학습 추이</p>
         <div className="flex items-center gap-3 text-[9px] font-black">
-          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />실제 효율</span>
-          <span className="flex items-center gap-1 text-rose-500"><i className="h-2 w-2 rounded-full bg-rose-500" />최근 평균</span>
+          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />효율</span>
+          <span className="flex items-center gap-1 text-red-600"><i className="h-2 w-2 rounded-full bg-red-500" />공부시간</span>
         </div>
       </div>
       {measuredValues.length === 0 ? (
@@ -510,18 +563,33 @@ const SubjectEfficiencyTrend = ({ points }: { points: { date: string; label: str
       ) : (
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+            <LineChart data={chartData} margin={{ top: 8, right: 2, left: -18, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
               <XAxis dataKey="date" fontSize={9} tickLine={false} axisLine={false} />
-              <YAxis fontSize={9} tickLine={false} axisLine={false} />
+              <YAxis yAxisId="efficiency" fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}`} />
+              <YAxis
+                yAxisId="minutes"
+                orientation="right"
+                width={38}
+                fontSize={9}
+                tickLine={false}
+                axisLine={false}
+                tick={{ fill: '#dc2626' }}
+                tickFormatter={value => `${value}분`}
+              />
               <Tooltip
                 contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}
-                formatter={(value: number, name: string) => [`${Number(value).toFixed(2)}분/P`, name === 'efficiency' ? '실제 효율' : '최근 평균']}
+                formatter={(value: number, name: string) => (
+                  name === 'studyMinutes'
+                    ? [`${formatNumber(Number(value))}분`, '공부시간']
+                    : [`${Number(value).toFixed(2)}분/P`, '효율']
+                )}
               />
               <Line
                 name="실제 효율"
                 type="monotone"
                 dataKey="efficiency"
+                yAxisId="efficiency"
                 stroke="#3b82f6"
                 strokeWidth={3}
                 dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
@@ -529,13 +597,14 @@ const SubjectEfficiencyTrend = ({ points }: { points: { date: string; label: str
                 connectNulls
               />
               <Line
-                name="최근 평균"
+                name="공부시간"
                 type="monotone"
-                dataKey="average"
-                stroke="#f43f5e"
-                strokeWidth={2.5}
-                strokeDasharray="7 5"
-                dot={false}
+                dataKey="studyMinutes"
+                yAxisId="minutes"
+                stroke="#dc2626"
+                strokeWidth={3}
+                dot={{ r: 4, fill: '#dc2626', strokeWidth: 0 }}
+                activeDot={{ r: 6 }}
               />
             </LineChart>
           </ResponsiveContainer>

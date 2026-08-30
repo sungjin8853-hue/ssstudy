@@ -5,7 +5,7 @@ import {
   resolveBasicReviewAverageTimePerPage,
   resolveSubjectReviewAverageTimePerPage
 } from '../utils/math';
-import { calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { calculateFreshWeekdayPagePlan, getActiveSubjectStage, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 
 interface Props {
   subjects: Subject[];
@@ -236,7 +236,7 @@ const getReviewRange = (log: StudyLog) => {
 const getAvailableReviewSubjectIds = (parentSubject: Subject | undefined, sourceSubjects: Subject[]) => (
   Array.from(new Set(parentSubject?.reviewSubjectIds || []))
     .filter(id => id !== parentSubject?.id && sourceSubjects.some(subject => (
-      subject.id === id && subject.completedPages < subject.totalPages
+      subject.id === id && getSubjectRemainingPageCount(subject) > 0
     )))
 );
 
@@ -381,11 +381,11 @@ const buildStudyOrderForDate = (
   const today = new Date();
   const todayDateKey = getLocalDateKey(today);
   return sourceSubjects
-    .filter(subject => subject.completedPages < subject.totalPages)
+    .filter(subject => getSubjectRemainingPageCount(subject) > 0)
     .map(subject => {
       const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today);
       const rawCarryoverPages = getPastCarryoverPages(subject, sourceLogs, targetStudyDate, todayDateKey);
-      const remainingSubjectPages = Math.max(0, subject.totalPages - subject.completedPages);
+      const remainingSubjectPages = getSubjectRemainingPageCount(subject);
       const remainingBeforeStudyDate = remainingSubjectPages + basePlan.scopedPages;
       const dayTarget = getSubjectDayTarget(
         subject,
@@ -549,7 +549,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     () => subjects.filter(subject => !reviewSubjectIdSet.has(subject.id)),
     [reviewSubjectIdSet, subjects]
   );
-  const measurableSubjects = ordinarySubjects.filter(subject => subject.completedPages < subject.totalPages);
+  const measurableSubjects = ordinarySubjects.filter(subject => getSubjectRemainingPageCount(subject) > 0);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState('');
   const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
@@ -765,9 +765,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     [logs, subjectId]
   );
 
-  const remainingSubjectPages = selectedSubject
-    ? Math.max(0, selectedSubject.totalPages - selectedSubject.completedPages)
-    : 0;
+  const activeSubjectStage = selectedSubject ? getActiveSubjectStage(selectedSubject) : null;
+  const aggregateRemainingSubjectPages = selectedSubject ? getSubjectRemainingPageCount(selectedSubject) : 0;
+  const remainingSubjectPages = activeSubjectStage?.remainingPages || 0;
   const activeDaySubjectPages = useMemo(
     () => logs
       .filter(log => log.subjectId === subjectId && getLogStudyDate(log) === activeStudyDate)
@@ -778,14 +778,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const recommendedDailyPages = useMemo(() => {
     if (!selectedSubject) return 0;
     const selectedPlan = todayStudyPlanMap.get(selectedSubject.id);
-    if (selectedPlan) return selectedPlan.remainingDayPages;
+    if (selectedPlan) return Math.min(aggregateRemainingSubjectPages, selectedPlan.remainingDayPages);
 
     const today = new Date();
-    const remainingBeforeActiveDay = remainingSubjectPages + activeDaySubjectPages;
+    const remainingBeforeActiveDay = aggregateRemainingSubjectPages + activeDaySubjectPages;
     const diffDays = getDiffDays(selectedSubject.targetDate, today);
     const dayTarget = getSubjectDayTarget(selectedSubject, remainingBeforeActiveDay, diffDays, activeWeekday);
-    return Math.min(remainingSubjectPages, Math.max(0, dayTarget - activeDaySubjectPages));
-  }, [activeDaySubjectPages, activeWeekday, selectedSubject, remainingSubjectPages, todayStudyPlanMap]);
+    return Math.min(aggregateRemainingSubjectPages, Math.max(0, dayTarget - activeDaySubjectPages));
+  }, [activeDaySubjectPages, activeWeekday, aggregateRemainingSubjectPages, selectedSubject, todayStudyPlanMap]);
 
   const overallAverage = useMemo(() => {
     const measuredAverage = calculateRecentCompletedDayAverage(
@@ -811,9 +811,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const averageSecondsPerPage = averageTimePerPage > 0 ? Math.max(1, Math.round(averageTimePerPage * 60)) : 0;
   const plannedPages = Math.max(1, plannedPageCount);
   const timeTargetPages = attackCompletedPages;
-  const progressBasePages = (selectedSubject?.completedPages || 0) + 1;
-  const progressCurrentPages = progressBasePages + timeTargetPages;
-  const progressTargetPages = progressBasePages + plannedPages;
+  const progressBasePages = activeSubjectStage?.currentPage || 1;
+  const progressCurrentPages = activeSubjectStage
+    ? Math.min(activeSubjectStage.endPage, progressBasePages + timeTargetPages)
+    : progressBasePages + timeTargetPages;
+  const progressTargetPages = activeSubjectStage
+    ? Math.min(activeSubjectStage.endPage, progressBasePages + plannedPages)
+    : progressBasePages + plannedPages;
   const expectedReadAmount = averageTimePerPage > 0
     ? Math.min(remainingSubjectPages, Math.max(1, timeTargetPages))
     : Math.min(remainingSubjectPages, plannedPages);
@@ -1013,8 +1017,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [subjectId, isSubjectReviewDisabled]);
 
   useEffect(() => {
+    if (activeReviewRun) return;
     setPlannedPageCount(Math.max(1, recommendedDailyPages));
-  }, [subjectId, recommendedDailyPages]);
+  }, [activeReviewRun, subjectId, recommendedDailyPages]);
 
   useEffect(() => {
     if (!subjectId) {
@@ -1303,7 +1308,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const startStudyOrderItem = (item: StudyOrderItem) => {
     selectSubjectForMeasurement(item.subject);
-    setPlannedPageCount(Math.max(1, item.remainingDayPages || 1));
+    const activeStage = getActiveSubjectStage(item.subject);
+    setPlannedPageCount(Math.max(1, Math.min(activeStage?.remainingPages || 1, item.remainingDayPages || 1)));
     setPostSaveNextSubjectId(null);
     setPendingImmediateStartSubjectId(item.subject.id);
   };
@@ -1355,7 +1361,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       planResetDate: resetDateKey,
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         subject,
-        Math.max(0, subject.totalPages - subject.completedPages),
+        getSubjectRemainingPageCount(subject),
         getDiffDays(subject.targetDate)
       )
     }));
@@ -1492,7 +1498,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSessionTimerPages(completedTimerPages);
     setSessionTimerPageSeconds({ ...activeTimerPageSecondsRef.current });
     if (selectedSubject) {
-      const nextStartPage = selectedSubject.completedPages + 1;
+      const nextStartPage = activeSubjectStage?.currentPage || selectedSubject.completedPages + 1;
       setStartPage(formatPageNumber(nextStartPage));
       const nextReadAmount = expectedReadAmount > 0
         ? formatPageNumber(calculateEndPageValue(nextStartPage, expectedReadAmount))
@@ -1716,7 +1722,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         })}
       </div>
 
-      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+      <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
         {runQueueItems.map((queueItem, index) => {
           if (queueItem.kind === 'review') {
             const group = queueItem.reviewGroup;
@@ -1782,6 +1788,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           }
 
           const item = queueItem.studyItem;
+          const activeStage = getActiveSubjectStage(item.subject);
           return (
             <button
               key={queueItem.key}
@@ -1813,6 +1820,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                         )}
                       </div>
                       <h4 className="mt-2 truncate text-lg font-black text-slate-900">{item.subject.name}</h4>
+                      {activeStage?.isFollowUp && (
+                        <p className="mt-1 truncate text-xs font-black text-indigo-500">후행 · {activeStage.name}</p>
+                      )}
                     </div>
                     <span className="shrink-0 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white">
                       {detailSubjectId === item.subject.id ? '다시 눌러 시작' : '보기'}
@@ -1835,7 +1845,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                     <div className="rounded-2xl bg-white px-3 py-3">
                       <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">시작</p>
                       <p className="mt-0.5 text-xl font-black leading-none text-slate-800">
-                        p.{formatPageNumber(item.subject.completedPages + 1)}
+                        p.{formatPageNumber(activeStage?.currentPage || item.subject.completedPages + 1)}
                       </p>
                     </div>
                     {item.speedChangePercent !== null && (
@@ -1944,7 +1954,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                           ))}
                           {level.subjects.map(subject => (
                             <option key={subject.id} value={`subject:${subject.id}`}>
-                              {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(Math.max(0, subject.totalPages - subject.completedPages))}P
+                              {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(getSubjectRemainingPageCount(subject))}P
                             </option>
                           ))}
                         </select>
@@ -2123,6 +2133,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
             {timerMode === 'remainingPages' ? (
               <div className="mb-8 text-center">
                 <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">학습 진척도</p>
+                {!activeReviewRun && activeSubjectStage && (
+                  <p className="mb-3 text-sm font-black text-indigo-200">
+                    {activeSubjectStage.name} · p.{formatPageNumber(activeSubjectStage.startPage)}~{formatPageNumber(activeSubjectStage.endPage)}
+                  </p>
+                )}
                 <div className="text-4xl md:text-5xl font-mono font-black text-white tabular-nums">
                   {averageTimePerPage > 0
                     ? activeReviewRun

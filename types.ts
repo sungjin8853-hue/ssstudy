@@ -6,12 +6,21 @@ export interface TagDefinition {
   parentId?: string;
 }
 
+export interface FollowUpSubject {
+  id: string;
+  name: string;
+  startPage: number;
+  endPage: number;
+  completedPage: number;
+}
+
 export interface Subject {
   id: string;
   name: string;
   materialType?: 'problem' | 'concept';
   createdAt?: string;
   planResetDate?: string;
+  startPage?: number;
   totalPages: number;
   completedPages: number;
   targetDate: string;
@@ -24,6 +33,7 @@ export interface Subject {
   scheduledWeekdayPages?: Record<string, number>;
   scheduledWeekdayWeights?: Record<string, number>;
   scheduledWeekdayRemainderDay?: number;
+  followUpSubjects?: FollowUpSubject[];
 }
 
 export interface TestRecord {

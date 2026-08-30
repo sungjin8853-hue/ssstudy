@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Subject, StudyLog, TagDefinition } from '../types';
+import { FollowUpSubject, Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../utils/math';
 import {
   calculateFreshWeekdayPagePlan,
@@ -10,6 +10,11 @@ import {
   getPastCarryoverPages,
   getWeekdayPagePlan,
   getLogStudyDate,
+  getActiveSubjectStage,
+  getSubjectCompletedPageCount,
+  getSubjectRemainingPageCount,
+  getSubjectStartPage,
+  getSubjectTotalPageCount,
   normalizeWeekdayWeights,
   normalizeWeekdays,
   parseStudyDate,
@@ -80,6 +85,7 @@ export const Analytics: React.FC<Props> = ({
   // 수정 폼 상태 확장 (이름, 총페이지, 목표날짜)
   const [editForm, setEditForm] = useState<{
     name: string;
+    startPage: number;
     totalPages: number;
     targetDate: string;
     tagIds: string[];
@@ -88,6 +94,7 @@ export const Analytics: React.FC<Props> = ({
     scheduledWeekdayWeights: Record<string, number>;
     scheduledWeekdayRemainderDay?: number;
     reviewSubjectIds: string[];
+    followUpSubjects: FollowUpSubject[];
   } | null>(null);
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(subject => subject.reviewSubjectIds || []))
@@ -137,6 +144,7 @@ export const Analytics: React.FC<Props> = ({
       const nextDays = prev.scheduledWeekdays.includes(dayId)
         ? prev.scheduledWeekdays.filter(id => id !== dayId)
         : [...prev.scheduledWeekdays, dayId];
+      if (nextDays.length === 0) return prev;
       const normalizedDays = normalizeWeekdays(nextDays);
       const nextWeights = {
         ...prev.scheduledWeekdayWeights,
@@ -219,7 +227,7 @@ export const Analytics: React.FC<Props> = ({
         ...nextSubject,
         scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
           nextSubject,
-          Math.max(0, nextSubject.totalPages - nextSubject.completedPages),
+          getSubjectRemainingPageCount(nextSubject),
           getDiffDays(nextSubject.targetDate)
         )
       };
@@ -278,7 +286,7 @@ export const Analytics: React.FC<Props> = ({
         const studyDate = getLogStudyDate(log);
         return studyDate >= weekStartDateKey && studyDate <= todayDateKey;
       });
-      const remaining = Math.max(0, sub.totalPages - sub.completedPages);
+      const remaining = getSubjectRemainingPageCount(sub);
       const diffDays = getDiffDays(sub.targetDate);
       const activeDayCompletedPages = subLogs
         .filter(log => getLogStudyDate(log) === activeStudyDate)
@@ -364,6 +372,7 @@ export const Analytics: React.FC<Props> = ({
       name: speedCopyForm.name.trim(),
       createdAt: new Date().toISOString(),
       planResetDate: getLocalDateKey(),
+      startPage,
       totalPages,
       completedPages,
       targetDate: speedCopyForm.targetDate,
@@ -379,7 +388,7 @@ export const Analytics: React.FC<Props> = ({
       ...nextSubject,
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         nextSubject,
-        Math.max(0, totalPages - completedPages),
+        getSubjectRemainingPageCount(nextSubject),
         getDiffDays(nextSubject.targetDate)
       )
     });
@@ -394,7 +403,7 @@ export const Analytics: React.FC<Props> = ({
 
   const subjectMatchesWeekdayView = (_subject?: unknown) => true;
 
-  const getDisplayRecommendedPages = (subject: { weeklyRequiredPages: number }) => subject.weeklyRequiredPages / 7;
+  const getDisplayRecommendedPages = (subject: { recommendedDailyPages: number }) => subject.recommendedDailyPages;
 
   const getDisplayNeededMinutes = (subject: { stats: { averageTimePerPage: number }; weeklyRequiredPages: number; recommendedDailyPages: number }) => (
     getDisplayRecommendedPages(subject) * subject.stats.averageTimePerPage
@@ -433,8 +442,8 @@ export const Analytics: React.FC<Props> = ({
 
     return {
       count,
-      totalPages: uniqueSubjs.reduce((acc, cur) => acc + cur.totalPages, 0),
-      completedPages: uniqueSubjs.reduce((acc, cur) => acc + cur.completedPages, 0),
+      totalPages: uniqueSubjs.reduce((acc, cur) => acc + getSubjectTotalPageCount(cur), 0),
+      completedPages: uniqueSubjs.reduce((acc, cur) => acc + getSubjectCompletedPageCount(cur), 0),
       avgEff: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / count : 0,
       avgStd: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.standardDeviation, 0) / count : 0,
       dailyTime: uniqueSubjs.reduce((acc, cur) => acc + getDisplayNeededMinutes(cur), 0),
@@ -445,8 +454,9 @@ export const Analytics: React.FC<Props> = ({
 
   const weekdaySubjects = useMemo(() => (
     visibleSubjectStats
+      .filter(subject => normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday))
       .sort((a, b) => getDisplayNeededMinutes(b) - getDisplayNeededMinutes(a))
-  ), [visibleSubjectStats]);
+  ), [activeWeekday, visibleSubjectStats]);
 
   const weekdayTotalTime = weekdaySubjects.reduce((sum, subject) => sum + getDisplayNeededMinutes(subject), 0);
 
@@ -579,7 +589,7 @@ export const Analytics: React.FC<Props> = ({
                   </div>
                 )}
               </div>
-              {isExpanded && <RenderTree parentId={folder.id} depth={depth + 1} />}
+              {isExpanded && RenderTree({ parentId: folder.id, depth: depth + 1 })}
             </div>
           );
         })}
@@ -587,7 +597,21 @@ export const Analytics: React.FC<Props> = ({
         {subjs.map(sub => {
           const isEditing = editingId === sub.id;
           const isSpeedCopying = speedCopySourceId === sub.id;
-          const progressPercent = sub.totalPages > 0 ? Math.round((sub.completedPages / sub.totalPages) * 100) : 0;
+          const combinedTotalPages = getSubjectTotalPageCount(sub);
+          const combinedCompletedPages = getSubjectCompletedPageCount(sub);
+          const activeStage = getActiveSubjectStage(sub);
+          const activeStagePageCount = activeStage
+            ? Math.max(0, activeStage.endPage - activeStage.startPage + 1)
+            : combinedTotalPages;
+          const activeStageCompletedPages = activeStage
+            ? Math.min(
+                activeStagePageCount,
+                Math.max(0, activeStage.completedPage - activeStage.startPage + 1)
+              )
+            : combinedCompletedPages;
+          const progressPercent = activeStagePageCount > 0
+            ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
+            : 0;
           const reviewSubjects = (sub.reviewSubjectIds || [])
             .map(id => allSubjectStats.find(subject => subject.id === id))
             .filter((subject): subject is typeof allSubjectStats[number] => Boolean(subject));
@@ -689,10 +713,17 @@ export const Analytics: React.FC<Props> = ({
                             e.preventDefault();
                             e.stopPropagation(); 
                             if (onUpdateSubject && editForm) {
+                                const normalizedStartPage = Math.max(1, Number(editForm.startPage) || 1);
+                                const normalizedTotalPages = Math.max(normalizedStartPage, Number(editForm.totalPages) || normalizedStartPage);
                                 const updatedSubject: Subject = {
                                     ...sub,
                                     name: editForm.name, 
-                                    totalPages: Number(editForm.totalPages),
+                                    startPage: normalizedStartPage,
+                                    totalPages: normalizedTotalPages,
+                                    completedPages: Math.min(
+                                      normalizedTotalPages,
+                                      Math.max(normalizedStartPage - 1, sub.completedPages)
+                                    ),
                                     targetDate: editForm.targetDate,
                                     tagIds: editForm.tagIds,
                                     reviewSubjectIds: editForm.reviewSubjectIds.filter(reviewSubjectId => (
@@ -702,13 +733,24 @@ export const Analytics: React.FC<Props> = ({
                                     scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
                                     scheduledWeekdayWeights: normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays),
                                     scheduledWeekdayRemainderDay: editForm.scheduledWeekdayRemainderDay,
-                                    scheduledWeekdayPages: undefined
+                                    scheduledWeekdayPages: undefined,
+                                    followUpSubjects: editForm.followUpSubjects.map(followUp => {
+                                      const startPage = Math.max(1, Math.round(followUp.startPage));
+                                      const endPage = Math.max(startPage, Math.round(followUp.endPage));
+                                      return {
+                                        ...followUp,
+                                        name: followUp.name.trim() || '후행과목',
+                                        startPage,
+                                        endPage,
+                                        completedPage: Math.min(endPage, Math.max(startPage - 1, followUp.completedPage))
+                                      };
+                                    })
                                 };
                                 onUpdateSubject({
                                     ...updatedSubject,
                                     scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
                                         updatedSubject,
-                                        Math.max(0, updatedSubject.totalPages - updatedSubject.completedPages),
+                                        getSubjectRemainingPageCount(updatedSubject),
                                         getDiffDays(updatedSubject.targetDate)
                                     )
                                 });
@@ -755,6 +797,7 @@ export const Analytics: React.FC<Props> = ({
                             setFolderEditForm(null);
                             setEditForm({
                               name: sub.name,
+                              startPage: getSubjectStartPage(sub),
                               totalPages: sub.totalPages,
                               targetDate: sub.targetDate,
                               tagIds: sub.tagIds || [],
@@ -764,7 +807,8 @@ export const Analytics: React.FC<Props> = ({
                               scheduledWeekdayRemainderDay: sub.scheduledWeekdayRemainderDay,
                               reviewSubjectIds: (sub.reviewSubjectIds || []).filter(reviewSubjectId => (
                                 reviewSubjectId !== sub.id && subjects.some(subject => subject.id === reviewSubjectId)
-                              ))
+                              )),
+                              followUpSubjects: (sub.followUpSubjects || []).map(followUp => ({ ...followUp }))
                             });
                           }} 
                           onMouseDown={e => e.stopPropagation()}
@@ -797,21 +841,34 @@ export const Analytics: React.FC<Props> = ({
 
               <div className="space-y-1 px-1">
                  <div className="flex justify-between items-end">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({progressPercent}%)</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      {activeStage
+                        ? `학습 진척도 · ${activeStage.name} (p.${activeStage.startPage}~${activeStage.endPage}) · ${progressPercent}%`
+                        : `학습 진척도 · 전체 완료 · ${progressPercent}%`}
+                    </p>
                     {isEditing ? (
-                        <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1 rounded-xl">
-                            <span className="text-xs font-bold text-indigo-400">목표 P 수정:</span>
+                        <div className="flex flex-wrap items-center justify-end gap-2 bg-indigo-50 px-3 py-1 rounded-xl">
+                            <span className="text-xs font-bold text-indigo-400">시작 P</span>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={editForm?.startPage || 1}
+                                onChange={e => setEditForm(prev => prev ? {...prev, startPage: Number(e.target.value)} : null)}
+                                className="w-16 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
+                            />
+                            <span className="text-xs font-bold text-indigo-400">끝 P</span>
                             <input 
                                 type="number"
+                                min={editForm?.startPage || 1}
                                 step="1"
                                 value={editForm?.totalPages || 0}
                                 onChange={e => setEditForm(prev => prev ? {...prev, totalPages: Number(e.target.value)} : null)}
                                 className="w-20 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
                             />
-                            <span className="text-xs font-black text-indigo-400">Page</span>
                         </div>
                     ) : (
-                        <p className="text-base font-black text-slate-900">{sub.completedPages} / {sub.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                        <p className="text-base font-black text-slate-900">{activeStageCompletedPages} / {activeStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
                     )}
                  </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
@@ -850,6 +907,166 @@ export const Analytics: React.FC<Props> = ({
                      ))}
                   </div>
                   <div className="mt-4 border-t border-slate-800 pt-4">
+                    <p className="mb-3 px-1 text-[10px] font-black uppercase text-slate-500">학습 요일</p>
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {WEEKDAYS.map(day => {
+                        const selected = editForm?.scheduledWeekdays.includes(day.id) ?? false;
+                        return (
+                          <button
+                            key={day.id}
+                            type="button"
+                            onClick={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              toggleEditWeekday(day.id);
+                            }}
+                            className={`rounded-lg py-2 text-xs font-black transition-all ${
+                              selected ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-500'
+                            }`}
+                          >
+                            {day.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 space-y-2 rounded-2xl bg-slate-950 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-lg bg-indigo-500/15 px-2.5 py-1 text-[10px] font-black text-indigo-300">
+                          주간 필요 {sub.weeklyRequiredPages}P
+                        </span>
+                        <span className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[10px] font-black text-emerald-300">
+                          비율 {editForm ? editForm.scheduledWeekdays.map(dayId => editForm.scheduledWeekdayWeights[dayId] || 1).join(':') : '-'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-7 gap-1.5">
+                        {WEEKDAYS.map(day => {
+                          const selected = editForm?.scheduledWeekdays.includes(day.id) ?? false;
+                          const previewPlan = editForm
+                            ? distributePagesByWeekdayWeights(
+                              sub.weeklyRequiredPages,
+                              editForm.scheduledWeekdays,
+                              editForm.scheduledWeekdayWeights,
+                              editForm.scheduledWeekdayRemainderDay
+                            )
+                            : {};
+                        return (
+                          <div
+                            key={day.id}
+                            className={`rounded-xl border p-1.5 ${
+                              selected
+                                ? 'border-indigo-500/40 bg-slate-900'
+                                : 'border-slate-800 bg-slate-900/40 opacity-45'
+                            }`}
+                          >
+                            <p className={`mb-1 text-center text-[10px] font-black ${selected ? 'text-indigo-300' : 'text-slate-600'}`}>
+                              {day.label}
+                            </p>
+                            <p className={`mb-1 text-center text-sm font-black ${selected ? 'text-white' : 'text-slate-600'}`}>
+                              {previewPlan[day.id] || 0}P
+                            </p>
+                            <input
+                              type="number"
+                              step="1"
+                              min="1"
+                              disabled={!selected}
+                              value={editForm?.scheduledWeekdayWeights[day.id] ?? 1}
+                              onClick={e => e.stopPropagation()}
+                              onChange={e => setEditForm(prev => prev ? {
+                                  ...prev,
+                                  scheduledWeekdayWeights: normalizeWeekdayWeights({
+                                    ...prev.scheduledWeekdayWeights,
+                                    [day.id]: Math.max(1, Number(e.target.value) || 1)
+                                  }, prev.scheduledWeekdays),
+                                  scheduledWeekdayRemainderDay: day.id
+                                } : prev)}
+                              className="w-full rounded-lg bg-slate-800 px-1 py-1 text-center text-xs font-black text-white outline-none disabled:text-slate-600"
+                            />
+                            <p className="mt-1 text-center text-[9px] font-black text-slate-500">비율</p>
+                          </div>
+                        );
+                      })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 border-t border-slate-800 pt-4">
+                    <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                      <p className="text-[10px] font-black uppercase text-slate-500">후행과목</p>
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setEditForm(prev => prev ? {
+                            ...prev,
+                            followUpSubjects: [...prev.followUpSubjects, {
+                              id: Math.random().toString(36).slice(2, 11),
+                              name: '',
+                              startPage: 1,
+                              endPage: 100,
+                              completedPage: 0
+                            }]
+                          } : prev);
+                        }}
+                        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[10px] font-black text-white"
+                      >
+                        + 추가
+                      </button>
+                    </div>
+                    {editForm?.followUpSubjects.length ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-[minmax(0,1fr)_68px_68px_32px] gap-2 px-2 text-center text-[9px] font-black text-slate-600">
+                          <span className="text-left">과목명</span><span>시작</span><span>완료</span><span />
+                        </div>
+                        {editForm.followUpSubjects.map((followUp, index) => (
+                          <div key={followUp.id} className="grid grid-cols-[minmax(0,1fr)_68px_68px_32px] gap-2 rounded-xl bg-slate-950 p-2">
+                            <input
+                              value={followUp.name}
+                              onChange={e => setEditForm(prev => prev ? {
+                                ...prev,
+                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, name: e.target.value } : item)
+                              } : prev)}
+                              placeholder={`${index + 1}번째 후행과목`}
+                              className="min-w-0 rounded-lg bg-slate-900 px-2 text-xs font-black text-white outline-none"
+                            />
+                            <input
+                              type="number"
+                              min="1"
+                              value={followUp.startPage}
+                              title="시작 페이지"
+                              onChange={e => setEditForm(prev => prev ? {
+                                ...prev,
+                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, startPage: Number(e.target.value) } : item)
+                              } : prev)}
+                              className="rounded-lg bg-slate-900 px-1 text-center text-xs font-black text-indigo-300 outline-none"
+                            />
+                            <input
+                              type="number"
+                              min={followUp.startPage}
+                              value={followUp.endPage}
+                              title="완료 페이지"
+                              onChange={e => setEditForm(prev => prev ? {
+                                ...prev,
+                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, endPage: Number(e.target.value) } : item)
+                              } : prev)}
+                              className="rounded-lg bg-slate-900 px-1 text-center text-xs font-black text-emerald-300 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditForm(prev => prev ? { ...prev, followUpSubjects: prev.followUpSubjects.filter(item => item.id !== followUp.id) } : prev);
+                              }}
+                              className="rounded-lg bg-rose-950 text-sm font-black text-rose-400"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-4 border-t border-slate-800 pt-4">
                     <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">복습 과목</p>
                     <div className="max-h-40 overflow-y-auto rounded-2xl bg-slate-950 p-2">
                       <div className="flex flex-wrap gap-2">
@@ -860,14 +1077,7 @@ export const Analytics: React.FC<Props> = ({
                             const selectedHere = editForm?.reviewSubjectIds.includes(candidate.id) ?? false;
                             return !ownerId || ownerId === sub.id || selectedHere;
                           })
-                          .sort((a, b) => {
-                            const aIndex = editForm?.reviewSubjectIds.indexOf(a.id) ?? -1;
-                            const bIndex = editForm?.reviewSubjectIds.indexOf(b.id) ?? -1;
-                            if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
-                            if (aIndex >= 0) return -1;
-                            if (bIndex >= 0) return 1;
-                            return a.name.localeCompare(b.name, 'ko');
-                          })
+                              .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
                           .map(candidate => {
                           const selectedIndex = editForm?.reviewSubjectIds.indexOf(candidate.id) ?? -1;
                           return (
@@ -891,6 +1101,19 @@ export const Analytics: React.FC<Props> = ({
                         })}
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {!isEditing && (sub.followUpSubjects || []).length > 0 && (
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                  <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-indigo-400">후행과목</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(sub.followUpSubjects || []).map((followUp, index) => (
+                      <span key={followUp.id} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-700">
+                        {index + 1}. {followUp.name} · p.{followUp.startPage}~{followUp.endPage}
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1005,8 +1228,18 @@ export const Analytics: React.FC<Props> = ({
                 <div className="space-y-4 md:ml-12 md:border-l-2 md:border-rose-100 md:pl-4">
                   <div className="space-y-3">
                     {reviewSubjects.map(reviewSubject => {
-                      const reviewProgress = reviewSubject.totalPages > 0
-                        ? Math.round((reviewSubject.completedPages / reviewSubject.totalPages) * 100)
+                      const reviewActiveStage = getActiveSubjectStage(reviewSubject);
+                      const reviewStagePageCount = reviewActiveStage
+                        ? Math.max(0, reviewActiveStage.endPage - reviewActiveStage.startPage + 1)
+                        : getSubjectTotalPageCount(reviewSubject);
+                      const reviewStageCompletedPages = reviewActiveStage
+                        ? Math.min(
+                            reviewStagePageCount,
+                            Math.max(0, reviewActiveStage.completedPage - reviewActiveStage.startPage + 1)
+                          )
+                        : getSubjectCompletedPageCount(reviewSubject);
+                      const reviewProgress = reviewStagePageCount > 0
+                        ? Math.round((reviewStageCompletedPages / reviewStagePageCount) * 100)
                         : 0;
                       const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id);
                       return (
@@ -1041,8 +1274,12 @@ export const Analytics: React.FC<Props> = ({
 
                           <div className="space-y-1 px-1">
                             <div className="flex items-end justify-between">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">학습 진척도 ({reviewProgress}%)</p>
-                              <p className="text-base font-black text-slate-900">{reviewSubject.completedPages} / {reviewSubject.totalPages} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                {reviewActiveStage
+                                  ? `학습 진척도 · ${reviewActiveStage.name} (p.${reviewActiveStage.startPage}~${reviewActiveStage.endPage}) · ${reviewProgress}%`
+                                  : `학습 진척도 · 전체 완료 · ${reviewProgress}%`}
+                              </p>
+                              <p className="text-base font-black text-slate-900">{reviewStageCompletedPages} / {reviewStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
                             </div>
                             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                               <div className="h-full bg-rose-500 transition-all duration-1000" style={{ width: `${reviewProgress}%` }} />
@@ -1087,7 +1324,7 @@ export const Analytics: React.FC<Props> = ({
       </div>
 
       <div className="bg-slate-100/70 p-3 md:p-4 rounded-2xl border border-slate-200">
-        <RenderTree />
+        {RenderTree({})}
         
         {subjects.length === 0 && tagDefinitions.length === 0 && (
           <div className="py-32 text-center opacity-10 grayscale">

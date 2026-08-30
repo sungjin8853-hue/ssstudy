@@ -1,4 +1,4 @@
-import { Subject, StudyLog } from '../types';
+import { FollowUpSubject, Subject, StudyLog } from '../types';
 
 export const WEEKDAYS = [
   { id: 1, label: '월' },
@@ -13,6 +13,112 @@ export const WEEKDAYS = [
 export const normalizeWeekdays = (days?: number[]) => (
   days && days.length > 0 ? days : WEEKDAYS.map(day => day.id)
 );
+
+export const getFollowUpPageCount = (followUp: FollowUpSubject) => (
+  Math.max(0, Math.round(followUp.endPage) - Math.round(followUp.startPage) + 1)
+);
+
+export const getFollowUpCompletedPageCount = (followUp: FollowUpSubject) => (
+  Math.min(
+    getFollowUpPageCount(followUp),
+    Math.max(0, Math.round(followUp.completedPage) - Math.round(followUp.startPage) + 1)
+  )
+);
+
+export const getSubjectStartPage = (subject: Subject) => (
+  Math.max(1, Number(subject.startPage) || 1)
+);
+
+export const getSubjectBasePageCount = (subject: Subject) => (
+  Math.max(0, subject.totalPages - getSubjectStartPage(subject) + 1)
+);
+
+export const getSubjectBaseCompletedPageCount = (subject: Subject) => (
+  Math.min(
+    getSubjectBasePageCount(subject),
+    Math.max(0, subject.completedPages - getSubjectStartPage(subject) + 1)
+  )
+);
+
+export const getSubjectTotalPageCount = (subject: Subject) => (
+  getSubjectBasePageCount(subject)
+  + (subject.followUpSubjects || []).reduce((sum, followUp) => sum + getFollowUpPageCount(followUp), 0)
+);
+
+export const getSubjectCompletedPageCount = (subject: Subject) => (
+  getSubjectBaseCompletedPageCount(subject)
+  + (subject.followUpSubjects || []).reduce((sum, followUp) => sum + getFollowUpCompletedPageCount(followUp), 0)
+);
+
+export const getSubjectRemainingPageCount = (subject: Subject) => (
+  Math.max(0, getSubjectTotalPageCount(subject) - getSubjectCompletedPageCount(subject))
+);
+
+export const getActiveSubjectStage = (subject: Subject) => {
+  const startPage = getSubjectStartPage(subject);
+  if (getSubjectBaseCompletedPageCount(subject) < getSubjectBasePageCount(subject)) {
+    const completedPage = Math.max(startPage - 1, subject.completedPages);
+    return {
+      id: subject.id,
+      name: subject.name,
+      startPage,
+      endPage: subject.totalPages,
+      completedPage,
+      currentPage: completedPage + 1,
+      remainingPages: Math.max(0, subject.totalPages - completedPage),
+      isFollowUp: false
+    };
+  }
+
+  const followUp = (subject.followUpSubjects || []).find(item => (
+    getFollowUpCompletedPageCount(item) < getFollowUpPageCount(item)
+  ));
+  if (!followUp) return null;
+
+  const completedPage = Math.max(followUp.startPage - 1, followUp.completedPage);
+  return {
+    id: followUp.id,
+    name: followUp.name,
+    startPage: followUp.startPage,
+    endPage: followUp.endPage,
+    completedPage,
+    currentPage: completedPage + 1,
+    remainingPages: Math.max(0, followUp.endPage - completedPage),
+    isFollowUp: true
+  };
+};
+
+export const adjustSubjectProgress = (subject: Subject, pageDelta: number): Subject => {
+  const totalPages = getSubjectTotalPageCount(subject);
+  const startPage = getSubjectStartPage(subject);
+  const basePageCount = getSubjectBasePageCount(subject);
+  const nextCompleted = Math.min(
+    totalPages,
+    Math.max(0, getSubjectCompletedPageCount(subject) + pageDelta)
+  );
+  const baseCompletedPageCount = Math.min(basePageCount, nextCompleted);
+  const baseCompletedPage = baseCompletedPageCount > 0
+    ? startPage + baseCompletedPageCount - 1
+    : startPage - 1;
+  let remainingCompleted = Math.max(0, nextCompleted - baseCompletedPageCount);
+  const followUpSubjects = (subject.followUpSubjects || []).map(followUp => {
+    const pageCount = getFollowUpPageCount(followUp);
+    const completedCount = Math.min(pageCount, remainingCompleted);
+    remainingCompleted -= completedCount;
+    return {
+      ...followUp,
+      completedPage: completedCount > 0
+        ? followUp.startPage + completedCount - 1
+        : followUp.startPage - 1
+    };
+  });
+
+  return {
+    ...subject,
+    completedPages: baseCompletedPage,
+    followUpSubjects
+  };
+};
 
 export const getLocalDateKey = (date = new Date()) => {
   const year = date.getFullYear();
@@ -175,7 +281,7 @@ export const getSubjectDayRemainingPages = (
   targetStudyDate: string,
   today = new Date()
 ) => {
-  const remainingPages = Math.max(0, subject.totalPages - subject.completedPages);
+  const remainingPages = getSubjectRemainingPageCount(subject);
   const scopedPages = logs
     .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
     .reduce((sum, log) => sum + log.pagesRead, 0);

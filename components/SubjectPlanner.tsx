@@ -21,6 +21,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
       name,
       createdAt: new Date().toISOString(),
       planResetDate: new Date().toISOString().slice(0, 10),
+      startPage: 1,
       totalPages: pages,
       completedPages: currentPages,
       targetDate: date,
