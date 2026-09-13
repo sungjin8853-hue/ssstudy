@@ -10,6 +10,9 @@ export default defineConfig({
     // process.env.API_KEY가 없는 경우 빈 문자열로 처리하여 빌드 에러 방지
     'process.env.API_KEY': JSON.stringify(process.env.API_KEY || '')
   },
+  resolve: {
+    preserveSymlinks: true,
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',

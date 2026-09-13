@@ -1,47 +1,99 @@
-import React, { useState } from 'react';
-import { Subject } from '../types';
-import { calculateFreshWeekdayPagePlan, getDiffDays } from '../utils/schedule';
+import React, { useMemo, useState } from 'react';
+import { StudyLog, Subject } from '../types';
+import { calculateStats } from '../utils/math';
+import {
+  calculateFreshWeekdayPagePlan,
+  getDiffDays,
+  getActiveSubjectStage,
+  getSubjectRemainingPageCount,
+  WEEKDAYS
+} from '../utils/schedule';
 
 interface Props {
+  subjects: Subject[];
+  logs: StudyLog[];
   onAddSubject: (s: Subject) => void;
 }
 
-export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
-  const weekdays = [1, 2, 3, 4, 5, 6, 0];
+export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }) => {
   const [name, setName] = useState('');
+  const [startPage, setStartPage] = useState(1);
   const [currentPages, setCurrentPages] = useState(0);
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
   const [isRequired, setIsRequired] = useState(false);
+  const [efficiencySourceId, setEfficiencySourceId] = useState('');
+  const [scheduledWeekdays, setScheduledWeekdays] = useState<number[]>(WEEKDAYS.map(day => day.id));
+
+  const toggleWeekday = (weekday: number) => {
+    setScheduledWeekdays(current => {
+      if (current.includes(weekday)) {
+        if (current.length === 1) return current;
+        return current.filter(day => day !== weekday);
+      }
+
+      return WEEKDAYS.map(day => day.id).filter(day => current.includes(day) || day === weekday);
+    });
+  };
+
+  const efficiencySources = useMemo(() => (
+    subjects
+      .map(subject => {
+        const stats = calculateStats(
+          logs.filter(log => log.subjectId === subject.id),
+          getSubjectRemainingPageCount(subject),
+          0,
+          subject.initialAverageTimePerPage
+        );
+        return {
+          id: subject.id,
+          name: getActiveSubjectStage(subject)?.name || subject.name,
+          averageTimePerPage: stats.averageTimePerPage
+        };
+      })
+      .filter(subject => subject.averageTimePerPage > 0)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+  ), [logs, subjects]);
 
   const handleAdd = () => {
     if (!name || !date) return;
+    const normalizedStartPage = Math.max(1, Math.round(Number(startPage) || 1));
+    const normalizedEndPage = Math.max(normalizedStartPage, Math.round(Number(pages) || normalizedStartPage));
+    const normalizedCompletedPage = Math.min(
+      normalizedEndPage,
+      Math.max(normalizedStartPage - 1, Math.round(Number(currentPages) || 0))
+    );
+    const efficiencySource = efficiencySources.find(subject => subject.id === efficiencySourceId);
     const nextSubject: Subject = {
       id: Math.random().toString(36).substr(2, 9),
       name,
       createdAt: new Date().toISOString(),
       planResetDate: new Date().toISOString().slice(0, 10),
-      startPage: 1,
-      totalPages: pages,
-      completedPages: currentPages,
+      startPage: normalizedStartPage,
+      totalPages: normalizedEndPage,
+      completedPages: normalizedCompletedPage,
       targetDate: date,
+      initialAverageTimePerPage: efficiencySource?.averageTimePerPage,
       isRequired,
-      scheduledWeekdays: weekdays,
+      scheduledWeekdays,
     };
 
     onAddSubject({
       ...nextSubject,
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         nextSubject,
-        Math.max(0, pages - currentPages),
+        getSubjectRemainingPageCount(nextSubject),
         getDiffDays(date)
       )
     });
     setName('');
+    setStartPage(1);
     setPages(100);
     setCurrentPages(0);
     setDate('');
     setIsRequired(false);
+    setEfficiencySourceId('');
+    setScheduledWeekdays(WEEKDAYS.map(day => day.id));
   };
 
   return (
@@ -62,7 +114,22 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all"
             />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">시작 페이지</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={startPage}
+                onChange={e => {
+                  const nextStartPage = Number(e.target.value);
+                  setStartPage(nextStartPage);
+                  setCurrentPages(current => Math.max(nextStartPage - 1, current));
+                }}
+                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
+              />
+            </div>
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">현재 완료 페이지</label>
               <input 
@@ -92,6 +159,43 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
               />
             </div>
+          </div>
+          <div className="space-y-2">
+            <label className="ml-1 text-[10px] font-black uppercase tracking-widest text-slate-400">학습 요일</label>
+            <div className="grid grid-cols-7 gap-1.5 rounded-2xl border border-slate-200 bg-white p-2">
+              {WEEKDAYS.map(day => {
+                const selected = scheduledWeekdays.includes(day.id);
+                return (
+                  <button
+                    key={day.id}
+                    type="button"
+                    onClick={() => toggleWeekday(day.id)}
+                    className={`rounded-xl py-3 text-sm font-black transition-all ${
+                      selected
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+                    }`}
+                  >
+                    {day.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">기존 효율 가져오기</label>
+            <select
+              value={efficiencySourceId}
+              onChange={event => setEfficiencySourceId(event.target.value)}
+              className="w-full rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-800 outline-none focus:ring-4 focus:ring-indigo-500/10"
+            >
+              <option value="">사용 안 함</option>
+              {efficiencySources.map(subject => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.name} · {subject.averageTimePerPage.toFixed(2)}분/P
+                </option>
+              ))}
+            </select>
           </div>
           <div className="space-y-2">
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">중요도</label>
@@ -140,7 +244,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
           onClick={handleAdd}
           className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-sm hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all active:scale-[0.98]"
         >
-          계획 등록 및 분석 시작
+          계획 등록
         </button>
       </div>
       <p className="mt-8 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest">

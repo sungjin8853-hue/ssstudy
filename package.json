@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:review-gate": "node --test tests/reviewGate.test.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

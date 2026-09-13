@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import {
   calculateBasicReviewGroupTiming,
@@ -6,7 +6,8 @@ import {
   resolveSubjectReviewAverageTimePerPage
 } from '../utils/math';
 import { getReviewDetailKey } from '../utils/review';
-import { calculateFreshWeekdayPagePlan, getActiveSubjectStage, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { getDueReviewGateRetries, getReviewGateQuestionKeys, parseReviewGateMemo, ReviewGateOutcome, ReviewGatePart } from '../utils/reviewGate';
+import { calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 
 interface Props {
   subjects: Subject[];
@@ -23,6 +24,8 @@ interface Props {
   onAdvanceReviewSubject: (logIds: string[], completedReviewSubjectId: string, nextReviewSubjectId: string | null, reviewTimeSpentMinutes: number) => void;
   onRecordReviewSubjectTime: (logIds: string[], completedReviewSubjectId: string, reviewTimeSpentMinutes: number) => void;
   onUpdateReviewMemo: (logId: string, memo: string) => void;
+  onFinishReviewGate: (outcomes: ReviewGateOutcome[], isRetry: boolean) => void;
+  onClearReviewGateRetries: (logIds: string[]) => void;
 }
 
 interface SessionTimer {
@@ -48,6 +51,8 @@ interface ReviewQueueGroup {
   subjectName: string;
   subject?: Subject;
   reviewType: 'basic' | 'subject';
+  isGateRetry?: boolean;
+  reviewSubjectIds: string[];
   logs: StudyLog[];
   earliestReviewTime: number;
   averageTimePerPage: number;
@@ -83,6 +88,16 @@ interface ActiveReviewRun {
   currentIndex: number;
   sourceName: string;
 }
+
+interface GateReviewQuestion {
+  id: string;
+  questionKey: string;
+  logId: string;
+  answerIndex?: number;
+  range: string;
+}
+
+type GateReviewResult = 'correct' | 'wrong';
 
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
 const SESSION_MEMO_KEY = 'swp_session_memos';
@@ -234,36 +249,62 @@ const getReviewRange = (log: StudyLog) => {
   return null;
 };
 
-const getAvailableReviewSubjectIds = (parentSubject: Subject | undefined, sourceSubjects: Subject[]) => (
-  Array.from(new Set(parentSubject?.reviewSubjectIds || []))
+const getAvailableReviewSubjectIds = (reviewSubjectIds: string[], parentSubject: Subject | undefined, sourceSubjects: Subject[]) => (
+  Array.from(new Set(reviewSubjectIds))
     .filter(id => id !== parentSubject?.id && sourceSubjects.some(subject => (
       subject.id === id && getSubjectRemainingPageCount(subject) > 0
     )))
 );
 
-const getEffectiveReviewSubjectId = (log: StudyLog, sourceSubjects: Subject[]) => {
-  if (log.reviewSubjectId) {
-    const ownerSubject = sourceSubjects.find(subject => (subject.reviewSubjectIds || []).includes(log.reviewSubjectId || ''));
-    const availableReviewSubjectIds = getAvailableReviewSubjectIds(ownerSubject, sourceSubjects);
-    if (availableReviewSubjectIds.includes(log.reviewSubjectId)) return log.reviewSubjectId;
-    return availableReviewSubjectIds[0] || ownerSubject?.id || log.subjectId;
+const findReviewSubjectOwner = (reviewSubjectId: string, sourceSubjects: Subject[]) => {
+  for (const subject of sourceSubjects) {
+    if ((subject.reviewSubjectIds || []).includes(reviewSubjectId)) {
+      return { subject, stageId: subject.id };
+    }
+
+    const followUp = (subject.followUpSubjects || []).find(stage => (
+      (stage.reviewSubjectIds || []).includes(reviewSubjectId)
+    ));
+    if (followUp) return { subject, stageId: followUp.id };
   }
 
-  const ownerSubject = sourceSubjects.find(subject => (subject.reviewSubjectIds || []).includes(log.subjectId));
-  if (ownerSubject) return log.subjectId;
+  return null;
+};
 
-  const parentSubject = sourceSubjects.find(subject => subject.id === log.subjectId);
-  const firstReviewSubjectId = getAvailableReviewSubjectIds(parentSubject, sourceSubjects)[0];
+const getReviewSubjectIdsForLog = (log: StudyLog, parentSubject: Subject | undefined, sourceSubjects: Subject[]) => {
+  const configuredIds = Array.isArray(log.reviewSubjectIdsSnapshot)
+    ? log.reviewSubjectIdsSnapshot
+    : parentSubject
+      ? getSubjectStageReviewSubjectIds(parentSubject, log.subjectStageId || parentSubject.id)
+      : [];
 
-  return firstReviewSubjectId || log.subjectId;
+  return getAvailableReviewSubjectIds(configuredIds, parentSubject, sourceSubjects);
+};
+
+const getEffectiveReviewSubjectId = (log: StudyLog, sourceSubjects: Subject[]) => {
+  const ownerByLogSubject = findReviewSubjectOwner(log.subjectId, sourceSubjects);
+  const parentSubject = sourceSubjects.find(subject => subject.id === log.subjectId)
+    || ownerByLogSubject?.subject;
+  const availableReviewSubjectIds = getReviewSubjectIdsForLog(log, parentSubject, sourceSubjects);
+
+  if (log.reviewSubjectId) {
+    if (availableReviewSubjectIds.includes(log.reviewSubjectId)) return log.reviewSubjectId;
+    return availableReviewSubjectIds[0] || parentSubject?.id || log.subjectId;
+  }
+
+  if (ownerByLogSubject) return log.subjectId;
+
+  return availableReviewSubjectIds[0] || log.subjectId;
 };
 
 const getReviewParentSubject = (log: StudyLog, reviewSubjectId: string, sourceSubjects: Subject[]) => {
-  const ownerByLogSubject = sourceSubjects.find(subject => (subject.reviewSubjectIds || []).includes(log.subjectId));
-  if (ownerByLogSubject) return ownerByLogSubject;
+  const directSubject = sourceSubjects.find(subject => subject.id === log.subjectId);
+  if (directSubject) return directSubject;
 
-  return sourceSubjects.find(subject => subject.id === log.subjectId)
-    || sourceSubjects.find(subject => (subject.reviewSubjectIds || []).includes(reviewSubjectId));
+  const ownerByLogSubject = findReviewSubjectOwner(log.subjectId, sourceSubjects);
+  if (ownerByLogSubject) return ownerByLogSubject.subject;
+
+  return findReviewSubjectOwner(reviewSubjectId, sourceSubjects)?.subject;
 };
 
 const compareReviewLogsByRange = (a: StudyLog, b: StudyLog) => {
@@ -337,6 +378,38 @@ const writeSessionMemoCollapsed = (collapsed: boolean) => {
 };
 
 const getMemoTextSize = (_text: string) => 'text-lg';
+
+const AutoResizeTextarea = ({
+  minHeight = 64,
+  maxHeight,
+  value,
+  className = '',
+  style,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { minHeight?: number; maxHeight?: number }) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const hasContent = String(value ?? '').trim().length > 0;
+    textarea.style.height = '0px';
+    const contentHeight = Math.max(minHeight + (hasContent ? 24 : 0), textarea.scrollHeight);
+    const nextHeight = maxHeight ? Math.min(maxHeight, contentHeight) : contentHeight;
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = maxHeight && contentHeight > maxHeight ? 'auto' : 'hidden';
+  }, [maxHeight, minHeight, value]);
+
+  return (
+    <textarea
+      {...props}
+      ref={textareaRef}
+      value={value}
+      className={`${className} resize-none`}
+      style={{ ...style, minHeight, maxHeight }}
+    />
+  );
+};
 
 const getSubjectStudyPlanForDate = (
   subject: Subject,
@@ -436,10 +509,11 @@ const getReviewGroupSignature = (logs: StudyLog[]) => (
   logs.map(log => log.id).sort().join('|')
 );
 
-const buildDueReviewGroups = (
+export const buildDueReviewGroups = (
   sourceLogs: StudyLog[],
   sourceSubjects: Subject[],
-  nowMs: number
+  nowMs: number,
+  handledRegularIds: Set<string> = new Set()
 ): ReviewQueueGroup[] => {
   const groups = new Map<string, ReviewQueueGroup>();
 
@@ -453,7 +527,7 @@ const buildDueReviewGroups = (
         && Number.isFinite(nextReviewTime)
         && nextReviewTime <= nowMs;
 
-      if (!isDue || seenLogIds.has(log.id)) return false;
+      if (!isDue || seenLogIds.has(log.id) || handledRegularIds.has(log.id)) return false;
       seenLogIds.add(log.id);
       return true;
     })
@@ -470,8 +544,10 @@ const buildDueReviewGroups = (
       const subjectName = subject?.name || log.subjectNameSnapshot || '삭제된 과목';
       const parentSubjectName = parentSubject?.name || log.subjectNameSnapshot || subjectName;
       const reviewType = reviewSubjectId === parentSubjectId ? 'basic' : 'subject';
+      const reviewSubjectIds = getReviewSubjectIdsForLog(log, parentSubject, sourceSubjects);
       const reviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : nowMs;
-      const groupId = `${parentSubjectId}:${reviewSubjectId}`;
+      const reviewSequenceKey = reviewSubjectIds.join('>') || 'basic';
+      const groupId = `${parentSubjectId}:${reviewSubjectId}:${reviewSequenceKey}`;
       const group = groups.get(groupId) || {
         id: groupId,
         parentSubjectId,
@@ -480,6 +556,7 @@ const buildDueReviewGroups = (
         subjectName,
         subject,
         reviewType,
+        reviewSubjectIds,
         logs: [],
         earliestReviewTime: reviewTime,
         averageTimePerPage: 0,
@@ -487,11 +564,66 @@ const buildDueReviewGroups = (
       };
 
       group.logs.push(log);
+      group.reviewSubjectIds = Array.from(new Set([...group.reviewSubjectIds, ...reviewSubjectIds]));
       group.earliestReviewTime = Math.min(group.earliestReviewTime, reviewTime);
       groups.set(groupId, group);
     });
 
-  return Array.from(groups.values())
+  getDueReviewGateRetries(sourceLogs, nowMs).forEach(log => {
+    const subject = sourceSubjects.find(item => item.id === log.subjectId);
+    const subjectName = subject?.name || log.subjectNameSnapshot || '삭제된 과목';
+    const groupId = `gate-retry:${log.subjectId}`;
+    const retry = log.reviewGateRetry!;
+    const reviewTime = Date.parse(retry.dueAt);
+    const group: ReviewQueueGroup = groups.get(groupId) || {
+      id: groupId,
+      parentSubjectId: log.subjectId,
+      parentSubjectName: subjectName,
+      subjectId: log.subjectId,
+      subjectName,
+      subject,
+      reviewType: 'basic',
+      isGateRetry: true,
+      reviewSubjectIds: [],
+      logs: [],
+      earliestReviewTime: reviewTime,
+      averageTimePerPage: 0,
+      estimatedMinutes: 0
+    };
+    group.logs.push({ ...log, reviewStep: retry.reviewStep });
+    group.earliestReviewTime = Math.min(group.earliestReviewTime, reviewTime);
+    groups.set(groupId, group);
+  });
+
+  const rangeScopedGroups = Array.from(groups.values()).flatMap(group => {
+    if (group.isGateRetry || group.reviewType !== 'subject') return [group];
+
+    const clusters = sortReviewLogsByRange(group.logs).reduce<StudyLog[][]>((result, log) => {
+      const range = getReviewRange(log);
+      const currentCluster = result[result.length - 1];
+      const previousRange = currentCluster?.length
+        ? getReviewRange(currentCluster[currentCluster.length - 1])
+        : null;
+
+      if (currentCluster && range && previousRange && range.start <= previousRange.end + 1) {
+        currentCluster.push(log);
+      } else {
+        result.push([log]);
+      }
+      return result;
+    }, []);
+
+    return clusters.map((clusterLogs, index) => ({
+      ...group,
+      id: `${group.id}:range-${index}`,
+      logs: clusterLogs,
+      earliestReviewTime: Math.min(...clusterLogs.map(log => (
+        log.nextReviewDate ? Date.parse(log.nextReviewDate) : group.earliestReviewTime
+      )))
+    }));
+  });
+
+  return rangeScopedGroups
     .map(group => {
       const reviewPages = group.logs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
       const subjectReviewAverage = group.reviewType === 'subject'
@@ -559,13 +691,20 @@ const formatSpeedChangePercent = (percent: number) => (
   `${percent >= 0 ? '+' : ''}${Math.round(percent)}%`
 );
 
-export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onActiveWeekdayChange, detailSubjectId, onDetailSubjectChange, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onActiveWeekdayChange, detailSubjectId, onDetailSubjectChange, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo, onFinishReviewGate, onClearReviewGateRetries }) => {
   const reviewSubjectIdSet = useMemo(() => (
-    new Set(subjects.flatMap(subject => subject.reviewSubjectIds || []))
+    new Set(subjects.flatMap(getAllSubjectReviewIds))
+  ), [subjects]);
+  const followUpSourceSubjectIdSet = useMemo(() => (
+    new Set(subjects.flatMap(subject => (
+      (subject.followUpSubjects || []).flatMap(stage => stage.sourceSubjectId ? [stage.sourceSubjectId] : [])
+    )))
   ), [subjects]);
   const ordinarySubjects = useMemo(
-    () => subjects.filter(subject => !reviewSubjectIdSet.has(subject.id)),
-    [reviewSubjectIdSet, subjects]
+    () => subjects.filter(subject => (
+      !reviewSubjectIdSet.has(subject.id) && !followUpSourceSubjectIdSet.has(subject.id)
+    )),
+    [followUpSourceSubjectIdSet, reviewSubjectIdSet, subjects]
   );
   const measurableSubjects = ordinarySubjects.filter(subject => getSubjectRemainingPageCount(subject) > 0);
   const [step, setStep] = useState<Step>('idle');
@@ -585,7 +724,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       id: log.id,
       range: formatReviewRange(log),
       memo: (log.reviewMemo || '').trim()
-    }));
+    }))
+    .filter(item => item.memo.length > 0);
   const nextReviewRunSubjectId = activeReviewRun
     ? activeReviewRun.reviewSubjectIds[activeReviewRun.currentIndex + 1] || null
     : null;
@@ -607,7 +747,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [reviewMemo, setReviewMemo] = useState('');
   const [isReviewNotePanelOpen, setIsReviewNotePanelOpen] = useState(false);
   const [isReviewCondensePanelOpen, setIsReviewCondensePanelOpen] = useState(false);
-  const [selectedReviewNoteIds, setSelectedReviewNoteIds] = useState<string[]>([]);
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
   const [isManualPickerOpen, setIsManualPickerOpen] = useState(false);
   const [selectedSessionTimerId, setSelectedSessionTimerId] = useState('none');
@@ -621,9 +760,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [preSessionReviewLogs, setPreSessionReviewLogs] = useState<StudyLog[]>([]);
   const [preSessionReviewDrafts, setPreSessionReviewDrafts] = useState<Record<string, string>>({});
   const [preSessionReviewSeconds, setPreSessionReviewSeconds] = useState(0);
+  const [preSessionReviewTargetSeconds, setPreSessionReviewTargetSeconds] = useState(0);
+  const [preSessionReviewParentSubjectId, setPreSessionReviewParentSubjectId] = useState('');
+  const [preSessionReviewGroup, setPreSessionReviewGroup] = useState<ReviewQueueGroup | null>(null);
   const [isPreSessionReviewRunning, setIsPreSessionReviewRunning] = useState(false);
   const [preSessionReviewSubjectName, setPreSessionReviewSubjectName] = useState('');
   const [preSessionReviewMode, setPreSessionReviewMode] = useState<PreSessionReviewMode>('before-study');
+  const [gateReviewResults, setGateReviewResults] = useState<Record<string, GateReviewResult>>({});
+  const [isGateAnswerRevealed, setIsGateAnswerRevealed] = useState(false);
+  const [editingRestoredGateLogId, setEditingRestoredGateLogId] = useState('');
+  const [restoredGateEditDraft, setRestoredGateEditDraft] = useState('');
   const [resumeStudyTimerAfterReview, setResumeStudyTimerAfterReview] = useState(false);
   const [dismissedReviewSignature, setDismissedReviewSignature] = useState('');
   const [handledReviewLogIds, setHandledReviewLogIds] = useState<string[]>([]);
@@ -643,21 +789,69 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const activeTimerPageSecondsRef = useRef<Record<string, number[]>>({});
   const currentPageMeasuredSecondsRef = useRef(0);
   const selectedSessionTimerIdRef = useRef('none');
+  const gateQuestionCardRef = useRef<HTMLDivElement | null>(null);
   const halfwaySoundPagesRef = useRef<Set<number>>(new Set());
   const markerSoundPagesRef = useRef<Set<number>>(new Set());
   const pageTurnSoundPagesRef = useRef<Set<number>>(new Set());
+
+  const preSessionGateMemoItems = useMemo(() => (
+    sortReviewLogsByRange(preSessionReviewLogs).map(log => {
+      const memo = preSessionReviewDrafts[log.id] ?? log.reviewMemo ?? '';
+      return {
+        log,
+        memo,
+        range: formatReviewRange(log),
+        parsed: parseReviewGateMemo(memo)
+      };
+    }).filter(item => item.memo.trim().length > 0)
+  ), [preSessionReviewDrafts, preSessionReviewLogs]);
+
+  const gateReviewQuestions = useMemo<GateReviewQuestion[]>(() => (
+    preSessionGateMemoItems.flatMap((item): GateReviewQuestion[] => {
+      const questionKeys = getReviewGateQuestionKeys(item.memo);
+      const pendingRetryKeys = preSessionReviewGroup?.isGateRetry
+        ? new Set(item.log.reviewGateRetry?.questionKeys || questionKeys)
+        : null;
+      return questionKeys
+        .filter(questionKey => !pendingRetryKeys || pendingRetryKeys.has(questionKey))
+        .map(questionKey => {
+          const answerIndex = questionKey.startsWith('answer:')
+            ? Number(questionKey.slice('answer:'.length))
+            : undefined;
+          return {
+            id: `${item.log.id}:${questionKey}`,
+            questionKey,
+            logId: item.log.id,
+            answerIndex: Number.isInteger(answerIndex) ? answerIndex : undefined,
+            range: item.range
+          };
+        });
+    })
+  ), [preSessionGateMemoItems, preSessionReviewGroup?.isGateRetry]);
+
+  const gateReviewQuestionIds = new Set(gateReviewQuestions.map(question => question.id));
+  const answeredGateQuestionCount = Object.keys(gateReviewResults)
+    .filter(id => gateReviewQuestionIds.has(id)).length;
+  const currentGateQuestion = gateReviewQuestions.find(question => !gateReviewResults[question.id]);
+  const isGateReviewComplete = !currentGateQuestion;
+  const gateWrongCount = gateReviewQuestions.filter(question => gateReviewResults[question.id] === 'wrong').length;
+  const currentGateMemoItem = currentGateQuestion
+    ? preSessionGateMemoItems.find(item => item.log.id === currentGateQuestion.logId)
+    : undefined;
+  const restoredGateMemoItems = preSessionGateMemoItems.filter(item => {
+    const itemQuestions = gateReviewQuestions.filter(question => question.logId === item.log.id);
+    return itemQuestions.length === 0 || itemQuestions.every(question => Boolean(gateReviewResults[question.id]));
+  });
+  const pendingGateMemoItems = preSessionGateMemoItems.filter(item => (
+    item.parsed.answers.length > 0
+    && item.log.id !== currentGateQuestion?.logId
+    && !restoredGateMemoItems.some(restored => restored.log.id === item.log.id)
+  ));
 
   const todayStudyOrder = useMemo(
     () => buildStudyOrderForDate(ordinarySubjects, logs, activeWeekday, activeStudyDate),
     [activeStudyDate, activeWeekday, logs, ordinarySubjects]
   );
-
-  const selectedActiveReviewMemoItems = activeReviewRunMemoItems.filter(item => selectedReviewNoteIds.includes(item.id));
-  const activeReviewRunMemoIdsKey = activeReviewRunMemoItems.map(item => item.id).join('|');
-  const activeReviewRunMemoFilledIdsKey = activeReviewRunMemoItems
-    .filter(item => item.memo.trim().length > 0)
-    .map(item => item.id)
-    .join('|');
 
   const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
 
@@ -669,11 +863,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const dueReviewGroups = useMemo(() => {
     const handledIds = new Set(handledReviewLogIds);
     return buildDueReviewGroups(
-      handledIds.size > 0
-        ? logs.filter(log => !handledIds.has(log.id))
-        : logs,
+      logs,
       subjects,
-      nowMs
+      nowMs,
+      handledIds
     );
   }, [handledReviewLogIds, logs, nowMs, subjects]);
 
@@ -820,9 +1013,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return resolveSubjectReviewAverageTimePerPage(
       logs,
       activeReviewRun.parentSubjectId,
-      selectedSubject.id
+      selectedSubject.id,
+      subjects
     );
-  }, [activeReviewRun, logs, selectedSubject]);
+  }, [activeReviewRun, logs, selectedSubject, subjects]);
 
   const averageTimePerPage = activeReviewRun ? activeReviewAverage : overallAverage;
 
@@ -862,17 +1056,44 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const hasSessionMemo = false;
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
+    const refreshNow = () => setNowMs(Date.now());
+    const currentTime = Date.now();
+    const futureReviewTimes = logs.flatMap(log => {
+      const times = [
+        log.nextReviewDate ? Date.parse(log.nextReviewDate) : NaN,
+        log.reviewGateRetry ? Date.parse(log.reviewGateRetry.dueAt) : NaN
+      ];
+      return times.filter(time => Number.isFinite(time) && time > currentTime);
+    });
+    const nextReviewTime = futureReviewTimes.length > 0 ? Math.min(...futureReviewTimes) : null;
+    const dueTimer = nextReviewTime === null
+      ? null
+      : window.setTimeout(refreshNow, Math.max(0, nextReviewTime - currentTime + 50));
+    const interval = window.setInterval(refreshNow, 1000);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) refreshNow();
+    };
 
-    return () => clearInterval(interval);
-  }, []);
+    refreshNow();
+    window.addEventListener('focus', refreshNow);
+    window.addEventListener('pageshow', refreshNow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (dueTimer !== null) window.clearTimeout(dueTimer);
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshNow);
+      window.removeEventListener('pageshow', refreshNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [logs]);
 
   useEffect(() => {
     if (handledReviewLogIds.length === 0) return;
 
-    const stillDueIds = new Set(rawDueReviewGroups.flatMap(group => group.logs.map(log => log.id)));
+    const stillDueIds = new Set(rawDueReviewGroups
+      .filter(group => !group.isGateRetry)
+      .flatMap(group => group.logs.map(log => log.id)));
     const nextHandledIds = handledReviewLogIds.filter(id => stillDueIds.has(id));
 
     if (nextHandledIds.length !== handledReviewLogIds.length) {
@@ -888,21 +1109,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (!activeReviewRun) {
       setIsReviewNotePanelOpen(false);
       setIsReviewCondensePanelOpen(false);
-      setSelectedReviewNoteIds([]);
-      return;
     }
-
-    const validIds = new Set(activeReviewRunMemoItems.map(item => item.id));
-    const filledIds = activeReviewRunMemoItems
-      .filter(item => item.memo.trim().length > 0)
-      .map(item => item.id);
-    setSelectedReviewNoteIds(prev => {
-      const next = Array.from(new Set([...filledIds, ...prev.filter(id => validIds.has(id))]));
-      return next.length === prev.length && next.every((id, index) => id === prev[index])
-        ? prev
-        : next;
-    });
-  }, [activeReviewRun, activeReviewRunMemoIdsKey, activeReviewRunMemoFilledIdsKey]);
+  }, [activeReviewRun]);
 
   useEffect(() => {
     if (isTimerRunning) {
@@ -1029,10 +1237,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [isPreSessionReviewRunning, preSessionReviewLogs.length]);
 
   useEffect(() => {
+    if (!currentGateQuestion || !gateQuestionCardRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      gateQuestionCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentGateQuestion?.id]);
+
+  useEffect(() => {
     if (!subjectId) return;
     const savedPreference = readReviewSessionPreferences()[subjectId];
-    setSkipReview(savedPreference ?? isSubjectReviewDisabled);
-  }, [subjectId, isSubjectReviewDisabled]);
+    const isLinkedReviewSubject = reviewSubjectIdSet.has(subjectId);
+    setSkipReview(savedPreference ?? (isSubjectReviewDisabled || isLinkedReviewSubject));
+  }, [subjectId, isSubjectReviewDisabled, reviewSubjectIdSet]);
 
   useEffect(() => {
     if (activeReviewRun) return;
@@ -1083,6 +1300,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setPreSessionReviewLogs([]);
     setPreSessionReviewDrafts({});
     setPreSessionReviewSeconds(0);
+    setPreSessionReviewTargetSeconds(0);
+    setPreSessionReviewParentSubjectId('');
     setIsPreSessionReviewRunning(false);
     setPreSessionReviewSubjectName('');
     setResumeStudyTimerAfterReview(false);
@@ -1251,7 +1470,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     selectedSessionTimerIdRef.current = 'none';
     setIsReviewNotePanelOpen(false);
     setIsReviewCondensePanelOpen(false);
-    setSelectedReviewNoteIds([]);
     setActiveReviewRun(null);
   };
 
@@ -1305,9 +1523,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setPreSessionReviewLogs([]);
     setPreSessionReviewDrafts({});
     setPreSessionReviewSeconds(0);
+    setPreSessionReviewTargetSeconds(0);
+    setPreSessionReviewParentSubjectId('');
+    setPreSessionReviewGroup(null);
     setIsPreSessionReviewRunning(false);
     setPreSessionReviewSubjectName('');
     setResumeStudyTimerAfterReview(false);
+    setGateReviewResults({});
+    setIsGateAnswerRevealed(false);
+    setEditingRestoredGateLogId('');
+    setRestoredGateEditDraft('');
   };
 
   const openPreSessionReview = (group: ReviewQueueGroup, mode: PreSessionReviewMode) => {
@@ -1318,10 +1543,21 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       }, {})
     );
     setPreSessionReviewLogs(group.logs);
+    setPreSessionReviewGroup(group);
     setPreSessionReviewSubjectName(group.parentSubjectName || group.subjectName);
     setPreSessionReviewMode(mode);
     setPreSessionReviewSeconds(0);
+    setPreSessionReviewTargetSeconds(
+      group.estimatedMinutes > 0
+        ? Math.max(1, Math.round(group.estimatedMinutes * 60))
+        : 0
+    );
+    setPreSessionReviewParentSubjectId(group.parentSubjectId);
     setIsPreSessionReviewRunning(true);
+    setGateReviewResults({});
+    setIsGateAnswerRevealed(false);
+    setEditingRestoredGateLogId('');
+    setRestoredGateEditDraft('');
   };
 
   const startStudyOrderItem = (item: StudyOrderItem) => {
@@ -1332,20 +1568,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setPendingImmediateStartSubjectId(item.subject.id);
   };
 
-  const startReviewMeasurementRun = (group: ReviewQueueGroup) => {
+  const startReviewSubjectMeasurementRun = (group: ReviewQueueGroup) => {
     const parentSubjectId = group.parentSubjectId || group.logs[0]?.subjectId || group.subjectId;
     const parentSubject = subjects.find(subject => subject.id === parentSubjectId);
-    const reviewSubjectIds = getAvailableReviewSubjectIds(parentSubject, subjects);
+    const reviewSubjectIds = getAvailableReviewSubjectIds(group.reviewSubjectIds, parentSubject, subjects);
 
     if (reviewSubjectIds.length === 0) {
-      openPreSessionReview(group, 'before-study');
       return;
     }
 
     const currentIndex = Math.max(0, reviewSubjectIds.indexOf(group.subjectId));
     const currentReviewSubject = subjects.find(subject => subject.id === reviewSubjectIds[currentIndex]);
     if (!currentReviewSubject) {
-      openPreSessionReview(group, 'before-study');
       return;
     }
 
@@ -1360,6 +1594,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setPlannedPageCount(Math.max(1, group.logs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0)));
     setPostSaveNextSubjectId(null);
     setPendingImmediateStartSubjectId(currentReviewSubject.id);
+  };
+
+  const startReviewMeasurementRun = (group: ReviewQueueGroup) => {
+    openPreSessionReview(group, 'before-study');
   };
 
   const startReviewGroup = (group: ReviewQueueGroup) => {
@@ -1403,14 +1641,103 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const handlePreSessionReviewMemoChange = (logId: string, memo: string) => {
     setPreSessionReviewDrafts(prev => ({ ...prev, [logId]: memo }));
+    setGateReviewResults(prev => Object.fromEntries(
+      Object.entries(prev).filter(([id]) => !id.startsWith(`${logId}:`))
+    ));
+    if (currentGateQuestion?.logId === logId) setIsGateAnswerRevealed(false);
     onUpdateReviewMemo(logId, memo);
   };
 
-  const handleAddActiveReviewMemoItem = (logId: string) => {
-    setIsReviewNotePanelOpen(true);
-    setSelectedReviewNoteIds(prev => (
-      prev.includes(logId) ? prev : [...prev, logId]
+  const startEditingRestoredGateMemo = (logId: string, memo: string) => {
+    setEditingRestoredGateLogId(logId);
+    setRestoredGateEditDraft(memo);
+  };
+
+  const cancelEditingRestoredGateMemo = () => {
+    setEditingRestoredGateLogId('');
+    setRestoredGateEditDraft('');
+  };
+
+  const saveRestoredGateMemo = (logId: string) => {
+    if (editingRestoredGateLogId !== logId) return;
+
+    const memoItem = preSessionGateMemoItems.find(item => item.log.id === logId);
+    if (memoItem && memoItem.memo !== restoredGateEditDraft) {
+      handlePreSessionReviewMemoChange(logId, restoredGateEditDraft);
+    }
+
+    cancelEditingRestoredGateMemo();
+  };
+
+  const handleGateReviewResult = (result: GateReviewResult) => {
+    if (!currentGateQuestion || !isGateAnswerRevealed) return;
+    setGateReviewResults(prev => ({ ...prev, [currentGateQuestion.id]: result }));
+    setIsGateAnswerRevealed(false);
+  };
+
+  const renderGateMemoParts = (
+    logId: string,
+    parts: ReviewGatePart[]
+  ) => parts.map((part, index) => {
+    const renderVisibleText = (text: string, keyPrefix: string) => text.split(/(\[[^\[\]]+\])/g).map((chunk, chunkIndex) => (
+      /^\[[^\[\]]+\]$/.test(chunk)
+        ? (
+          <mark key={`${keyPrefix}-topic-${chunkIndex}`} className="mx-0.5 rounded-md bg-amber-300 px-1.5 py-0.5 font-black text-slate-950">
+            {chunk}
+          </mark>
+        )
+        : <React.Fragment key={`${keyPrefix}-text-${chunkIndex}`}>{chunk}</React.Fragment>
     ));
+
+    if (part.type === 'text') {
+      return <React.Fragment key={`${logId}-text-${index}`}>{renderVisibleText(part.text, `${logId}-${index}`)}</React.Fragment>;
+    }
+
+    const questionId = `${logId}:answer:${part.questionIndex}`;
+    const result = gateReviewResults[questionId];
+    const shouldReveal = !gateReviewQuestionIds.has(questionId)
+      || Boolean(result)
+      || (currentGateQuestion?.id === questionId && isGateAnswerRevealed);
+
+    if (shouldReveal) {
+      return (
+        <React.Fragment key={`${questionId}-${index}`}>
+          {renderVisibleText(part.text, `${questionId}-${index}`)}
+        </React.Fragment>
+      );
+    }
+
+    const visibleTopics = Array.from(part.text.matchAll(/\[([^\[\]]+)\]/g)).map(match => match[0]);
+    const hiddenLength = part.text.replace(/\[[^\[\]]+\]/g, '').trim().length;
+    const blankWidth = `${Math.min(18, Math.max(4, hiddenLength || part.text.length))}ch`;
+    return (
+      <span key={`${questionId}-${index}`} className="mx-1 inline-flex flex-wrap items-center gap-1 font-black text-rose-400">
+        {visibleTopics.map((topic, topicIndex) => (
+          <mark key={`${questionId}-${index}-${topicIndex}`} className="rounded-md bg-amber-300 px-1.5 py-0.5 text-slate-950">
+            {topic}
+          </mark>
+        ))}
+        <span className="inline-block border-b-2 border-rose-400" style={{ width: blankWidth }}>&nbsp;</span>
+      </span>
+    );
+  });
+
+  const renderCurrentGatePrompt = () => {
+    if (!currentGateQuestion || !currentGateMemoItem) return null;
+
+    if (currentGateQuestion.questionKey === 'note') {
+      if (isGateAnswerRevealed) return renderGateMemoParts(currentGateMemoItem.log.id, currentGateMemoItem.parsed.parts);
+      return (
+        <div className="flex min-h-20 flex-wrap items-center justify-center gap-2">
+          {currentGateMemoItem.parsed.topics.map((topic, index) => (
+            <mark key={`${currentGateMemoItem.log.id}-topic-${index}`} className="rounded-xl bg-amber-300 px-4 py-2 text-xl font-black text-slate-950">
+              [{topic}]
+            </mark>
+          ))}
+        </div>
+      );
+    }
+    return renderGateMemoParts(currentGateMemoItem.log.id, currentGateMemoItem.parsed.parts);
   };
 
   const handleCondenseActiveReviewLog = (logId: string) => {
@@ -1419,7 +1746,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     const nextLogIds = activeReviewRun.logIds.filter(id => id !== logId);
     onReviewAction([logId], 'condense');
     setHandledReviewLogIds(prev => Array.from(new Set([...prev, logId])));
-    setSelectedReviewNoteIds(prev => prev.filter(id => id !== logId));
 
     if (nextLogIds.length === 0) {
       resetAll();
@@ -1434,9 +1760,45 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const finishPreSessionReview = () => {
     if (preSessionReviewLogs.length === 0) return;
+    if (!isGateReviewComplete) return;
+
+    const outcomes: ReviewGateOutcome[] = preSessionGateMemoItems.flatMap(item => {
+      const itemQuestions = gateReviewQuestions.filter(question => question.logId === item.log.id);
+      if (itemQuestions.length === 0) return [];
+      const wrongQuestionKeys = itemQuestions
+        .filter(question => gateReviewResults[question.id] === 'wrong')
+        .map(question => question.questionKey);
+      return [{
+        logId: item.log.id,
+        passed: wrongQuestionKeys.length === 0,
+        wrongQuestionKeys
+      }];
+    });
+    onFinishReviewGate(outcomes, Boolean(preSessionReviewGroup?.isGateRetry));
+
+    if (preSessionReviewGroup?.isGateRetry) {
+      clearPreSessionReview();
+      setSelectedReviewSubjectId('');
+      return;
+    }
+
     const finishedLogIds = preSessionReviewLogs.map(log => log.id);
+    const reviewGroup = preSessionReviewGroup;
+    const parentSubject = reviewGroup
+      ? subjects.find(subject => subject.id === reviewGroup.parentSubjectId)
+      : undefined;
+    const reviewSubjectIds = reviewGroup
+      ? getAvailableReviewSubjectIds(reviewGroup.reviewSubjectIds, parentSubject, subjects)
+      : [];
     const shouldStartStudyAfterReview = preSessionReviewMode === 'before-study' && subjectId;
     const shouldResumeTimer = preSessionReviewMode === 'interrupt' && resumeStudyTimerAfterReview;
+
+    if (reviewGroup && reviewSubjectIds.length > 0) {
+      clearPreSessionReview();
+      setSelectedReviewSubjectId('');
+      startReviewSubjectMeasurementRun(reviewGroup);
+      return;
+    }
 
     setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...finishedLogIds])));
     onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60);
@@ -1461,9 +1823,21 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const condenseFirstPreSessionReview = () => {
     if (preSessionReviewLogs.length === 0) return;
     const [firstLog, ...remainingLogs] = preSessionReviewLogs;
-    setHandledReviewLogIds(prev => Array.from(new Set([...prev, firstLog.id])));
-    onReviewAction([firstLog.id], 'condense');
+    if (preSessionReviewGroup?.isGateRetry) {
+      onClearReviewGateRetries([firstLog.id]);
+    } else {
+      setHandledReviewLogIds(prev => Array.from(new Set([...prev, firstLog.id])));
+      onReviewAction([firstLog.id], 'condense');
+    }
     setPreSessionReviewLogs(remainingLogs);
+    setPreSessionReviewGroup(prev => prev ? {
+      ...prev,
+      logs: prev.logs.filter(log => log.id !== firstLog.id)
+    } : prev);
+    setGateReviewResults(prev => Object.fromEntries(
+      Object.entries(prev).filter(([id]) => !id.startsWith(`${firstLog.id}:`))
+    ));
+    setIsGateAnswerRevealed(false);
     setPreSessionReviewDrafts(prev => {
       const next = { ...prev };
       delete next[firstLog.id];
@@ -1471,6 +1845,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     });
     if (remainingLogs.length === 0) {
       clearPreSessionReview();
+    } else {
+      const timing = calculateBasicReviewGroupTiming(
+        logs,
+        preSessionReviewParentSubjectId || firstLog.subjectId,
+        subjects,
+        remainingLogs
+      );
+      setPreSessionReviewTargetSeconds(
+        timing.estimatedMinutes > 0
+          ? Math.max(1, Math.round(timing.estimatedMinutes * 60))
+          : 0
+      );
     }
   };
 
@@ -1527,11 +1913,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setStep('pages');
   };
 
-  const createCurrentSessionLog = (forceSkipReview = false) => {
+  const createCurrentSessionLog = () => {
     const sPage = parseFloat(startPage);
     const endPage = parseFloat(readAmount);
     const amount = calculateAmountFromEndPage(sPage, endPage);
-    const shouldSkipReview = forceSkipReview || (skipReview && reviewMemo.trim().length === 0);
+    const shouldSkipReview = skipReview;
 
     if (isNaN(sPage) || isNaN(endPage) || isNaN(amount) || amount <= 0) {
       alert('완료된 끝 페이지를 정확히 입력해주세요.');
@@ -1561,7 +1947,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const handleFinalSave = () => {
-    const nextLog = createCurrentSessionLog(Boolean(activeReviewRun));
+    const nextLog = createCurrentSessionLog();
     if (!nextLog) return;
 
     setPendingAutoAdvanceLogId(null);
@@ -1576,7 +1962,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (!activeReviewRun || !selectedSubject) return;
 
     const completedReviewSubjectId = selectedSubject.id;
-    const nextLog = createCurrentSessionLog(true);
+    const nextLog = createCurrentSessionLog();
     if (!nextLog) return;
 
     onLogSession(nextLog);
@@ -1616,18 +2002,33 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       <div className="mx-auto max-w-3xl rounded-3xl border border-rose-100 bg-white p-4 shadow-2xl md:p-6">
         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">기본 복습</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">
+              기본 복습{preSessionReviewGroup?.isGateRetry ? ' · 오답' : ''}
+            </p>
             <h3 className="mt-1 text-2xl font-black text-slate-900">
               {preSessionReviewSubjectName || selectedSubject?.name || '복습'}
             </h3>
           </div>
           <div className="flex items-center gap-2">
-            <span className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600">
-              {preSessionReviewLogs.length}개 복습
-            </span>
-            <span className="rounded-2xl bg-slate-900 px-3 py-2 font-mono text-lg font-black text-white">
-              {formatTime(preSessionReviewSeconds)}
-            </span>
+            {preSessionGateMemoItems.length > 0 && (
+              <span className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600">
+                {gateReviewQuestions.length > 0
+                  ? `${answeredGateQuestionCount} / ${gateReviewQuestions.length}`
+                  : `노트 ${preSessionGateMemoItems.length}개`}
+              </span>
+            )}
+            <div className="rounded-2xl bg-slate-100 px-3 py-2 text-right">
+              <p className="text-[9px] font-black text-slate-400">경과시간</p>
+              <p className="font-mono text-lg font-black text-slate-700">{formatTime(preSessionReviewSeconds)}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-900 px-3 py-2 text-right">
+              <p className="text-[9px] font-black text-rose-300">타임어택</p>
+              <p className="font-mono text-lg font-black text-white">
+                {preSessionReviewTargetSeconds > 0
+                  ? formatTime(Math.max(0, preSessionReviewTargetSeconds - preSessionReviewSeconds))
+                  : '--:--'}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1647,19 +2048,99 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           </button>
         </div>
 
-        <div className="space-y-2">
-          {preSessionReviewLogs.map(log => (
-            <div key={log.id} className="rounded-2xl border border-rose-100 bg-rose-50/70 p-2">
-              <p className="mb-1 text-xs font-black text-rose-500">{formatReviewRange(log)}</p>
-              <textarea
-                value={preSessionReviewDrafts[log.id] ?? log.reviewMemo ?? ''}
-                onChange={e => handlePreSessionReviewMemoChange(log.id, e.target.value)}
-                rows={Math.max(2, Math.ceil(Math.max((preSessionReviewDrafts[log.id] ?? log.reviewMemo ?? '').length, 24) / 34))}
-                placeholder="복습 핵심어를 확인하거나 수정하세요."
-                className="w-full resize-none overflow-hidden rounded-xl border border-rose-100 bg-white p-3 text-lg font-bold leading-snug text-slate-800 outline-none focus:border-rose-500"
-              />
+        {gateReviewQuestions.length > 0 && (
+          <div className="mb-4 h-2 overflow-hidden rounded-full bg-rose-50">
+            <div
+              className="h-full rounded-full bg-rose-500 transition-all duration-300"
+              style={{ width: `${(answeredGateQuestionCount / gateReviewQuestions.length) * 100}%` }}
+            />
+          </div>
+        )}
+
+        <div className="space-y-3">
+          {restoredGateMemoItems
+            .filter(item => item.log.id !== currentGateQuestion?.logId)
+            .map(item => (
+              <div key={item.log.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 transition-all">
+                <p className="mb-1 text-[10px] font-black text-slate-400">{item.range}</p>
+                <AutoResizeTextarea
+                  aria-label={`${item.range} 복습 노트`}
+                  value={editingRestoredGateLogId === item.log.id ? restoredGateEditDraft : item.memo}
+                  onFocus={() => startEditingRestoredGateMemo(item.log.id, item.memo)}
+                  onChange={event => setRestoredGateEditDraft(event.target.value)}
+                  onBlur={() => saveRestoredGateMemo(item.log.id)}
+                  minHeight={48}
+                  placeholder="복습 노트"
+                  className="w-full rounded-lg border border-transparent bg-transparent px-1 py-1 text-base font-bold leading-relaxed text-slate-700 outline-none transition-colors hover:bg-white focus:border-rose-200 focus:bg-white focus:px-3 focus:py-2"
+                />
+              </div>
+            ))}
+
+          {currentGateQuestion && currentGateMemoItem && (
+            <div ref={gateQuestionCardRef} className="relative flex min-h-[18rem] scroll-mt-6 flex-col rounded-[2rem] border-2 border-rose-400 bg-white p-5 shadow-xl shadow-rose-100/70 transition-all md:p-7">
+              <div className="flex items-center justify-between gap-3">
+                <span className="rounded-full bg-rose-50 px-3 py-1.5 text-xs font-black text-rose-500">
+                  {currentGateQuestion.range}
+                </span>
+              </div>
+
+              <div className="flex flex-1 items-center justify-center py-8">
+                <div className="whitespace-pre-wrap text-center text-xl font-black leading-relaxed text-slate-800 md:text-2xl">
+                  {renderCurrentGatePrompt()}
+                </div>
+              </div>
+
+              {!isGateAnswerRevealed ? (
+                <button
+                  type="button"
+                  onClick={() => setIsGateAnswerRevealed(true)}
+                  className="mx-auto w-full max-w-sm rounded-2xl bg-slate-900 py-4 text-base font-black text-white shadow-lg"
+                >
+                  정답 확인
+                </button>
+              ) : (
+                <div className="mx-auto grid w-full max-w-sm grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleGateReviewResult('wrong')}
+                    className="rounded-2xl bg-rose-100 py-4 text-base font-black text-rose-600"
+                  >
+                    오답
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGateReviewResult('correct')}
+                    className="rounded-2xl bg-emerald-500 py-4 text-base font-black text-white shadow-lg shadow-emerald-100"
+                  >
+                    맞음
+                  </button>
+                </div>
+              )}
             </div>
-          ))}
+          )}
+
+          {pendingGateMemoItems.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-1">
+              {pendingGateMemoItems.map(item => (
+                <span key={item.log.id} className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-400">
+                  {item.range}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {isGateReviewComplete && gateReviewQuestions.length > 0 && (
+            <div className="rounded-[2rem] border border-emerald-100 bg-emerald-50 px-5 py-6 text-center">
+              <p className="text-lg font-black text-emerald-700">기본 복습 완료</p>
+              <div className="mt-2 flex justify-center gap-2 text-xs font-black">
+                <span className="rounded-full bg-white px-3 py-1.5 text-emerald-600">
+                  맞음 {gateReviewQuestions.length - gateWrongCount}
+                </span>
+                <span className="rounded-full bg-white px-3 py-1.5 text-rose-500">오답 {gateWrongCount}</span>
+              </div>
+            </div>
+          )}
+
         </div>
 
         <div className="mt-5 flex gap-3">
@@ -1680,9 +2161,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           <button
             type="button"
             onClick={finishPreSessionReview}
-            className="flex-[2] rounded-2xl bg-indigo-600 py-4 text-base font-black text-white shadow-lg shadow-indigo-100"
+            disabled={!isGateReviewComplete}
+            className="flex-[2] rounded-2xl bg-indigo-600 py-4 text-base font-black text-white shadow-lg shadow-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
           >
-            {preSessionReviewMode === 'interrupt'
+            {!isGateReviewComplete
+              ? `남은 문제 ${gateReviewQuestions.length - answeredGateQuestionCount}`
+              : preSessionReviewGroup && getAvailableReviewSubjectIds(
+                preSessionReviewGroup.reviewSubjectIds,
+                subjects.find(subject => subject.id === preSessionReviewGroup.parentSubjectId),
+                subjects
+              ).length > 0
+                ? '복습과목 시작'
+              : preSessionReviewMode === 'interrupt'
               ? '복습 완료 후 계속'
               : preSessionReviewMode === 'after-study'
                 ? '기본 복습 완료'
@@ -1749,16 +2239,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               group.parentSubjectId,
               group.subjectId
             );
+            const isSelected = detailSubjectId === reviewDetailKey && selectedReviewSubjectId === group.id;
             return (
               <button
                 key={queueItem.key}
                 type="button"
                 onClick={() => {
-                  if (detailSubjectId === reviewDetailKey) startReviewGroup(group);
-                  else onDetailSubjectChange(reviewDetailKey);
+                  if (isSelected) startReviewGroup(group);
+                  else {
+                    setSelectedReviewSubjectId(group.id);
+                    onDetailSubjectChange(reviewDetailKey);
+                  }
                 }}
                 className={`w-full rounded-[1.75rem] border-2 p-5 text-left transition-all ${
-                  detailSubjectId === reviewDetailKey
+                  isSelected
                     ? 'border-rose-500 bg-rose-100 ring-2 ring-rose-100'
                     : 'border-rose-200 bg-rose-50/80 hover:border-rose-400 hover:bg-rose-50'
                 }`}
@@ -1770,7 +2264,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-rose-500">
-                        {group.reviewType === 'subject' ? '과목 복습' : '기본 복습'}
+                        {group.isGateRetry ? '기본 복습 · 오답' : group.reviewType === 'subject' ? '과목 복습' : '기본 복습'}
                       </span>
                       {queueItem.isRequired && (
                         <span className="rounded-lg bg-rose-100 px-2 py-1 text-[10px] font-black text-rose-600">필수</span>
@@ -1782,7 +2276,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                       )}
                     </div>
                     <span className="mt-2 inline-flex rounded-xl bg-rose-600 px-3 py-2 text-xs font-black text-white">
-                      {detailSubjectId === reviewDetailKey
+                      {isSelected
                         ? '다시 눌러 시작'
                         : '보기'}
                     </span>
@@ -2098,17 +2592,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               <div className="flex items-center justify-between gap-3">
                 {activeReviewRun ? (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsReviewNotePanelOpen(prev => !prev)}
-                      className={`rounded-2xl px-4 py-2 text-xs font-black transition-all ${
-                        isReviewNotePanelOpen
-                          ? 'bg-rose-500 text-white'
-                          : 'bg-white/10 text-rose-100 hover:bg-rose-500 hover:text-white'
-                      }`}
-                    >
-                      노트 추가
-                    </button>
+                    {activeReviewRunMemoItems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setIsReviewNotePanelOpen(prev => !prev)}
+                        className={`rounded-2xl px-4 py-2 text-xs font-black transition-all ${
+                          isReviewNotePanelOpen
+                            ? 'bg-rose-500 text-white'
+                            : 'bg-white/10 text-rose-100 hover:bg-rose-500 hover:text-white'
+                        }`}
+                      >
+                        {isReviewNotePanelOpen ? '노트 닫기' : '노트 보기'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setIsReviewCondensePanelOpen(prev => !prev)}
@@ -2215,66 +2711,26 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               </div>
             )}
 
-            {activeReviewRun && activeReviewRunMemoItems.length > 0 && (isReviewNotePanelOpen || selectedActiveReviewMemoItems.length > 0) && timerMode !== 'sessionMemo' && (
+            {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewNotePanelOpen && timerMode !== 'sessionMemo' && (
               <div className="mb-4 w-full max-w-lg rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
                 <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 노트</label>
-                {isReviewNotePanelOpen && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {activeReviewRunMemoItems.map(item => {
-                      const isSelected = selectedReviewNoteIds.includes(item.id);
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => handleAddActiveReviewMemoItem(item.id)}
-                          className={`rounded-xl border px-3 py-2 text-xs font-black transition-all ${
-                            isSelected
-                              ? 'border-rose-300 bg-rose-500 text-white'
-                              : 'border-rose-300/20 bg-black/20 text-rose-100 hover:border-rose-300 hover:bg-rose-500/40'
-                          }`}
-                        >
+                <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-rose-300/20 bg-black/20 p-3 pr-2">
+                  <div className="space-y-3">
+                    {activeReviewRunMemoItems.map(item => (
+                      <div key={item.id}>
+                        <div className="mb-1 inline-flex rounded-lg bg-rose-400/20 px-2 py-1 text-[10px] font-black text-rose-100">
                           {item.range}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {selectedActiveReviewMemoItems.length > 0 ? (
-                  <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-rose-300/20 bg-black/20 p-3 pr-2">
-                    <div className="space-y-3">
-                      {selectedActiveReviewMemoItems.map(item => (
-                        <div key={item.id}>
-                          <div className="mb-1 inline-flex rounded-lg bg-rose-400/20 px-2 py-1 text-[10px] font-black text-rose-100">
-                            {item.range}
-                          </div>
-                          <textarea
-                            value={item.memo}
-                            onChange={e => onUpdateReviewMemo(item.id, e.target.value)}
-                            rows={Math.max(2, Math.ceil(Math.max(item.memo.length, 24) / 34))}
-                            placeholder="-"
-                            className={`w-full resize-none overflow-hidden rounded-xl border border-rose-300/20 bg-white/5 p-3 font-bold leading-snug text-rose-50 outline-none placeholder:text-rose-200/40 focus:border-rose-200 ${getMemoTextSize(item.memo)}`}
-                          />
                         </div>
-                      ))}
-                    </div>
+                        <AutoResizeTextarea
+                          value={item.memo}
+                          onChange={e => onUpdateReviewMemo(item.id, e.target.value)}
+                          minHeight={64}
+                          className={`w-full rounded-xl border border-rose-300/20 bg-white/5 p-3 font-bold leading-snug text-rose-50 outline-none focus:border-rose-200 ${getMemoTextSize(item.memo)}`}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <div className="mt-3 rounded-2xl border border-rose-300/20 bg-black/20 px-4 py-5 text-center text-xs font-black text-rose-100/70">
-                    공부 페이지를 눌러 노트 추가
-                  </div>
-                )}
-              </div>
-            )}
-
-            {!skipReview && !activeReviewRun && (
-              <div className="mb-4 w-full max-w-lg rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 핵심 키워드</label>
-                <textarea
-                  value={reviewMemo}
-                  onChange={e => setReviewMemo(e.target.value)}
-                  placeholder="복습 때 바로 떠올릴 핵심어를 적어주세요."
-                  className={`mt-3 h-24 w-full resize-none rounded-2xl border border-rose-300/30 bg-black/20 p-4 font-bold text-rose-50 outline-none placeholder:text-rose-200/40 focus:border-rose-300 ${getMemoTextSize(reviewMemo)}`}
-                />
+                </div>
               </div>
             )}
 
@@ -2285,21 +2741,33 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
               </button>
-              {!activeReviewRun && (
-                <button
-                  onClick={handleToggleSkipReview}
-                  className={`w-24 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex flex-col items-center justify-center gap-1 ${
-                    skipReview
-                      ? 'bg-rose-100 text-rose-500 border-2 border-rose-500'
-                      : 'bg-emerald-100 text-emerald-600 border-2 border-emerald-500'
-                  }`}
-                >
-                  <span className="text-xl">{skipReview ? '🚫' : '✅'}</span>
-                  <span>{skipReview ? '복습 제외' : '복습 포함'}</span>
-                </button>
-              )}
+              <button
+                onClick={handleToggleSkipReview}
+                className={`w-24 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex flex-col items-center justify-center gap-1 ${
+                  skipReview
+                    ? 'bg-rose-100 text-rose-500 border-2 border-rose-500'
+                    : 'bg-emerald-100 text-emerald-600 border-2 border-emerald-500'
+                }`}
+              >
+                <span className="text-xl">{skipReview ? '🚫' : '✅'}</span>
+                <span>{skipReview ? '복습 제외' : '복습 포함'}</span>
+              </button>
               <button onClick={handleTimerComplete} className="flex-1 py-4 bg-green-600 text-white rounded-2xl font-black text-base shadow-lg">완료</button>
             </div>
+
+            {!skipReview && (
+              <div className="mt-4 w-full max-w-lg rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
+                <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 핵심 키워드</label>
+                <AutoResizeTextarea
+                  value={reviewMemo}
+                  onChange={e => setReviewMemo(e.target.value)}
+                  minHeight={96}
+                  maxHeight={220}
+                  placeholder="복습 때 바로 떠올릴 핵심어를 적어주세요."
+                  className={`mt-3 w-full rounded-2xl border border-rose-300/30 bg-black/20 p-4 font-bold text-rose-50 outline-none placeholder:text-rose-200/40 focus:border-rose-300 ${getMemoTextSize(reviewMemo)}`}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -2367,18 +2835,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                   </>
                 )}
               </div>
-              {!skipReview && !activeReviewRun && (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-3">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-rose-500">복습 핵심 키워드</label>
-                  <textarea
-                    value={reviewMemo}
-                    onChange={e => setReviewMemo(e.target.value)}
-                    placeholder="나중에 복습할 때 바로 떠올릴 핵심어를 적어주세요. 예: 공식 조건, 자주 틀린 포인트, 암기 단서"
-                    className={`mt-3 h-28 w-full resize-none rounded-xl border border-rose-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-rose-500 ${getMemoTextSize(reviewMemo)}`}
-                  />
-                  <p className="mt-2 text-center text-[10px] font-bold text-rose-300">복습 큐에서 같은 과목이 묶이면 이 내용도 함께 합쳐집니다.</p>
-                </div>
-              )}
             </div>
 
             <div className={activeReviewRun ? 'grid w-full grid-cols-2 gap-3' : 'w-full'}>

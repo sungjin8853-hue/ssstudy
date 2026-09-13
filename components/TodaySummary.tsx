@@ -60,6 +60,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   const [editEndPage, setEditEndPage] = useState(0);
   const [editMinutes, setEditMinutes] = useState('');
   const [editStartPage, setEditStartPage] = useState(1);
+  const [includeReview, setIncludeReview] = useState(true);
+  const [reviewMemo, setReviewMemo] = useState('');
   const isBasicReviewDetail = detailSubjectId.startsWith(BASIC_REVIEW_DETAIL_PREFIX);
   const resolvedDetailSubjectId = isBasicReviewDetail
     ? detailSubjectId.slice(BASIC_REVIEW_DETAIL_PREFIX.length)
@@ -192,7 +194,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
       : 100;
     const remainingPages = getSubjectRemainingPageCount(subject);
-    const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, getDiffDays(subject.targetDate));
+    const effectiveTargetDate = owner?.targetDate || subject.targetDate;
+    const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, getDiffDays(effectiveTargetDate));
     const dailyAveragePages = weeklyRequiredPages / 7;
     const measuredEfficiency = calculateRecentTimedPageAverage(samples).averageTimePerPage;
     const normalEfficiency = calculateStats(
@@ -294,15 +297,23 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     const start = firstSubject ? (getActiveSubjectStage(firstSubject)?.currentPage || firstSubject.totalPages) : 1;
     setEditStartPage(start);
     setEditEndPage(start);
+    setIncludeReview(firstSubject?.reviewEnabled !== false);
+    setReviewMemo('');
   };
 
   const openEditModal = (summary: SubjectSummary) => {
+    const reviewLogs = summary.logs.filter(log => log.reviewEnabled !== false && !log.isCondensed);
+    const savedMemos = Array.from(new Set(
+      reviewLogs.map(log => (log.reviewMemo || '').trim()).filter(Boolean)
+    ));
     setModalMode('edit');
     setEditingSummary(summary);
     setSubjectId(summary.subjectId);
     setEditMinutes(summary.minutes > 0 ? String(summary.minutes) : '');
     setEditStartPage(summary.startPage || 1);
     setEditEndPage(summary.endPage || summary.startPage || 1);
+    setIncludeReview(reviewLogs.length > 0);
+    setReviewMemo(savedMemos.join('\n'));
   };
 
   const closeModal = () => {
@@ -312,12 +323,39 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
 
   const saveLog = () => {
     const pages = calculateAmountFromEndPage(editStartPage, editEndPage);
-    const minutes = editMinutes.trim() === '' ? 0 : Number(editMinutes);
+    const targetSubject = subjects.find(subject => subject.id === subjectId);
+    const existingTimedSamples = [
+      ...logs
+        .filter(log => log.subjectId === subjectId)
+        .map(log => ({
+          pagesRead: log.pagesRead,
+          timeSpentMinutes: log.timeSpentMinutes,
+          timestamp: log.timestamp
+        })),
+      ...logs.flatMap(log => (log.reviewSubjectTimeRecords || [])
+        .filter(record => record.subjectId === subjectId)
+        .map(record => ({
+          pagesRead: record.pages,
+          timeSpentMinutes: record.minutes,
+          timestamp: record.timestamp
+        })))
+    ];
+    const measuredAverage = calculateRecentTimedPageAverage(existingTimedSamples).averageTimePerPage;
+    const existingAverage = measuredAverage || Math.max(0, targetSubject?.initialAverageTimePerPage || 0);
+    const minutes = editMinutes.trim() === ''
+      ? Number((pages * existingAverage).toFixed(2))
+      : Number(editMinutes);
 
     if (!subjectId || pages <= 0 || Number.isNaN(minutes) || minutes < 0) {
       alert('과목, 완료된 끝 페이지, 시간을 확인해주세요.');
       return;
     }
+
+    const retainedReviewLog = editingSummary?.logs
+      .filter(log => log.reviewEnabled !== false && !log.isCondensed)
+      .sort((a, b) => new Date(a.nextReviewDate || a.timestamp).getTime() - new Date(b.nextReviewDate || b.timestamp).getTime())[0];
+    const basicReviewTimeRecords = editingSummary?.logs.flatMap(log => log.basicReviewTimeRecords || []);
+    const reviewSubjectTimeRecords = editingSummary?.logs.flatMap(log => log.reviewSubjectTimeRecords || []);
 
     const replacementLog: StudyLog = {
       id: editingSummary?.logs[0]?.id || Math.random().toString(36).substr(2, 9),
@@ -329,8 +367,19 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       timestamp: editingSummary?.latestTimestamp || new Date().toISOString(),
       studyDate: activeStudyDate,
       studyWeekday: activeWeekday,
-      isReviewed: false,
-      isCondensed: editingSummary?.logs.every(log => log.isCondensed) || false
+      isReviewed: includeReview ? retainedReviewLog?.isReviewed ?? false : false,
+      isCondensed: !includeReview,
+      reviewEnabled: includeReview,
+      reviewMemo: includeReview && reviewMemo.trim() ? reviewMemo.trim() : undefined,
+      ...(includeReview && retainedReviewLog ? {
+        reviewStep: retainedReviewLog.reviewStep,
+        nextReviewDate: retainedReviewLog.nextReviewDate,
+        reviewSubjectId: retainedReviewLog.reviewSubjectId,
+        reviewTimeSpentMinutes: editingSummary?.logs.reduce((sum, log) => sum + (log.reviewTimeSpentMinutes || 0), 0),
+        reviewCompletedPages: editingSummary?.logs.reduce((sum, log) => sum + (log.reviewCompletedPages || 0), 0),
+        basicReviewTimeRecords,
+        reviewSubjectTimeRecords
+      } : {})
     };
 
     if (modalMode === 'edit' && editingSummary) {
@@ -499,7 +548,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
 
       {modalMode && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 z-[10000]">
-          <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-10 shadow-2xl animate-fade-in">
+          <div className="max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-[2.5rem] bg-white p-8 shadow-2xl animate-fade-in md:p-10">
             <h4 className="text-xl font-black mb-8">{modalMode === 'edit' ? '합산 기록 수정' : '기록 추가'}</h4>
             <div className="space-y-5 mb-10">
               <div className="space-y-1">
@@ -513,6 +562,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                       const start = getActiveSubjectStage(nextSubject)?.currentPage || nextSubject.totalPages;
                       setEditStartPage(start);
                       setEditEndPage(start);
+                      setIncludeReview(nextSubject.reviewEnabled !== false);
+                      setReviewMemo('');
                     }
                   }}
                   className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg outline-none"
@@ -536,10 +587,41 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                   type="number"
                   value={editMinutes}
                   onChange={e => setEditMinutes(e.target.value)}
-                  placeholder="비워두면 효율 계산 제외"
+                  placeholder="비워두면 기존 효율로 자동 계산"
                   className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg"
                 />
-                <p className="px-1 text-[10px] font-bold text-slate-400">공백이면 평균효율과 소모시간에 반영되지 않습니다.</p>
+                <p className="px-1 text-[10px] font-bold text-slate-400">공백이면 해당 과목의 기존 효율로 시간을 계산합니다.</p>
+              </div>
+              <div className="space-y-2">
+                <label className="px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">복습</label>
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setIncludeReview(false)}
+                    className={`rounded-xl py-3 text-sm font-black transition-all ${
+                      !includeReview ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400'
+                    }`}
+                  >
+                    복습 안 함
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIncludeReview(true)}
+                    className={`rounded-xl py-3 text-sm font-black transition-all ${
+                      includeReview ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-400'
+                    }`}
+                  >
+                    복습 하기
+                  </button>
+                </div>
+                {includeReview && (
+                  <textarea
+                    value={reviewMemo}
+                    onChange={event => setReviewMemo(event.target.value)}
+                    placeholder="복습 노트"
+                    className="h-28 w-full resize-none overflow-y-auto rounded-2xl border border-rose-100 bg-rose-50/70 p-4 text-base font-bold text-slate-700 outline-none focus:border-rose-400"
+                  />
+                )}
               </div>
             </div>
             <div className="flex gap-3">
@@ -566,18 +648,21 @@ const SubjectEfficiencyTrend = ({ points }: {
   points: { date: string; label: string; efficiency: number | null; studyMinutes: number }[];
 }) => {
   const measuredValues = points.flatMap(point => point.efficiency === null ? [] : [point.efficiency]);
+  const baselineEfficiency = measuredValues[0] || 0;
   const chartData = points.map(point => ({
     date: point.label,
-    efficiency: point.efficiency === null ? undefined : Number(point.efficiency.toFixed(2)),
+    speedIncrease: point.efficiency === null || baselineEfficiency <= 0
+      ? undefined
+      : Number((((baselineEfficiency / point.efficiency) - 1) * 100).toFixed(1)),
     studyMinutes: Number(point.studyMinutes.toFixed(2))
   }));
 
   return (
     <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">최근 한 달 학습 추이</p>
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">최근 한 달 속도 · 공부시간</p>
         <div className="flex items-center gap-3 text-[9px] font-black">
-          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />효율</span>
+          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />속도 상승</span>
           <span className="flex items-center gap-1 text-red-600"><i className="h-2 w-2 rounded-full bg-red-500" />공부시간</span>
         </div>
       </div>
@@ -589,7 +674,7 @@ const SubjectEfficiencyTrend = ({ points }: {
             <LineChart data={chartData} margin={{ top: 8, right: 2, left: -18, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
               <XAxis dataKey="date" fontSize={9} tickLine={false} axisLine={false} />
-              <YAxis yAxisId="efficiency" fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}`} />
+              <YAxis yAxisId="speed" fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}%`} />
               <YAxis
                 yAxisId="minutes"
                 orientation="right"
@@ -605,14 +690,14 @@ const SubjectEfficiencyTrend = ({ points }: {
                 formatter={(value: number, name: string) => (
                   name === 'studyMinutes'
                     ? [`${formatNumber(Number(value))}분`, '공부시간']
-                    : [`${Number(value).toFixed(2)}분/P`, '효율']
+                    : [`${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(1)}%`, '속도 상승']
                 )}
               />
               <Line
-                name="실제 효율"
+                name="속도 상승"
                 type="monotone"
-                dataKey="efficiency"
-                yAxisId="efficiency"
+                dataKey="speedIncrease"
+                yAxisId="speed"
                 stroke="#3b82f6"
                 strokeWidth={3}
                 dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
@@ -646,9 +731,13 @@ const BasicReviewEfficiencyTrend = ({ points }: {
     sampleCount: number;
   }>;
 }) => {
+  const baselineEfficiency = points.find(point => point.averageTimePerPage > 0)?.averageTimePerPage || 0;
   const chartData = points.map(point => ({
     review: `${point.reviewNumber}회`,
     efficiency: Number(point.averageTimePerPage.toFixed(2)),
+    speedIncrease: baselineEfficiency > 0 && point.averageTimePerPage > 0
+      ? Number((((baselineEfficiency / point.averageTimePerPage) - 1) * 100).toFixed(1))
+      : 0,
     pages: point.totalPages,
     samples: point.sampleCount
   }));
@@ -657,7 +746,7 @@ const BasicReviewEfficiencyTrend = ({ points }: {
     <div className="mt-3 rounded-2xl border border-rose-100 bg-rose-50/50 p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">기본 복습 회차별 평균 효율</p>
-        <span className="text-[9px] font-black text-rose-400">낮을수록 빠름</span>
+        <span className="text-[9px] font-black text-rose-400">그래프는 1회 대비 속도 상승</span>
       </div>
       {chartData.length === 0 ? (
         <div className="flex h-36 items-center justify-center text-sm font-black text-rose-200">복습 기록 없음</div>
@@ -676,19 +765,19 @@ const BasicReviewEfficiencyTrend = ({ points }: {
               <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#fecdd3" />
                 <XAxis dataKey="review" fontSize={9} tickLine={false} axisLine={false} />
-                <YAxis fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}`} />
+                <YAxis fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}%`} />
                 <Tooltip
                   contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}
                   formatter={(value: number, name: string) => (
-                    name === 'efficiency'
-                      ? [`${formatNumber(Number(value))}분/P`, '평균 효율']
+                    name === 'speedIncrease'
+                      ? [`${Number(value) >= 0 ? '+' : ''}${formatNumber(Number(value))}%`, '속도 상승']
                       : [value, name]
                   )}
                 />
                 <Line
-                  name="평균 효율"
+                  name="속도 상승"
                   type="monotone"
-                  dataKey="efficiency"
+                  dataKey="speedIncrease"
                   stroke="#e11d48"
                   strokeWidth={3}
                   dot={{ r: 4, fill: '#e11d48', strokeWidth: 0 }}

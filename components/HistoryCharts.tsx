@@ -28,16 +28,30 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
   const [expandedFolderKeys, setExpandedFolderKeys] = useState<Set<string>>(new Set());
 
   const recentLogsData = useMemo(() => {
-    return logs
+    const validLogs = logs
       .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const baselineBySubject = new Map<string, number>();
+
+    validLogs.forEach(log => {
+      if (!baselineBySubject.has(log.subjectId)) {
+        baselineBySubject.set(log.subjectId, log.timeSpentMinutes / log.pagesRead);
+      }
+    });
+
+    return [...validLogs]
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, 20)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .map(log => ({
-        date: new Date(log.timestamp).toLocaleDateString('ko-KR', { day: 'numeric', month: 'short' }),
-        efficiency: Number((log.timeSpentMinutes / log.pagesRead).toFixed(2)),
-        name: subjects.find(subject => subject.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'
-      }));
+      .map(log => {
+        const currentTimePerPage = log.timeSpentMinutes / log.pagesRead;
+        const baseline = baselineBySubject.get(log.subjectId) || currentTimePerPage;
+        return {
+          date: new Date(log.timestamp).toLocaleDateString('ko-KR', { day: 'numeric', month: 'short' }),
+          speedIncrease: Number((((baseline / currentTimePerPage) - 1) * 100).toFixed(1)),
+          name: subjects.find(subject => subject.id === log.subjectId)?.name || log.subjectNameSnapshot || '삭제된 과목'
+        };
+      });
   }, [logs, subjects]);
 
   const buildSummary = (items: StudyLog[], id: string, name: string): Summary => {
@@ -147,8 +161,8 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
     <div className="space-y-8">
       <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
         <div className="mb-4">
-          <h3 className="text-sm font-bold text-slate-800 uppercase">최근 학습 효율 추이</h3>
-          <p className="text-[10px] text-slate-400">최근 기록 기준, 낮을수록 효율적입니다.</p>
+          <h3 className="text-sm font-bold text-slate-800 uppercase">최근 학습 속도 상승 추이</h3>
+          <p className="text-[10px] text-slate-400">각 과목의 첫 기록 대비 속도 변화입니다.</p>
         </div>
         <div className="h-80">
           {recentLogsData.length > 0 ? (
@@ -156,12 +170,13 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
               <LineChart data={recentLogsData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="date" fontSize={10} />
-                <YAxis fontSize={10} />
+                <YAxis fontSize={10} tickFormatter={value => `${value}%`} />
                 <Tooltip
                   contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                   labelClassName="font-bold text-slate-800"
+                  formatter={(value: number) => [`${value >= 0 ? '+' : ''}${value}%`, '속도 상승']}
                 />
-                <Line name="분/P" type="monotone" dataKey="efficiency" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4, fill: '#3b82f6' }} activeDot={{ r: 6 }} />
+                <Line name="속도 상승" type="monotone" dataKey="speedIncrease" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4, fill: '#3b82f6' }} activeDot={{ r: 6 }} />
               </LineChart>
             </ResponsiveContainer>
           ) : (

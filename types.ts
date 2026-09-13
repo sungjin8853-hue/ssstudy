@@ -8,10 +8,12 @@ export interface TagDefinition {
 
 export interface FollowUpSubject {
   id: string;
+  sourceSubjectId?: string;
   name: string;
   startPage: number;
   endPage: number;
   completedPage: number;
+  reviewSubjectIds?: string[];
 }
 
 export interface Subject {
@@ -65,6 +67,9 @@ export interface StudyLog {
   id: string;
   subjectId: string;
   subjectNameSnapshot?: string;
+  subjectStageId?: string;
+  subjectStageNameSnapshot?: string;
+  reviewSubjectIdsSnapshot?: string[];
   folderSnapshots?: Array<{
     id: string;
     name: string;
@@ -99,6 +104,12 @@ export interface StudyLog {
     timestamp: string;
   }>;
   reviewMemo?: string;
+  reviewGateRetry?: {
+    dueAt: string;
+    intervalMs: number;
+    reviewStep: number;
+    questionKeys: string[];
+  };
 }
 
 export interface PredictionInputs {

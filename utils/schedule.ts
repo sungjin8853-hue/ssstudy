@@ -54,38 +54,64 @@ export const getSubjectRemainingPageCount = (subject: Subject) => (
   Math.max(0, getSubjectTotalPageCount(subject) - getSubjectCompletedPageCount(subject))
 );
 
-export const getActiveSubjectStage = (subject: Subject) => {
+export const getSubjectStageReviewSubjectIds = (subject: Subject, stageId?: string) => {
+  const ids = !stageId || stageId === subject.id
+    ? subject.reviewSubjectIds || []
+    : subject.followUpSubjects?.find(stage => stage.id === stageId)?.reviewSubjectIds || [];
+
+  return Array.from(new Set(ids.filter(id => id && id !== subject.id)));
+};
+
+export const getAllSubjectReviewIds = (subject: Subject) => Array.from(new Set([
+  ...(subject.reviewSubjectIds || []),
+  ...(subject.followUpSubjects || []).flatMap(stage => stage.reviewSubjectIds || [])
+].filter(id => id && id !== subject.id)));
+
+export const getSubjectStages = (subject: Subject) => {
   const startPage = getSubjectStartPage(subject);
-  if (getSubjectBaseCompletedPageCount(subject) < getSubjectBasePageCount(subject)) {
-    const completedPage = Math.max(startPage - 1, subject.completedPages);
-    return {
+  const baseCompletedPage = Math.max(startPage - 1, subject.completedPages);
+  const stages = [
+    {
       id: subject.id,
       name: subject.name,
       startPage,
       endPage: subject.totalPages,
-      completedPage,
-      currentPage: completedPage + 1,
-      remainingPages: Math.max(0, subject.totalPages - completedPage),
-      isFollowUp: false
-    };
-  }
+      completedPage: baseCompletedPage,
+      currentPage: Math.min(subject.totalPages, baseCompletedPage + 1),
+      remainingPages: Math.max(0, subject.totalPages - baseCompletedPage),
+      isFollowUp: false,
+      reviewSubjectIds: getSubjectStageReviewSubjectIds(subject, subject.id)
+    },
+    ...(subject.followUpSubjects || []).map(followUp => {
+      const completedPage = Math.max(followUp.startPage - 1, followUp.completedPage);
+      return {
+        id: followUp.id,
+        name: followUp.name,
+        startPage: followUp.startPage,
+        endPage: followUp.endPage,
+        completedPage,
+        currentPage: Math.min(followUp.endPage, completedPage + 1),
+        remainingPages: Math.max(0, followUp.endPage - completedPage),
+        isFollowUp: true,
+        reviewSubjectIds: getSubjectStageReviewSubjectIds(subject, followUp.id)
+      };
+    })
+  ];
+  const activeIndex = stages.findIndex(stage => stage.remainingPages > 0);
 
-  const followUp = (subject.followUpSubjects || []).find(item => (
-    getFollowUpCompletedPageCount(item) < getFollowUpPageCount(item)
-  ));
-  if (!followUp) return null;
+  return stages.map((stage, index) => ({
+    ...stage,
+    status: activeIndex < 0 || index < activeIndex
+      ? 'completed' as const
+      : index === activeIndex
+        ? 'current' as const
+        : 'upcoming' as const
+  }));
+};
 
-  const completedPage = Math.max(followUp.startPage - 1, followUp.completedPage);
-  return {
-    id: followUp.id,
-    name: followUp.name,
-    startPage: followUp.startPage,
-    endPage: followUp.endPage,
-    completedPage,
-    currentPage: completedPage + 1,
-    remainingPages: Math.max(0, followUp.endPage - completedPage),
-    isFollowUp: true
-  };
+export const getActiveSubjectStage = (subject: Subject) => {
+  const stages = getSubjectStages(subject);
+  return stages.find(stage => stage.status === 'current') || null;
 };
 
 export const adjustSubjectProgress = (subject: Subject, pageDelta: number): Subject => {
@@ -208,12 +234,7 @@ export const distributePagesByWeekdayWeights = (
 export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
   const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
   const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, diffDays);
-  return distributePagesByWeekdayWeights(
-    weeklyRequiredPages,
-    selectedDays,
-    subject.scheduledWeekdayWeights,
-    subject.scheduledWeekdayRemainderDay
-  );
+  return distributePagesByWeekdayWeights(weeklyRequiredPages, selectedDays);
 };
 
 export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {

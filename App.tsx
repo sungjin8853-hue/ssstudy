@@ -6,7 +6,9 @@ import { Analytics } from './components/Analytics';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount } from './utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds } from './utils/schedule';
+import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE } from './utils/review';
+import { applyReviewGateOutcomes, clearReviewGateRetries, getCurrentReviewIntervalMs, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -23,8 +25,27 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
 };
 
 const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
-const INITIAL_REVIEW_DELAY_MS = 1000;
 const TEST_REVIEW_DELAY_THRESHOLD_MS = 10 * 60 * 1000;
+
+const inheritReviewSubjectTargetDates = (sourceSubjects: Subject[]) => sourceSubjects.map(subject => {
+  const owner = sourceSubjects.find(candidate => getAllSubjectReviewIds(candidate).includes(subject.id));
+  if (!owner || subject.targetDate === owner.targetDate) return subject;
+
+  const inheritedSubject = {
+    ...subject,
+    targetDate: owner.targetDate,
+    scheduledWeekdayPages: undefined,
+  };
+
+  return {
+    ...inheritedSubject,
+    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+      inheritedSubject,
+      getSubjectRemainingPageCount(inheritedSubject),
+      getDiffDays(owner.targetDate),
+    ),
+  };
+});
 
 const readSidebarCollapsed = () => {
   return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
@@ -35,8 +56,19 @@ const writeSidebarCollapsed = (collapsed: boolean) => {
 };
 
 const repairTestReviewDate = (log: StudyLog) => {
+  if (IS_FAST_REVIEW_TEST_MODE) {
+    const reviewAt = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
+    const testDueAt = Date.now() + INITIAL_REVIEW_DELAY_MS;
+    const canShorten = (log.reviewStep ?? 0) <= 3
+      && !log.isCondensed
+      && log.reviewEnabled !== false
+      && Number.isFinite(reviewAt)
+      && reviewAt > testDueAt;
+    return canShorten ? new Date(testDueAt).toISOString() : log.nextReviewDate ?? log.timestamp;
+  }
+
   const currentStep = log.reviewStep ?? 0;
-  if (currentStep !== 0 || log.isCondensed || log.reviewEnabled === false || !log.nextReviewDate) {
+  if (log.isCondensed || log.reviewEnabled === false || !log.nextReviewDate) {
     return log.nextReviewDate ?? log.timestamp;
   }
 
@@ -48,11 +80,12 @@ const repairTestReviewDate = (log: StudyLog) => {
     && reviewAt - studiedAt < TEST_REVIEW_DELAY_THRESHOLD_MS;
 
   return wasTestDelay
-    ? new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
+    ? new Date(Date.now() + getCurrentReviewIntervalMs(currentStep)).toISOString()
     : log.nextReviewDate;
 };
 
 const shouldSkipReviewForLog = (log: StudyLog, subject?: Subject) => {
+  if (typeof log.reviewEnabled === 'boolean') return !log.reviewEnabled;
   return log.isCondensed === true || subject?.reviewEnabled === false;
 };
 
@@ -100,13 +133,17 @@ const App: React.FC = () => {
       const loadedTags: TagDefinition[] = savedTags ? JSON.parse(savedTags) || [] : [];
       
       if (savedSubs) {
-        setSubjects(loadedSubjects.map(subject => {
+        const migratedSubjects = loadedSubjects.map(subject => {
           const startPage = Math.max(1, Number(subject.startPage) || 1);
           const totalPages = Math.max(startPage, subject.procedures?.[0]?.totalPages ?? subject.totalPages);
           const rawCompletedPages = subject.procedures?.length
             ? subject.procedures.reduce((sum, procedure) => sum + procedure.completedPages, 0)
             : subject.completedPages;
           const completedPages = Math.min(totalPages, Math.max(startPage - 1, rawCompletedPages));
+          const hadCustomWeekdayAllocation = Boolean(
+            subject.scheduledWeekdayRemainderDay !== undefined
+            || (subject.scheduledWeekdayWeights && Object.keys(subject.scheduledWeekdayWeights).length > 0)
+          );
           const migratedSubject: Subject = {
             id: subject.id,
             name: subject.name,
@@ -130,30 +167,51 @@ const App: React.FC = () => {
               : [],
             isRequired: subject.isRequired ?? false,
             scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
-            scheduledWeekdayWeights: subject.scheduledWeekdayWeights,
-            scheduledWeekdayRemainderDay: subject.scheduledWeekdayRemainderDay,
             followUpSubjects: Array.isArray(subject.followUpSubjects)
               ? subject.followUpSubjects.map(followUp => ({
                   id: followUp.id || Math.random().toString(36).slice(2, 11),
+                  sourceSubjectId: followUp.sourceSubjectId,
                   name: followUp.name || '후행과목',
                   startPage: Math.max(1, Number(followUp.startPage) || 1),
                   endPage: Math.max(Number(followUp.startPage) || 1, Number(followUp.endPage) || Number(followUp.startPage) || 1),
                   completedPage: Number.isFinite(Number(followUp.completedPage))
                     ? Number(followUp.completedPage)
-                    : Math.max(0, (Number(followUp.startPage) || 1) - 1)
+                    : Math.max(0, (Number(followUp.startPage) || 1) - 1),
+                  reviewSubjectIds: Array.isArray(followUp.reviewSubjectIds)
+                    ? followUp.reviewSubjectIds.filter(id => id !== subject.id)
+                    : (loadedSubjects.find(item => item.id === followUp.sourceSubjectId)?.reviewSubjectIds || [])
+                      .filter(id => id !== subject.id)
                 }))
               : []
           };
 
           return {
             ...migratedSubject,
-            scheduledWeekdayPages: subject.scheduledWeekdayPages ?? calculateFreshWeekdayPagePlan(
-              migratedSubject,
-              getSubjectRemainingPageCount(migratedSubject),
-              getDiffDays(subject.targetDate)
-            )
+            scheduledWeekdayPages: !hadCustomWeekdayAllocation && subject.scheduledWeekdayPages
+              ? subject.scheduledWeekdayPages
+              : calculateFreshWeekdayPagePlan(
+                  migratedSubject,
+                  getSubjectRemainingPageCount(migratedSubject),
+                  getDiffDays(subject.targetDate)
+                )
           };
-        }));
+        });
+        const linkedReviewSubjectIds = new Set(
+          migratedSubjects.flatMap(subject => getAllSubjectReviewIds(subject))
+        );
+        const subjectsWithoutNestedReviews = migratedSubjects.map(subject => (
+          linkedReviewSubjectIds.has(subject.id)
+            ? {
+                ...subject,
+                reviewSubjectIds: [],
+                followUpSubjects: (subject.followUpSubjects || []).map(stage => ({
+                  ...stage,
+                  reviewSubjectIds: []
+                }))
+              }
+            : subject
+        ));
+        setSubjects(inheritReviewSubjectTargetDates(subjectsWithoutNestedReviews));
       }
       if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
       if (savedLogs) {
@@ -162,9 +220,21 @@ const App: React.FC = () => {
           const subject = loadedSubjects.find(item => item.id === log.subjectId);
           const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], loadedTags);
           const timestampDate = new Date(log.timestamp);
+          const restoredRetryInterval = log.reviewGateRetry
+            ? getCurrentReviewIntervalMs(log.reviewGateRetry.reviewStep)
+            : 0;
+          const reviewGateRetry = log.reviewGateRetry
+            && log.reviewGateRetry.intervalMs < TEST_REVIEW_DELAY_THRESHOLD_MS
+            ? {
+                ...log.reviewGateRetry,
+                intervalMs: restoredRetryInterval,
+                dueAt: new Date(Date.now() + restoredRetryInterval).toISOString()
+              }
+            : log.reviewGateRetry;
 
           return {
             ...log,
+            reviewGateRetry,
             subjectNameSnapshot: log.subjectNameSnapshot || subject?.name || '삭제된 과목',
             folderSnapshots: log.folderSnapshots || folderSnapshots,
             studyDate: log.studyDate || getLocalDateKey(timestampDate),
@@ -231,7 +301,9 @@ const App: React.FC = () => {
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
-    setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
+    setSubjects(prev => inheritReviewSubjectTargetDates(
+      prev.map(s => s.id === updatedSubject.id ? updatedSubject : s)
+    ));
     setLogs(prev => prev.map(log => {
       if (log.subjectId !== updatedSubject.id) return log;
       return {
@@ -243,7 +315,9 @@ const App: React.FC = () => {
 
   const handleUpdateSubjects = (updatedSubjects: Subject[]) => {
     const updatedMap = new Map(updatedSubjects.map(subject => [subject.id, subject]));
-    setSubjects(prev => prev.map(subject => updatedMap.get(subject.id) || subject));
+    setSubjects(prev => inheritReviewSubjectTargetDates(
+      prev.map(subject => updatedMap.get(subject.id) || subject)
+    ));
     setLogs(prev => prev.map(log => {
       const updatedSubject = updatedMap.get(log.subjectId);
       if (!updatedSubject) return log;
@@ -268,7 +342,11 @@ const App: React.FC = () => {
         setSubjects(prev => prev.filter(s => s.id !== id));
         setSubjects(prev => prev.map(subject => ({
           ...subject,
-          reviewSubjectIds: (subject.reviewSubjectIds || []).filter(reviewSubjectId => reviewSubjectId !== id)
+          reviewSubjectIds: (subject.reviewSubjectIds || []).filter(reviewSubjectId => reviewSubjectId !== id),
+          followUpSubjects: (subject.followUpSubjects || []).map(followUp => ({
+            ...followUp,
+            reviewSubjectIds: (followUp.reviewSubjectIds || []).filter(reviewSubjectId => reviewSubjectId !== id)
+          }))
         })));
         setTestCategories(prev => prev.filter(c => c.subjectId !== id));
       }
@@ -402,9 +480,16 @@ const App: React.FC = () => {
     const subject = subjects.find(item => item.id === log.subjectId);
     const skipReview = shouldSkipReviewForLog(log, subject);
     const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], tagDefinitions);
+    const activeStage = subject ? getActiveSubjectStage(subject) : null;
+    const subjectStageId = log.subjectStageId || activeStage?.id || subject?.id;
+    const reviewSubjectIdsSnapshot = log.reviewSubjectIdsSnapshot
+      || (subject ? getSubjectStageReviewSubjectIds(subject, subjectStageId) : []);
     const newLog: StudyLog = {
         ...log,
         subjectNameSnapshot: subject?.name || '삭제된 과목',
+        subjectStageId,
+        subjectStageNameSnapshot: log.subjectStageNameSnapshot || activeStage?.name || subject?.name,
+        reviewSubjectIdsSnapshot,
         folderSnapshots,
         studyDate: log.studyDate || getLocalDateKey(new Date(log.timestamp)),
         studyWeekday: log.studyWeekday ?? new Date(log.timestamp).getDay(),
@@ -429,9 +514,20 @@ const App: React.FC = () => {
     if (!oldLog) return;
 
     const subject = subjects.find(item => item.id === updatedLog.subjectId);
+    const activeStage = subject ? getActiveSubjectStage(subject) : null;
+    const subjectStageId = oldLog.subjectId === updatedLog.subjectId
+      ? updatedLog.subjectStageId || oldLog.subjectStageId || activeStage?.id || subject?.id
+      : activeStage?.id || subject?.id;
     const enrichedLog: StudyLog = {
       ...updatedLog,
       subjectNameSnapshot: subject?.name || updatedLog.subjectNameSnapshot || '삭제된 과목',
+      subjectStageId,
+      subjectStageNameSnapshot: oldLog.subjectId === updatedLog.subjectId
+        ? updatedLog.subjectStageNameSnapshot || oldLog.subjectStageNameSnapshot || activeStage?.name || subject?.name
+        : activeStage?.name || subject?.name,
+      reviewSubjectIdsSnapshot: oldLog.subjectId === updatedLog.subjectId
+        ? updatedLog.reviewSubjectIdsSnapshot || oldLog.reviewSubjectIdsSnapshot
+        : subject ? getSubjectStageReviewSubjectIds(subject, subjectStageId) : [],
       folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions),
       studyDate: updatedLog.studyDate || getLocalDateKey(new Date(updatedLog.timestamp)),
       studyWeekday: updatedLog.studyWeekday ?? new Date(updatedLog.timestamp).getDay()
@@ -479,9 +575,23 @@ const App: React.FC = () => {
 
     const subject = subjects.find(item => item.id === replacementLog.subjectId);
     const skipReview = shouldSkipReviewForLog(replacementLog, subject);
+    const retainedLog = logsToReplace.find(log => log.subjectId === replacementLog.subjectId);
+    const activeStage = subject ? getActiveSubjectStage(subject) : null;
+    const subjectStageId = replacementLog.subjectStageId
+      || retainedLog?.subjectStageId
+      || activeStage?.id
+      || subject?.id;
     const enrichedLog: StudyLog = {
       ...replacementLog,
       subjectNameSnapshot: subject?.name || replacementLog.subjectNameSnapshot || '삭제된 과목',
+      subjectStageId,
+      subjectStageNameSnapshot: replacementLog.subjectStageNameSnapshot
+        || retainedLog?.subjectStageNameSnapshot
+        || activeStage?.name
+        || subject?.name,
+      reviewSubjectIdsSnapshot: replacementLog.reviewSubjectIdsSnapshot
+        || retainedLog?.reviewSubjectIdsSnapshot
+        || (subject ? getSubjectStageReviewSubjectIds(subject, subjectStageId) : []),
       folderSnapshots: getFolderSnapshots(subject?.tagIds || [], tagDefinitions),
       studyDate: replacementLog.studyDate || getLocalDateKey(new Date(replacementLog.timestamp)),
       studyWeekday: replacementLog.studyWeekday ?? new Date(replacementLog.timestamp).getDay(),
@@ -546,25 +656,9 @@ const App: React.FC = () => {
         }
 
         // 복습 완료 시 다음 주기 계산
-        // 주기: 2시간(초기) -> 1일 -> 4일 -> 7일 -> 14일 -> 28일 -> (이후 2배씩)
         const currentStep = log.reviewStep || 0;
-        let nextInterval = 0;
-
-        // currentStep은 "현재 완료한 단계"가 아니라 "도래한 단계"
-        // 즉, Step 0은 "2시간 후" 복습을 의미함.
-        // Step 0을 완료하면 다음은 "1일 후"여야 함.
-        
-        if (currentStep === 0) nextInterval = 1 * 24 * 60 * 60 * 1000; // 1일
-        else if (currentStep === 1) nextInterval = 4 * 24 * 60 * 60 * 1000; // 4일
-        else if (currentStep === 2) nextInterval = 7 * 24 * 60 * 60 * 1000; // 7일
-        else if (currentStep === 3) nextInterval = 14 * 24 * 60 * 60 * 1000; // 14일
-        else if (currentStep === 4) nextInterval = 28 * 24 * 60 * 60 * 1000; // 28일
-        else {
-            // Step 5 완료 시 (28일 지난 시점) -> 다음은 56일
-            // 28 * 2^(step-4)
-            const multiplier = Math.pow(2, currentStep - 4);
-            nextInterval = 28 * 24 * 60 * 60 * 1000 * multiplier;
-        }
+        // currentStep은 "현재 완료한 단계"가 아니라 "도래한 단계"를 의미한다.
+        const nextInterval = getNextReviewIntervalMs(currentStep);
 
         const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
         const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
@@ -607,7 +701,19 @@ const App: React.FC = () => {
   };
 
   const handleUpdateReviewMemo = (logId: string, memo: string) => {
-    setLogs(prev => prev.map(log => log.id === logId ? { ...log, reviewMemo: memo } : log));
+    setLogs(prev => prev.map(log => log.id === logId
+      ? updateReviewGateMemo(log, memo)
+      : log
+    ));
+  };
+
+  const handleFinishReviewGate = (outcomes: ReviewGateOutcome[], isRetry: boolean) => {
+    const completedAt = Date.now();
+    setLogs(prev => applyReviewGateOutcomes(prev, outcomes, isRetry, completedAt));
+  };
+
+  const handleClearReviewGateRetries = (logIds: string[]) => {
+    setLogs(prev => clearReviewGateRetries(prev, logIds));
   };
 
   const handleAdvanceReviewSubject = (
@@ -651,13 +757,7 @@ const App: React.FC = () => {
         }
 
         const currentStep = log.reviewStep || 0;
-        let nextInterval = 0;
-        if (currentStep === 0) nextInterval = 1 * 24 * 60 * 60 * 1000;
-        else if (currentStep === 1) nextInterval = 4 * 24 * 60 * 60 * 1000;
-        else if (currentStep === 2) nextInterval = 7 * 24 * 60 * 60 * 1000;
-        else if (currentStep === 3) nextInterval = 14 * 24 * 60 * 60 * 1000;
-        else if (currentStep === 4) nextInterval = 28 * 24 * 60 * 60 * 1000;
-        else nextInterval = 28 * 24 * 60 * 60 * 1000 * Math.pow(2, currentStep - 4);
+        const nextInterval = getNextReviewIntervalMs(currentStep);
 
         const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
         const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
@@ -767,11 +867,11 @@ const App: React.FC = () => {
       <main className="p-4 md:p-10 max-w-6xl mx-auto">
         <header className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
-            <p className="text-sm font-bold text-indigo-500 uppercase tracking-widest">{todayStr}</p>
-            <h2 className="text-3xl font-black text-slate-900 mt-1">
+            <h2 className="text-3xl font-black text-slate-900">
               {activeTab === 'dashboard' ? '학습 실행' :
                activeTab === 'settings' ? '학습 설정' : '학습 추이 및 리포트'}
             </h2>
+            <p className="mt-3 text-xl font-black tracking-wide text-indigo-500 md:text-2xl">{todayStr}</p>
           </div>
         </header>
 
@@ -807,6 +907,8 @@ const App: React.FC = () => {
                     onAdvanceReviewSubject={handleAdvanceReviewSubject}
                     onRecordReviewSubjectTime={handleRecordReviewSubjectTime}
                     onUpdateReviewMemo={handleUpdateReviewMemo}
+                    onFinishReviewGate={handleFinishReviewGate}
+                    onClearReviewGateRetries={handleClearReviewGateRetries}
                   />
                 </div>
               </div>
@@ -822,7 +924,6 @@ const App: React.FC = () => {
                 activeWeekday={activeStudyWeekday}
                 activeStudyDate={activeStudyDate}
                 onActiveWeekdayChange={setActiveStudyWeekday}
-                onAddSubject={handleAddSubject}
                 onUpdateSubject={handleUpdateSubject}
                 onUpdateSubjects={handleUpdateSubjects}
                 onDeleteSubject={handleDeleteSubject}
@@ -831,7 +932,7 @@ const App: React.FC = () => {
                 onOpenReview={() => setActiveTab('dashboard')}
               />
               <div className="mx-auto max-w-3xl rounded-[3rem] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
-                <SubjectPlanner onAddSubject={handleAddSubject} />
+                <SubjectPlanner subjects={subjects} logs={logs} onAddSubject={handleAddSubject} />
               </div>
             </div>
           )}

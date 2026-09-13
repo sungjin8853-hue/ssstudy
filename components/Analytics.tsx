@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { FollowUpSubject, Subject, StudyLog, TagDefinition } from '../types';
+import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../utils/math';
+import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/review';
 import {
   calculateFreshWeekdayPagePlan,
   calculateWeeklyRequiredPages,
@@ -11,11 +12,12 @@ import {
   getWeekdayPagePlan,
   getLogStudyDate,
   getActiveSubjectStage,
+  getAllSubjectReviewIds,
   getSubjectCompletedPageCount,
   getSubjectRemainingPageCount,
-  getSubjectStartPage,
+  getSubjectStages,
+  getSubjectStageReviewSubjectIds,
   getSubjectTotalPageCount,
-  normalizeWeekdayWeights,
   normalizeWeekdays,
   parseStudyDate,
   WEEKDAYS
@@ -28,7 +30,6 @@ interface Props {
   activeWeekday: number;
   activeStudyDate: string;
   onActiveWeekdayChange: (weekday: number) => void;
-  onAddSubject?: (subject: Subject) => void;
   onUpdateSubject?: (updated: Subject) => void;
   onUpdateSubjects?: (updated: Subject[]) => void;
   onDeleteSubject?: (id: string) => void;
@@ -46,6 +47,147 @@ const formatPageValue = (value: number) => (
   Number.isInteger(value) ? value.toString() : value.toFixed(1).replace(/\.0$/, '')
 );
 
+type SubjectStage = ReturnType<typeof getSubjectStages>[number];
+
+interface ProjectedStudyEvent {
+  date: Date;
+  pages: number;
+}
+
+interface StageScheduleEstimate {
+  completionDates: Map<string, Date>;
+  studyEvents: Map<string, ProjectedStudyEvent[]>;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const formatEstimatedDate = (date?: Date | null) => {
+  if (!date || !Number.isFinite(date.getTime())) return '예측 어려움';
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  const today = parseStudyDate(getLocalDateKey());
+  const diffDays = Math.round((target.getTime() - today.getTime()) / DAY_MS);
+  if (diffDays <= 0) return '오늘';
+  if (diffDays === 1) return '내일';
+  const dateLabel = target.getFullYear() === today.getFullYear()
+    ? `${target.getMonth() + 1}/${target.getDate()}`
+    : `${String(target.getFullYear()).slice(2)}.${target.getMonth() + 1}.${target.getDate()}`;
+  return `${dateLabel} · ${diffDays}일 후`;
+};
+
+const estimateStageSchedule = (subject: Subject): StageScheduleEstimate => {
+  const completionDates = new Map<string, Date>();
+  const studyEvents = new Map<string, ProjectedStudyEvent[]>();
+  const stages = getSubjectStages(subject);
+  const totalRemainingPages = getSubjectRemainingPageCount(subject);
+  if (totalRemainingPages <= 0) return { completionDates, studyEvents };
+
+  const selectedWeekdays = normalizeWeekdays(subject.scheduledWeekdays);
+  const diffDays = Math.max(1, getDiffDays(subject.targetDate));
+  let weekdayPlan = getWeekdayPagePlan(subject, totalRemainingPages, diffDays);
+  let weeklyCapacity = selectedWeekdays.reduce((sum, weekday) => sum + (weekdayPlan[weekday] || 0), 0);
+
+  if (weeklyCapacity <= 0) {
+    weekdayPlan = distributePagesByWeekdayWeights(
+      Math.max(1, calculateWeeklyRequiredPages(totalRemainingPages, diffDays)),
+      selectedWeekdays
+    );
+    weeklyCapacity = selectedWeekdays.reduce((sum, weekday) => sum + (weekdayPlan[weekday] || 0), 0);
+  }
+
+  if (weeklyCapacity <= 0) return { completionDates, studyEvents };
+
+  const remainingByStage = stages.map(stage => Math.max(0, stage.remainingPages));
+  let activeStageIndex = remainingByStage.findIndex(pages => pages > 0);
+  const cursor = parseStudyDate(getLocalDateKey());
+
+  for (let dayOffset = 0; dayOffset < 3650 && activeStageIndex >= 0; dayOffset += 1) {
+    const date = new Date(cursor);
+    date.setDate(cursor.getDate() + dayOffset);
+    let availablePages = Math.max(0, weekdayPlan[date.getDay()] || 0);
+
+    while (availablePages > 0 && activeStageIndex >= 0) {
+      const stage = stages[activeStageIndex];
+      const pages = Math.min(availablePages, remainingByStage[activeStageIndex]);
+      if (pages > 0) {
+        const events = studyEvents.get(stage.id) || [];
+        events.push({ date: new Date(date), pages });
+        studyEvents.set(stage.id, events);
+        remainingByStage[activeStageIndex] -= pages;
+        availablePages -= pages;
+      }
+
+      if (remainingByStage[activeStageIndex] <= 0) {
+        completionDates.set(stage.id, new Date(date));
+        activeStageIndex = remainingByStage.findIndex((pages, index) => index > activeStageIndex && pages > 0);
+      }
+    }
+  }
+
+  return { completionDates, studyEvents };
+};
+
+const estimateReviewSubjectCompletion = (
+  parentSubject: Subject,
+  stage: SubjectStage,
+  reviewSubject: Subject,
+  projectedStudyEvents: ProjectedStudyEvent[],
+  logs: StudyLog[]
+) => {
+  const remainingPages = getSubjectRemainingPageCount(reviewSubject);
+  if (remainingPages <= 0) return null;
+
+  const now = Date.now();
+  const latestSupportedDate = now + (10 * 365 * DAY_MS);
+  const events = logs
+    .filter(log => {
+      if (log.subjectId !== parentSubject.id || log.isCondensed || log.reviewEnabled === false) return false;
+      if ((log.subjectStageId || parentSubject.id) !== stage.id) return false;
+      const reviewSubjectIds = Array.isArray(log.reviewSubjectIdsSnapshot) && log.reviewSubjectIdsSnapshot.length > 0
+        ? log.reviewSubjectIdsSnapshot
+        : stage.reviewSubjectIds;
+      return reviewSubjectIds.includes(reviewSubject.id);
+    })
+    .flatMap(log => {
+      const pages = Math.max(0, log.pagesRead);
+      if (pages <= 0) return [];
+      const scheduledAt = log.nextReviewDate
+        ? new Date(log.nextReviewDate).getTime()
+        : new Date(log.timestamp).getTime() + INITIAL_REVIEW_DELAY_MS;
+      if (!Number.isFinite(scheduledAt)) return [];
+      return [{ at: scheduledAt, pages, step: Math.max(0, log.reviewStep || 0) }];
+    });
+
+  projectedStudyEvents.forEach(event => {
+    events.push({
+      at: event.date.getTime() + INITIAL_REVIEW_DELAY_MS,
+      pages: event.pages,
+      step: 0
+    });
+  });
+
+  if (events.length === 0) return null;
+
+  let completedPages = 0;
+  for (let count = 0; count < 5000 && events.length > 0; count += 1) {
+    events.sort((a, b) => a.at - b.at);
+    const event = events.shift();
+    if (!event) break;
+    const effectiveAt = Math.max(now, event.at);
+    if (effectiveAt > latestSupportedDate) return null;
+
+    completedPages += event.pages;
+    if (completedPages >= remainingPages) return new Date(effectiveAt);
+
+    const nextAt = event.at + getNextReviewIntervalMs(event.step);
+    if (Number.isFinite(nextAt) && nextAt <= latestSupportedDate) {
+      events.push({ ...event, at: nextAt, step: event.step + 1 });
+    }
+  }
+
+  return null;
+};
+
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
@@ -53,7 +195,6 @@ export const Analytics: React.FC<Props> = ({
   activeWeekday,
   activeStudyDate,
   onActiveWeekdayChange,
-  onAddSubject,
   onUpdateSubject, 
   onUpdateSubjects,
   onDeleteSubject,
@@ -64,15 +205,14 @@ export const Analytics: React.FC<Props> = ({
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [expandedSubjectReviewIds, setExpandedSubjectReviewIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [speedCopySourceId, setSpeedCopySourceId] = useState<string | null>(null);
-  const [speedCopyForm, setSpeedCopyForm] = useState<{
+  const [stageEditForm, setStageEditForm] = useState<{
+    subjectId: string;
+    stageId: string;
     name: string;
     startPage: number;
-    totalPages: number;
-    targetDate: string;
-    tagIds: string[];
-    isRequired: boolean;
-    scheduledWeekdays: number[];
+    endPage: number;
+    reviewSubjectIds: string[];
+    isNew: boolean;
   } | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
   const weekdayIds = WEEKDAYS.map(day => day.id);
@@ -84,26 +224,43 @@ export const Analytics: React.FC<Props> = ({
   
   // 수정 폼 상태 확장 (이름, 총페이지, 목표날짜)
   const [editForm, setEditForm] = useState<{
+    stageId: string;
     name: string;
-    startPage: number;
-    totalPages: number;
     targetDate: string;
     tagIds: string[];
     isRequired: boolean;
     scheduledWeekdays: number[];
-    scheduledWeekdayWeights: Record<string, number>;
-    scheduledWeekdayRemainderDay?: number;
-    reviewSubjectIds: string[];
-    followUpSubjects: FollowUpSubject[];
   } | null>(null);
   const reviewSubjectIdSet = useMemo(() => (
-    new Set(subjects.flatMap(subject => subject.reviewSubjectIds || []))
+    new Set(subjects.flatMap(getAllSubjectReviewIds))
   ), [subjects]);
   const reviewSubjectOwnerMap = useMemo(() => {
     const next = new Map<string, string>();
     subjects.forEach(subject => {
-      (subject.reviewSubjectIds || []).forEach(reviewSubjectId => {
+      getAllSubjectReviewIds(subject).forEach(reviewSubjectId => {
         if (!next.has(reviewSubjectId)) next.set(reviewSubjectId, subject.id);
+      });
+    });
+    return next;
+  }, [subjects]);
+  const reviewSubjectStageOwnerMap = useMemo(() => {
+    const next = new Map<string, string>();
+    subjects.forEach(subject => {
+      getSubjectStages(subject).forEach(stage => {
+        stage.reviewSubjectIds.forEach(reviewSubjectId => {
+          if (!next.has(reviewSubjectId)) next.set(reviewSubjectId, `${subject.id}:${stage.id}`);
+        });
+      });
+    });
+    return next;
+  }, [subjects]);
+  const followUpSourceOwnerMap = useMemo(() => {
+    const next = new Map<string, string>();
+    subjects.forEach(subject => {
+      (subject.followUpSubjects || []).forEach(followUp => {
+        if (followUp.sourceSubjectId && !next.has(followUp.sourceSubjectId)) {
+          next.set(followUp.sourceSubjectId, subject.id);
+        }
       });
     });
     return next;
@@ -123,19 +280,22 @@ export const Analytics: React.FC<Props> = ({
     setExpandedSubjectReviewIds(next);
   };
 
-  const toggleEditReviewSubject = (subject: Subject, reviewSubjectId: string) => {
-    if (!editForm) return;
+  const toggleStageEditReviewSubject = (reviewSubjectId: string) => {
+    setStageEditForm(current => {
+      if (!current) return current;
+      if (reviewSubjectIdSet.has(current.subjectId)) return current;
+      const exists = current.reviewSubjectIds.includes(reviewSubjectId);
+      const ownerKey = reviewSubjectStageOwnerMap.get(reviewSubjectId);
+      const editingKey = `${current.subjectId}:${current.stageId}`;
+      if (!exists && ownerKey && ownerKey !== editingKey) return current;
 
-    const exists = editForm.reviewSubjectIds.includes(reviewSubjectId);
-    const ownerId = reviewSubjectOwnerMap.get(reviewSubjectId);
-    if (!exists && ownerId && ownerId !== editingId) return;
-
-    const nextReviewSubjectIds = exists
-      ? editForm.reviewSubjectIds.filter(id => id !== reviewSubjectId)
-      : [...editForm.reviewSubjectIds, reviewSubjectId];
-
-    setEditForm({ ...editForm, reviewSubjectIds: nextReviewSubjectIds });
-    onUpdateSubject?.({ ...subject, reviewSubjectIds: nextReviewSubjectIds });
+      return {
+        ...current,
+        reviewSubjectIds: exists
+          ? current.reviewSubjectIds.filter(id => id !== reviewSubjectId)
+          : [...current.reviewSubjectIds, reviewSubjectId]
+      };
+    });
   };
 
   const toggleEditWeekday = (dayId: number) => {
@@ -145,18 +305,9 @@ export const Analytics: React.FC<Props> = ({
         ? prev.scheduledWeekdays.filter(id => id !== dayId)
         : [...prev.scheduledWeekdays, dayId];
       if (nextDays.length === 0) return prev;
-      const normalizedDays = normalizeWeekdays(nextDays);
-      const nextWeights = {
-        ...prev.scheduledWeekdayWeights,
-        [dayId]: nextDays.includes(dayId) ? (prev.scheduledWeekdayWeights[dayId] || 1) : 0
-      };
       return {
         ...prev,
-        scheduledWeekdays: normalizedDays,
-        scheduledWeekdayWeights: normalizeWeekdayWeights(nextWeights, normalizedDays),
-        scheduledWeekdayRemainderDay: normalizedDays.includes(prev.scheduledWeekdayRemainderDay ?? -1)
-          ? prev.scheduledWeekdayRemainderDay
-          : normalizedDays[normalizedDays.length - 1]
+        scheduledWeekdays: orderWeekdays(nextDays)
       };
     });
   };
@@ -211,15 +362,13 @@ export const Analytics: React.FC<Props> = ({
     if ((!onUpdateSubject && !onUpdateSubjects) || days.length === 0) return;
 
     const scheduledWeekdays = orderWeekdays(days);
-    const scheduledWeekdayWeights = normalizeWeekdayWeights(undefined, scheduledWeekdays);
-    const scheduledWeekdayRemainderDay = scheduledWeekdays[scheduledWeekdays.length - 1];
 
     const updatedSubjects = getSubjectsInFolder(folderId).map(subject => {
       const nextSubject = {
         ...subject,
         scheduledWeekdays,
-        scheduledWeekdayWeights,
-        scheduledWeekdayRemainderDay,
+        scheduledWeekdayWeights: undefined,
+        scheduledWeekdayRemainderDay: undefined,
         scheduledWeekdayPages: undefined
       };
 
@@ -282,12 +431,16 @@ export const Analytics: React.FC<Props> = ({
 
     return subjects.map(sub => {
       const subLogs = logs.filter(l => l.subjectId === sub.id);
+      const ownerSubjectId = reviewSubjectOwnerMap.get(sub.id);
+      const effectiveTargetDate = ownerSubjectId
+        ? subjects.find(subject => subject.id === ownerSubjectId)?.targetDate || sub.targetDate
+        : sub.targetDate;
       const weeklyLogs = subLogs.filter(log => {
         const studyDate = getLogStudyDate(log);
         return studyDate >= weekStartDateKey && studyDate <= todayDateKey;
       });
       const remaining = getSubjectRemainingPageCount(sub);
-      const diffDays = getDiffDays(sub.targetDate);
+      const diffDays = getDiffDays(effectiveTargetDate);
       const activeDayCompletedPages = subLogs
         .filter(log => getLogStudyDate(log) === activeStudyDate)
         .reduce((sum, log) => sum + log.pagesRead, 0);
@@ -327,6 +480,7 @@ export const Analytics: React.FC<Props> = ({
 
       return {
         ...sub,
+        targetDate: effectiveTargetDate,
         stats,
         diffDays,
         remainingPages: remaining,
@@ -344,61 +498,157 @@ export const Analytics: React.FC<Props> = ({
     });
   }, [subjects, logs, activeWeekday, activeStudyDate]);
 
-  const openSpeedCopyForm = (source: Subject) => {
+  const withFreshPagePlan = (subject: Subject): Subject => ({
+    ...subject,
+    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+      subject,
+      getSubjectRemainingPageCount(subject),
+      getDiffDays(subject.targetDate)
+    )
+  });
+
+  const openSubjectSummaryEditor = (subject: Subject, requestedStageId?: string) => {
+    const stages = getSubjectStages(subject);
+    const stage = stages.find(item => item.id === requestedStageId)
+      || stages.find(item => item.status === 'current')
+      || stages[stages.length - 1];
+    if (!stage) return;
+
+    setStageEditForm(null);
+    setFolderEditForm(null);
+    setEditingId(subject.id);
+    setEditForm({
+      stageId: stage.id,
+      name: stage.name,
+      targetDate: subject.targetDate,
+      tagIds: subject.tagIds || [],
+      isRequired: subject.isRequired ?? false,
+      scheduledWeekdays: normalizeWeekdays(subject.scheduledWeekdays)
+    });
+  };
+
+  const openInlineStageEditor = (subject: Subject, stage: SubjectStage, isNew = false) => {
     setEditingId(null);
     setEditForm(null);
     setFolderEditForm(null);
-    setSpeedCopySourceId(source.id);
-    setSpeedCopyForm({
-      name: '',
-      startPage: 1,
-      totalPages: 100,
-      targetDate: '',
-      tagIds: source.tagIds || [],
-      isRequired: false,
-      scheduledWeekdays: WEEKDAYS.map(day => day.id)
+    setStageEditForm({
+      subjectId: subject.id,
+      stageId: stage.id,
+      name: stage.name,
+      startPage: stage.startPage,
+      endPage: stage.endPage,
+      reviewSubjectIds: [...stage.reviewSubjectIds],
+      isNew
     });
   };
 
-  const createSpeedCopySubject = (source: Subject) => {
-    if (!onAddSubject || !speedCopyForm?.name.trim() || !speedCopyForm.targetDate) return;
+  const saveInlineStageEditor = (subject: Subject) => {
+    if (!stageEditForm || stageEditForm.subjectId !== subject.id) return;
+    const startPage = Math.max(1, Math.round(Number(stageEditForm.startPage) || 1));
+    const endPage = Math.max(startPage, Math.round(Number(stageEditForm.endPage) || startPage));
+    const reviewSubjectIds = Array.from(new Set(stageEditForm.reviewSubjectIds.filter(id => (
+      id !== subject.id && subjects.some(candidate => (
+        candidate.id === id && getAllSubjectReviewIds(candidate).length === 0
+      ))
+    ))));
+    const name = stageEditForm.name.trim() || '과목';
+    const updatedSubject = stageEditForm.stageId === subject.id
+      ? {
+          ...subject,
+          name,
+          startPage,
+          totalPages: endPage,
+          completedPages: Math.min(endPage, Math.max(startPage - 1, subject.completedPages)),
+          reviewSubjectIds
+        }
+      : {
+          ...subject,
+          followUpSubjects: (subject.followUpSubjects || []).map(stage => (
+            stage.id === stageEditForm.stageId
+              ? {
+                  ...stage,
+                  name,
+                  startPage,
+                  endPage,
+                  completedPage: Math.min(endPage, Math.max(startPage - 1, stage.completedPage)),
+                  reviewSubjectIds
+                }
+              : stage
+          ))
+        };
 
-    const startPage = Math.max(1, speedCopyForm.startPage || 1);
-    const totalPages = Math.max(startPage, speedCopyForm.totalPages || startPage);
-    const completedPages = Math.max(0, startPage - 1);
-    const sourceStats = allSubjectStats.find(subject => subject.id === source.id)?.stats;
-    const nextSubject: Subject = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: speedCopyForm.name.trim(),
-      createdAt: new Date().toISOString(),
-      planResetDate: getLocalDateKey(),
-      startPage,
-      totalPages,
-      completedPages,
-      targetDate: speedCopyForm.targetDate,
-      initialAverageTimePerPage: Math.max(0, sourceStats?.averageTimePerPage || 0),
-      tagIds: speedCopyForm.tagIds,
-      reviewEnabled: true,
-      reviewSubjectIds: [],
-      isRequired: speedCopyForm.isRequired,
-      scheduledWeekdays: WEEKDAYS.map(day => day.id)
+    onUpdateSubject?.(withFreshPagePlan(updatedSubject));
+    setStageEditForm(null);
+  };
+
+  const cancelInlineStageEditor = (subject: Subject) => {
+    if (stageEditForm?.subjectId === subject.id && stageEditForm.isNew) {
+      onUpdateSubject?.(withFreshPagePlan({
+        ...subject,
+        followUpSubjects: (subject.followUpSubjects || []).filter(stage => stage.id !== stageEditForm.stageId)
+      }));
+    }
+    setStageEditForm(null);
+  };
+
+  const addFollowUpSubject = (subject: Subject) => {
+    const newStage = {
+      id: Math.random().toString(36).slice(2, 11),
+      name: '새 후행과목',
+      startPage: 1,
+      endPage: 100,
+      completedPage: 0,
+      reviewSubjectIds: []
     };
-
-    onAddSubject({
-      ...nextSubject,
-      scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-        nextSubject,
-        getSubjectRemainingPageCount(nextSubject),
-        getDiffDays(nextSubject.targetDate)
-      )
+    const updatedSubject = withFreshPagePlan({
+      ...subject,
+      followUpSubjects: [...(subject.followUpSubjects || []), newStage]
     });
-    setSpeedCopySourceId(null);
-    setSpeedCopyForm(null);
+
+    onUpdateSubject?.(updatedSubject);
+    setExpandedSubjectReviewIds(current => new Set(current).add(subject.id));
+    openInlineStageEditor(subject, {
+      ...newStage,
+      currentPage: 1,
+      remainingPages: 100,
+      isFollowUp: true,
+      status: 'upcoming'
+    }, true);
+  };
+
+  const moveRemainingStage = (subject: Subject, stageId: string, direction: -1 | 1) => {
+    const remainingStages = getSubjectStages(subject).filter(stage => stage.status !== 'completed');
+    const remainingIndex = remainingStages.findIndex(stage => stage.id === stageId);
+    const targetIndex = remainingIndex + direction;
+    if (remainingIndex < 0 || targetIndex < 0 || targetIndex >= remainingStages.length) return;
+
+    const currentStage = remainingStages[0];
+    const currentStageCompletedPages = currentStage
+      ? Math.max(0, currentStage.completedPage - currentStage.startPage + 1)
+      : 0;
+    if (
+      (remainingIndex === 0 || targetIndex === 0)
+      && (!currentStage?.isFollowUp || currentStageCompletedPages > 0)
+    ) return;
+
+    const targetStageId = remainingStages[targetIndex].id;
+    const followUpSubjects = [...(subject.followUpSubjects || [])];
+    const sourceIndex = followUpSubjects.findIndex(stage => stage.id === stageId);
+    const destinationIndex = followUpSubjects.findIndex(stage => stage.id === targetStageId);
+    if (sourceIndex < 0 || destinationIndex < 0) return;
+
+    [followUpSubjects[sourceIndex], followUpSubjects[destinationIndex]] = [
+      followUpSubjects[destinationIndex],
+      followUpSubjects[sourceIndex]
+    ];
+    onUpdateSubject?.(withFreshPagePlan({ ...subject, followUpSubjects }));
   };
 
   const visibleSubjectStats = useMemo(
-    () => allSubjectStats.filter(subject => !reviewSubjectIdSet.has(subject.id)),
-    [allSubjectStats, reviewSubjectIdSet]
+    () => allSubjectStats.filter(subject => (
+      !reviewSubjectIdSet.has(subject.id) && !followUpSourceOwnerMap.has(subject.id)
+    )),
+    [allSubjectStats, followUpSourceOwnerMap, reviewSubjectIdSet]
   );
 
   const subjectMatchesWeekdayView = (_subject?: unknown) => true;
@@ -582,10 +832,12 @@ export const Analytics: React.FC<Props> = ({
 
         {subjs.map(sub => {
           const isEditing = editingId === sub.id;
-          const isSpeedCopying = speedCopySourceId === sub.id;
           const combinedTotalPages = getSubjectTotalPageCount(sub);
           const combinedCompletedPages = getSubjectCompletedPageCount(sub);
+          const subjectStages = getSubjectStages(sub);
+          const remainingStages = subjectStages.filter(stage => stage.status !== 'completed');
           const activeStage = getActiveSubjectStage(sub);
+          const displayStage = activeStage || subjectStages[subjectStages.length - 1];
           const activeStagePageCount = activeStage
             ? Math.max(0, activeStage.endPage - activeStage.startPage + 1)
             : combinedTotalPages;
@@ -598,17 +850,16 @@ export const Analytics: React.FC<Props> = ({
           const progressPercent = activeStagePageCount > 0
             ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
             : 0;
-          const reviewSubjects = (sub.reviewSubjectIds || [])
-            .map(id => allSubjectStats.find(subject => subject.id === id))
-            .filter((subject): subject is typeof allSubjectStats[number] => Boolean(subject));
           const isReviewListExpanded = expandedSubjectReviewIds.has(sub.id);
+          const stageSchedule = estimateStageSchedule(sub);
           return (
             <div key={sub.id} className="flex flex-col gap-3 p-4 bg-white border border-slate-200 rounded-2xl hover:border-indigo-300 transition-all group/subj relative overflow-hidden">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3 flex-grow">
-                  {reviewSubjects.length > 0 && !isEditing && (
+                  {!isEditing && (
                     <button
                       type="button"
+                      aria-label={`${displayStage?.name || sub.name} 전체 과목 순서 ${isReviewListExpanded ? '접기' : '펼치기'}`}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -616,8 +867,8 @@ export const Analytics: React.FC<Props> = ({
                       }}
                       className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl transition-all ${
                         isReviewListExpanded
-                          ? 'bg-rose-500 text-white'
-                          : 'bg-rose-50 text-rose-400 hover:bg-rose-100'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600'
                       }`}
                     >
                       <span className={`text-sm transition-transform ${isReviewListExpanded ? 'rotate-90' : ''}`}>▶</span>
@@ -636,7 +887,14 @@ export const Analytics: React.FC<Props> = ({
                            placeholder="과목명"
                        />
                     ) : (
-                       <h4 className="truncate text-lg md:text-xl font-black text-slate-900">{sub.name}</h4>
+                       <div className="flex min-w-0 flex-wrap items-center gap-2">
+                         <h4 className="truncate text-lg md:text-xl font-black text-slate-900">{displayStage?.name || sub.name}</h4>
+                         <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black ${
+                           activeStage ? 'bg-indigo-100 text-indigo-600' : 'bg-emerald-100 text-emerald-600'
+                         }`}>
+                           {activeStage ? '현재 과목' : '전체 완료'}
+                         </span>
+                       </div>
                     )}
                     {isEditing ? (
                        <>
@@ -678,8 +936,8 @@ export const Analytics: React.FC<Props> = ({
                            </div>
                        </div>
                        </>
-                    ) : (
-                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                     ) : !isEditing ? (
+                         <div className="flex flex-wrap items-center gap-2 mt-1.5">
                           {sub.isRequired && (
                             <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
                           )}
@@ -689,7 +947,7 @@ export const Analytics: React.FC<Props> = ({
                           )}
                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
                         </div>
-                    )}
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 relative z-30 flex-shrink-0">
@@ -697,49 +955,28 @@ export const Analytics: React.FC<Props> = ({
                      <button 
                         onClick={(e) => { 
                             e.preventDefault();
-                            e.stopPropagation(); 
-                            if (onUpdateSubject && editForm) {
-                                const normalizedStartPage = Math.max(1, Number(editForm.startPage) || 1);
-                                const normalizedTotalPages = Math.max(normalizedStartPage, Number(editForm.totalPages) || normalizedStartPage);
-                                const updatedSubject: Subject = {
-                                    ...sub,
-                                    name: editForm.name, 
-                                    startPage: normalizedStartPage,
-                                    totalPages: normalizedTotalPages,
-                                    completedPages: Math.min(
-                                      normalizedTotalPages,
-                                      Math.max(normalizedStartPage - 1, sub.completedPages)
-                                    ),
-                                    targetDate: editForm.targetDate,
-                                    tagIds: editForm.tagIds,
-                                    reviewSubjectIds: editForm.reviewSubjectIds.filter(reviewSubjectId => (
-                                      reviewSubjectId !== sub.id && subjects.some(subject => subject.id === reviewSubjectId)
-                                    )),
-                                    isRequired: editForm.isRequired,
-                                    scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
-                                    scheduledWeekdayWeights: normalizeWeekdayWeights(editForm.scheduledWeekdayWeights, editForm.scheduledWeekdays),
-                                    scheduledWeekdayRemainderDay: editForm.scheduledWeekdayRemainderDay,
-                                    scheduledWeekdayPages: undefined,
-                                    followUpSubjects: editForm.followUpSubjects.map(followUp => {
-                                      const startPage = Math.max(1, Math.round(followUp.startPage));
-                                      const endPage = Math.max(startPage, Math.round(followUp.endPage));
-                                      return {
-                                        ...followUp,
-                                        name: followUp.name.trim() || '후행과목',
-                                        startPage,
-                                        endPage,
-                                        completedPage: Math.min(endPage, Math.max(startPage - 1, followUp.completedPage))
-                                      };
-                                    })
-                                };
-                                onUpdateSubject({
-                                    ...updatedSubject,
-                                    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-                                        updatedSubject,
-                                        getSubjectRemainingPageCount(updatedSubject),
-                                        getDiffDays(updatedSubject.targetDate)
-                                    )
-                                });
+                            e.stopPropagation();
+                            if (editForm) {
+                              const editingBaseStage = editForm.stageId === sub.id;
+                              const updatedSubject: Subject = {
+                                ...sub,
+                                name: editingBaseStage ? editForm.name.trim() || sub.name : sub.name,
+                                followUpSubjects: editingBaseStage
+                                  ? sub.followUpSubjects
+                                  : (sub.followUpSubjects || []).map(stage => (
+                                    stage.id === editForm.stageId
+                                      ? { ...stage, name: editForm.name.trim() || stage.name }
+                                      : stage
+                                  )),
+                                targetDate: editForm.targetDate,
+                                tagIds: editForm.tagIds,
+                                isRequired: editForm.isRequired,
+                                scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
+                                scheduledWeekdayWeights: undefined,
+                                scheduledWeekdayRemainderDay: undefined,
+                                scheduledWeekdayPages: undefined
+                              };
+                              onUpdateSubject?.(withFreshPagePlan(updatedSubject));
                             }
                             setEditingId(null);
                             setEditForm(null);
@@ -752,51 +989,24 @@ export const Analytics: React.FC<Props> = ({
                     <>
                       <button
                           type="button"
-                          title="같은 속도로 새 과목 추가"
-                          aria-label={`${sub.name} 같은 속도로 새 과목 추가`}
+                          title="후행과목 추가"
+                          aria-label={`${displayStage?.name || sub.name} 후행과목 추가`}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            if (isSpeedCopying) {
-                              setSpeedCopySourceId(null);
-                              setSpeedCopyForm(null);
-                            } else {
-                              openSpeedCopyForm(sub);
-                            }
+                            addFollowUpSubject(sub);
                           }}
                           onMouseDown={e => e.stopPropagation()}
-                          className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all cursor-pointer ${
-                            isSpeedCopying
-                              ? 'bg-cyan-600 text-white'
-                              : 'bg-slate-50 text-slate-300 hover:bg-cyan-50 hover:text-cyan-600'
-                          }`}
+                          className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 transition-all cursor-pointer"
                       >
                           ＋
                       </button>
-                      <button 
-                          onClick={(e) => { 
-                            e.preventDefault(); 
-                            e.stopPropagation(); 
-                            setSpeedCopySourceId(null);
-                            setSpeedCopyForm(null);
-                            setEditingId(sub.id);
-                            setFolderEditForm(null);
-                            setEditForm({
-                              name: sub.name,
-                              startPage: getSubjectStartPage(sub),
-                              totalPages: sub.totalPages,
-                              targetDate: sub.targetDate,
-                              tagIds: sub.tagIds || [],
-                              isRequired: sub.isRequired ?? false,
-                              scheduledWeekdays: normalizeWeekdays(sub.scheduledWeekdays),
-                              scheduledWeekdayWeights: normalizeWeekdayWeights(sub.scheduledWeekdayWeights, sub.scheduledWeekdays),
-                              scheduledWeekdayRemainderDay: sub.scheduledWeekdayRemainderDay,
-                              reviewSubjectIds: (sub.reviewSubjectIds || []).filter(reviewSubjectId => (
-                                reviewSubjectId !== sub.id && subjects.some(subject => subject.id === reviewSubjectId)
-                              )),
-                              followUpSubjects: (sub.followUpSubjects || []).map(followUp => ({ ...followUp }))
-                            });
-                          }} 
+                       <button
+                           onClick={(e) => {
+                             e.preventDefault();
+                             e.stopPropagation();
+                             openSubjectSummaryEditor(sub, displayStage?.id);
+                           }}
                           onMouseDown={e => e.stopPropagation()}
                           className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer"
                       >
@@ -832,30 +1042,7 @@ export const Analytics: React.FC<Props> = ({
                         ? `학습 진척도 · ${activeStage.name} (p.${activeStage.startPage}~${activeStage.endPage}) · ${progressPercent}%`
                         : `학습 진척도 · 전체 완료 · ${progressPercent}%`}
                     </p>
-                    {isEditing ? (
-                        <div className="flex flex-wrap items-center justify-end gap-2 bg-indigo-50 px-3 py-1 rounded-xl">
-                            <span className="text-xs font-bold text-indigo-400">시작 P</span>
-                            <input
-                                type="number"
-                                min="1"
-                                step="1"
-                                value={editForm?.startPage || 1}
-                                onChange={e => setEditForm(prev => prev ? {...prev, startPage: Number(e.target.value)} : null)}
-                                className="w-16 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
-                            />
-                            <span className="text-xs font-bold text-indigo-400">끝 P</span>
-                            <input 
-                                type="number"
-                                min={editForm?.startPage || 1}
-                                step="1"
-                                value={editForm?.totalPages || 0}
-                                onChange={e => setEditForm(prev => prev ? {...prev, totalPages: Number(e.target.value)} : null)}
-                                className="w-20 text-right text-lg font-black text-indigo-900 bg-transparent border-b-2 border-indigo-300 outline-none"
-                            />
-                        </div>
-                    ) : (
-                        <p className="text-base font-black text-slate-900">{activeStageCompletedPages} / {activeStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
-                    )}
+                    <p className="text-base font-black text-slate-900">{activeStageCompletedPages} / {activeStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
                  </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
                     <div className="h-full bg-indigo-500 transition-all duration-1000" style={{ width: `${progressPercent}%` }}></div>
@@ -864,36 +1051,8 @@ export const Analytics: React.FC<Props> = ({
 
               {isEditing && (
                 <div className="mt-2 bg-slate-900 p-4 rounded-2xl border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
-                  <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">폴더 이동</p>
-                  <div className="flex flex-wrap gap-2">
-                     <button
-                       type="button"
-                       onClick={(e) => {
-                         e.preventDefault();
-                         e.stopPropagation();
-                         setEditForm(prev => prev ? { ...prev, tagIds: [] } : prev);
-                       }}
-                       className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${(!editForm?.tagIds || editForm.tagIds.length === 0) ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}
-                     >
-                       홈
-                     </button>
-                     {tagDefinitions.map(t => (
-                       <button
-                         key={t.id}
-                         type="button"
-                         onClick={(e) => {
-                           e.preventDefault();
-                           e.stopPropagation();
-                           setEditForm(prev => prev ? { ...prev, tagIds: [t.id] } : prev);
-                         }}
-                         className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${editForm?.tagIds?.[0] === t.id ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}
-                       >
-                         📂 {t.name}
-                       </button>
-                     ))}
-                  </div>
-                  <div className="mt-4 border-t border-slate-800 pt-4">
-                    <p className="mb-3 px-1 text-[10px] font-black uppercase text-slate-500">학습 요일</p>
+                  <div>
+                  <p className="mb-3 px-1 text-[10px] font-black uppercase text-slate-500">학습 요일</p>
                     <div className="grid grid-cols-7 gap-1.5">
                       {WEEKDAYS.map(day => {
                         const selected = editForm?.scheduledWeekdays.includes(day.id) ?? false;
@@ -915,366 +1074,366 @@ export const Analytics: React.FC<Props> = ({
                         );
                       })}
                     </div>
-                    <div className="mt-3 space-y-2 rounded-2xl bg-slate-950 p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-lg bg-indigo-500/15 px-2.5 py-1 text-[10px] font-black text-indigo-300">
-                          주간 필요 {sub.weeklyRequiredPages}P
-                        </span>
-                        <span className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[10px] font-black text-emerald-300">
-                          비율 {editForm ? editForm.scheduledWeekdays.map(dayId => editForm.scheduledWeekdayWeights[dayId] || 1).join(':') : '-'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-7 gap-1.5">
-                        {WEEKDAYS.map(day => {
-                          const selected = editForm?.scheduledWeekdays.includes(day.id) ?? false;
-                          const previewPlan = editForm
-                            ? distributePagesByWeekdayWeights(
-                              sub.weeklyRequiredPages,
-                              editForm.scheduledWeekdays,
-                              editForm.scheduledWeekdayWeights,
-                              editForm.scheduledWeekdayRemainderDay
-                            )
-                            : {};
-                        return (
-                          <div
-                            key={day.id}
-                            className={`rounded-xl border p-1.5 ${
-                              selected
-                                ? 'border-indigo-500/40 bg-slate-900'
-                                : 'border-slate-800 bg-slate-900/40 opacity-45'
-                            }`}
-                          >
-                            <p className={`mb-1 text-center text-[10px] font-black ${selected ? 'text-indigo-300' : 'text-slate-600'}`}>
-                              {day.label}
-                            </p>
-                            <p className={`mb-1 text-center text-sm font-black ${selected ? 'text-white' : 'text-slate-600'}`}>
-                              {previewPlan[day.id] || 0}P
-                            </p>
-                            <input
-                              type="number"
-                              step="1"
-                              min="1"
-                              disabled={!selected}
-                              value={editForm?.scheduledWeekdayWeights[day.id] ?? 1}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => setEditForm(prev => prev ? {
-                                  ...prev,
-                                  scheduledWeekdayWeights: normalizeWeekdayWeights({
-                                    ...prev.scheduledWeekdayWeights,
-                                    [day.id]: Math.max(1, Number(e.target.value) || 1)
-                                  }, prev.scheduledWeekdays),
-                                  scheduledWeekdayRemainderDay: day.id
-                                } : prev)}
-                              className="w-full rounded-lg bg-slate-800 px-1 py-1 text-center text-xs font-black text-white outline-none disabled:text-slate-600"
-                            />
-                            <p className="mt-1 text-center text-[9px] font-black text-slate-500">비율</p>
-                          </div>
-                        );
-                      })}
-                      </div>
+                  <div className="mt-4 border-t border-slate-800 pt-4">
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">폴더 이동</p>
+                    <div className="flex flex-wrap gap-2">
+                       <button
+                         type="button"
+                         onClick={(e) => {
+                           e.preventDefault();
+                           e.stopPropagation();
+                           setEditForm(prev => prev ? { ...prev, tagIds: [] } : prev);
+                         }}
+                         className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${(!editForm?.tagIds || editForm.tagIds.length === 0) ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}
+                       >
+                         홈
+                       </button>
+                       {tagDefinitions.map(t => (
+                         <button
+                           key={t.id}
+                           type="button"
+                           onClick={(e) => {
+                             e.preventDefault();
+                             e.stopPropagation();
+                             setEditForm(prev => prev ? { ...prev, tagIds: [t.id] } : prev);
+                           }}
+                           className={`px-4 py-2 rounded-xl font-black text-xs transition-all border ${editForm?.tagIds?.[0] === t.id ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-800 hover:bg-indigo-600 text-white border-slate-700'}`}
+                         >
+                           📂 {t.name}
+                         </button>
+                       ))}
                     </div>
                   </div>
-                  <div className="mt-4 border-t border-slate-800 pt-4">
-                    <div className="mb-3 flex items-center justify-between gap-3 px-1">
-                      <p className="text-[10px] font-black uppercase text-slate-500">후행과목</p>
-                      <button
-                        type="button"
-                        onClick={e => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setEditForm(prev => prev ? {
-                            ...prev,
-                            followUpSubjects: [...prev.followUpSubjects, {
-                              id: Math.random().toString(36).slice(2, 11),
-                              name: '',
-                              startPage: 1,
-                              endPage: 100,
-                              completedPage: 0
-                            }]
-                          } : prev);
-                        }}
-                        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[10px] font-black text-white"
-                      >
-                        + 추가
-                      </button>
-                    </div>
-                    {editForm?.followUpSubjects.length ? (
-                      <div className="space-y-2">
-                        <div className="grid grid-cols-[minmax(0,1fr)_68px_68px_32px] gap-2 px-2 text-center text-[9px] font-black text-slate-600">
-                          <span className="text-left">과목명</span><span>시작</span><span>완료</span><span />
-                        </div>
-                        {editForm.followUpSubjects.map((followUp, index) => (
-                          <div key={followUp.id} className="grid grid-cols-[minmax(0,1fr)_68px_68px_32px] gap-2 rounded-xl bg-slate-950 p-2">
-                            <input
-                              value={followUp.name}
-                              onChange={e => setEditForm(prev => prev ? {
-                                ...prev,
-                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, name: e.target.value } : item)
-                              } : prev)}
-                              placeholder={`${index + 1}번째 후행과목`}
-                              className="min-w-0 rounded-lg bg-slate-900 px-2 text-xs font-black text-white outline-none"
-                            />
-                            <input
-                              type="number"
-                              min="1"
-                              value={followUp.startPage}
-                              title="시작 페이지"
-                              onChange={e => setEditForm(prev => prev ? {
-                                ...prev,
-                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, startPage: Number(e.target.value) } : item)
-                              } : prev)}
-                              className="rounded-lg bg-slate-900 px-1 text-center text-xs font-black text-indigo-300 outline-none"
-                            />
-                            <input
-                              type="number"
-                              min={followUp.startPage}
-                              value={followUp.endPage}
-                              title="완료 페이지"
-                              onChange={e => setEditForm(prev => prev ? {
-                                ...prev,
-                                followUpSubjects: prev.followUpSubjects.map(item => item.id === followUp.id ? { ...item, endPage: Number(e.target.value) } : item)
-                              } : prev)}
-                              className="rounded-lg bg-slate-900 px-1 text-center text-xs font-black text-emerald-300 outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setEditForm(prev => prev ? { ...prev, followUpSubjects: prev.followUpSubjects.filter(item => item.id !== followUp.id) } : prev);
-                              }}
-                              className="rounded-lg bg-rose-950 text-sm font-black text-rose-400"
-                            >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="mt-4 border-t border-slate-800 pt-4">
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">복습 과목</p>
-                    <div className="max-h-40 overflow-y-auto rounded-2xl bg-slate-950 p-2">
-                      <div className="flex flex-wrap gap-2">
-                        {subjects
-                          .filter(candidate => {
-                            if (candidate.id === sub.id) return false;
-                            const ownerId = reviewSubjectOwnerMap.get(candidate.id);
-                            const selectedHere = editForm?.reviewSubjectIds.includes(candidate.id) ?? false;
-                            return !ownerId || ownerId === sub.id || selectedHere;
-                          })
-                              .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-                          .map(candidate => {
-                          const selectedIndex = editForm?.reviewSubjectIds.indexOf(candidate.id) ?? -1;
-                          return (
-                            <button
-                              key={candidate.id}
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                toggleEditReviewSubject(sub, candidate.id);
-                              }}
-                              className={`rounded-xl border px-3 py-2 text-xs font-black transition-all ${
-                                selectedIndex >= 0
-                                  ? 'border-rose-400 bg-rose-500 text-white'
-                                  : 'border-slate-800 bg-slate-900 text-slate-300 hover:border-rose-400 hover:text-white'
-                              }`}
-                            >
-                              {selectedIndex >= 0 ? `${selectedIndex + 1}. ` : ''}{candidate.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
                   </div>
                 </div>
               )}
 
-              {!isEditing && (sub.followUpSubjects || []).length > 0 && (
-                <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
-                  <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-indigo-400">후행과목</p>
-                  <div className="flex flex-wrap gap-2">
-                    {(sub.followUpSubjects || []).map((followUp, index) => (
-                      <span key={followUp.id} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-700">
-                        {index + 1}. {followUp.name} · p.{followUp.startPage}~{followUp.endPage}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {isSpeedCopying && speedCopyForm && (
-                <div className="mt-2 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4 relative z-30">
-                  <div className="mb-4 flex items-center justify-between gap-3">
-                    <p className="text-sm font-black text-slate-900">새 과목</p>
-                    <span className="rounded-xl bg-white px-3 py-1.5 text-xs font-black text-cyan-700">
-                      {sub.stats.averageTimePerPage > 0 ? `${sub.stats.averageTimePerPage.toFixed(2)}분/P` : '측정 필요'}
+              {isReviewListExpanded && !isEditing && (
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:ml-12">
+                  <div className="flex items-center justify-between px-1">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">전체 과목</p>
+                    <span className="rounded-lg bg-white px-2.5 py-1 text-[10px] font-black text-slate-500">
+                      남은 순서 {remainingStages.length}개
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <input
-                      value={speedCopyForm.name}
-                      onChange={e => setSpeedCopyForm(prev => prev ? { ...prev, name: e.target.value } : prev)}
-                      placeholder="과목명"
-                      className="rounded-xl border border-cyan-100 bg-white px-4 py-3 font-bold text-slate-900 outline-none focus:border-cyan-400"
-                      autoFocus
-                    />
-                    <input
-                      type="date"
-                      value={speedCopyForm.targetDate}
-                      onChange={e => setSpeedCopyForm(prev => prev ? { ...prev, targetDate: e.target.value } : prev)}
-                      className="rounded-xl border border-cyan-100 bg-white px-4 py-3 font-bold text-slate-900 outline-none focus:border-cyan-400"
-                    />
-                    <label className="rounded-xl border border-cyan-100 bg-white px-4 py-2">
-                      <span className="block text-[9px] font-black text-slate-400">시작 페이지</span>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={speedCopyForm.startPage}
-                        onChange={e => setSpeedCopyForm(prev => prev ? { ...prev, startPage: Number(e.target.value) } : prev)}
-                        className="mt-1 w-full bg-transparent text-lg font-black text-slate-900 outline-none"
-                      />
-                    </label>
-                    <label className="rounded-xl border border-cyan-100 bg-white px-4 py-2">
-                      <span className="block text-[9px] font-black text-slate-400">끝 페이지</span>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={speedCopyForm.totalPages}
-                        onChange={e => setSpeedCopyForm(prev => prev ? { ...prev, totalPages: Number(e.target.value) } : prev)}
-                        className="mt-1 w-full bg-transparent text-lg font-black text-slate-900 outline-none"
-                      />
-                    </label>
-                  </div>
+                  {subjectStages.map(stage => {
+                    const isCurrentStage = stage.status === 'current';
+                    const isInlineEditing = stageEditForm?.subjectId === sub.id
+                      && stageEditForm.stageId === stage.id;
+                    const remainingOrderIndex = remainingStages.findIndex(item => item.id === stage.id);
+                    const currentRemainingStage = remainingStages[0];
+                    const currentRemainingCompletedPages = currentRemainingStage
+                      ? Math.max(0, currentRemainingStage.completedPage - currentRemainingStage.startPage + 1)
+                      : 0;
+                    const canReplaceCurrentStage = Boolean(
+                      currentRemainingStage?.isFollowUp && currentRemainingCompletedPages === 0
+                    );
+                    const canMoveUp = remainingOrderIndex > 0
+                      && (remainingOrderIndex > 1 || canReplaceCurrentStage);
+                    const canMoveDown = remainingOrderIndex >= 0
+                      && remainingOrderIndex < remainingStages.length - 1
+                      && (remainingOrderIndex > 0 || canReplaceCurrentStage);
+                    const stagePageCount = Math.max(0, stage.endPage - stage.startPage + 1);
+                    const stageCompletedPages = Math.min(
+                      stagePageCount,
+                      Math.max(0, stage.completedPage - stage.startPage + 1)
+                    );
+                    const stageProgress = stagePageCount > 0
+                      ? Math.round((stageCompletedPages / stagePageCount) * 100)
+                      : 0;
+                    const linkedReviewSubjects = stage.reviewSubjectIds
+                      .map(id => allSubjectStats.find(subject => subject.id === id))
+                      .filter((subject): subject is typeof allSubjectStats[number] => Boolean(subject));
+                    const statusLabel = stage.status === 'completed'
+                      ? '이전 과목'
+                      : isCurrentStage
+                        ? '현재 과목'
+                        : '후행과목';
+                    const estimatedCompletionDate = stageSchedule.completionDates.get(stage.id);
 
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSpeedCopyForm(prev => prev ? { ...prev, isRequired: true } : prev)}
-                      className={`rounded-xl py-2.5 text-xs font-black ${speedCopyForm.isRequired ? 'bg-rose-600 text-white' : 'bg-white text-slate-400'}`}
-                    >
-                      필수
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSpeedCopyForm(prev => prev ? { ...prev, isRequired: false } : prev)}
-                      className={`rounded-xl py-2.5 text-xs font-black ${!speedCopyForm.isRequired ? 'bg-indigo-600 text-white' : 'bg-white text-slate-400'}`}
-                    >
-                      미필수
-                    </button>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2 rounded-xl bg-slate-900 p-2">
-                    <button
-                      type="button"
-                      onClick={() => setSpeedCopyForm(prev => prev ? { ...prev, tagIds: [] } : prev)}
-                      className={`rounded-lg px-3 py-2 text-xs font-black ${speedCopyForm.tagIds.length === 0 ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}
-                    >
-                      홈
-                    </button>
-                    {tagDefinitions.map(folder => (
-                      <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => setSpeedCopyForm(prev => prev ? { ...prev, tagIds: [folder.id] } : prev)}
-                        className={`rounded-lg px-3 py-2 text-xs font-black ${speedCopyForm.tagIds[0] === folder.id ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+                    return (
+                      <div
+                        key={stage.id}
+                        className={`rounded-2xl border-2 p-4 transition-all ${
+                          isCurrentStage
+                            ? 'border-indigo-500 bg-white shadow-md shadow-indigo-100'
+                            : stage.status === 'completed'
+                              ? 'border-slate-200 bg-slate-100/70'
+                              : 'border-white bg-white'
+                        }`}
                       >
-                        📂 {folder.name}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSpeedCopySourceId(null);
-                        setSpeedCopyForm(null);
-                      }}
-                      className="rounded-xl bg-white py-3 text-sm font-black text-slate-500"
-                    >
-                      취소
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => createSpeedCopySubject(sub)}
-                      className="rounded-xl bg-cyan-600 py-3 text-sm font-black text-white"
-                    >
-                      생성
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {reviewSubjects.length > 0 && isReviewListExpanded && !isEditing && (
-                <div className="space-y-4 md:ml-12 md:border-l-2 md:border-rose-100 md:pl-4">
-                  <div className="space-y-3">
-                    {reviewSubjects.map(reviewSubject => {
-                      const reviewActiveStage = getActiveSubjectStage(reviewSubject);
-                      const reviewStagePageCount = reviewActiveStage
-                        ? Math.max(0, reviewActiveStage.endPage - reviewActiveStage.startPage + 1)
-                        : getSubjectTotalPageCount(reviewSubject);
-                      const reviewStageCompletedPages = reviewActiveStage
-                        ? Math.min(
-                            reviewStagePageCount,
-                            Math.max(0, reviewActiveStage.completedPage - reviewActiveStage.startPage + 1)
-                          )
-                        : getSubjectCompletedPageCount(reviewSubject);
-                      const reviewProgress = reviewStagePageCount > 0
-                        ? Math.round((reviewStageCompletedPages / reviewStagePageCount) * 100)
-                        : 0;
-                      const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id);
-                      return (
-                        <div key={reviewSubject.id} className="flex flex-col gap-3 rounded-2xl border-2 border-rose-200 bg-white p-4 shadow-sm transition-all hover:border-rose-300">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-start gap-3 flex-grow">
-                              <div className="w-9 h-9 bg-slate-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                                <span className="text-xl">📄</span>
-                              </div>
-                              <div className="w-full min-w-0">
-                                <h4 className="truncate text-lg md:text-xl font-black text-slate-900">{reviewSubject.name}</h4>
-                                <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                                  <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">복습 과목</span>
-                                  <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${reviewSubject.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{reviewSubject.diffDays > 0 ? reviewSubject.diffDays : '0'}</span>
-                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 flex-1 items-start gap-3">
+                            <span className={`flex h-8 min-w-8 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-black ${
+                              isCurrentStage ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'
+                            }`}>
+                              {stage.status === 'completed' ? '완료' : remainingOrderIndex + 1}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              {isInlineEditing && stageEditForm ? (
+                                <div className="space-y-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <input
+                                      value={stageEditForm.name}
+                                      onChange={event => setStageEditForm(current => current ? {
+                                        ...current,
+                                        name: event.target.value
+                                      } : current)}
+                                      onClick={event => event.stopPropagation()}
+                                      className="min-w-0 flex-1 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-base font-black text-slate-900 outline-none focus:border-indigo-500"
+                                      autoFocus
+                                    />
+                                    <span className={`rounded-full px-2 py-1 text-[9px] font-black ${
+                                      isCurrentStage
+                                        ? 'bg-indigo-100 text-indigo-600'
+                                        : stage.status === 'completed'
+                                          ? 'bg-slate-200 text-slate-500'
+                                          : 'bg-amber-100 text-amber-600'
+                                    }`}>
+                                      {statusLabel}
+                                    </span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                      <span className="block text-[9px] font-black text-slate-400">시작 페이지</span>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        value={stageEditForm.startPage}
+                                        onClick={event => event.stopPropagation()}
+                                        onChange={event => setStageEditForm(current => current ? {
+                                          ...current,
+                                          startPage: Number(event.target.value)
+                                        } : current)}
+                                        className="mt-1 w-full bg-transparent text-base font-black text-slate-900 outline-none"
+                                      />
+                                    </label>
+                                    <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                      <span className="block text-[9px] font-black text-slate-400">끝 페이지</span>
+                                      <input
+                                        type="number"
+                                        min={stageEditForm.startPage || 1}
+                                        step="1"
+                                        value={stageEditForm.endPage}
+                                        onClick={event => event.stopPropagation()}
+                                        onChange={event => setStageEditForm(current => current ? {
+                                          ...current,
+                                          endPage: Number(event.target.value)
+                                        } : current)}
+                                        className="mt-1 w-full bg-transparent text-base font-black text-slate-900 outline-none"
+                                      />
+                                    </label>
+                                  </div>
+                                  {stage.status !== 'completed' && (
+                                    <div className="flex items-center gap-2">
+                                      <span className="mr-auto text-[10px] font-black text-slate-400">
+                                        남은 순서 {remainingOrderIndex + 1}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        aria-label={`${stage.name} 순서 앞으로`}
+                                        disabled={!canMoveUp}
+                                        onClick={event => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          moveRemainingStage(sub, stage.id, -1);
+                                        }}
+                                        className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 disabled:opacity-25"
+                                      >
+                                        ↑
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`${stage.name} 순서 뒤로`}
+                                        disabled={!canMoveDown}
+                                        onClick={event => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          moveRemainingStage(sub, stage.id, 1);
+                                        }}
+                                        className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 disabled:opacity-25"
+                                      >
+                                        ↓
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
+                              ) : (
+                                <>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h5 className="truncate text-base font-black text-slate-900">{stage.name}</h5>
+                                    <span className={`rounded-full px-2 py-1 text-[9px] font-black ${
+                                      isCurrentStage
+                                        ? 'bg-indigo-100 text-indigo-600'
+                                        : stage.status === 'completed'
+                                          ? 'bg-slate-200 text-slate-500'
+                                          : 'bg-amber-100 text-amber-600'
+                                    }`}>
+                                      {statusLabel}
+                                    </span>
+                                    {stage.status !== 'completed' && (
+                                      <span className="rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black text-indigo-600">
+                                        완료 예상 {formatEstimatedDate(estimatedCompletionDate)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="mt-1 text-xs font-bold text-slate-400">
+                                    p.{formatPageValue(stage.startPage)}~{formatPageValue(stage.endPage)} · {stageProgress}%
+                                  </p>
+                                </>
+                              )}
                             </div>
                           </div>
-
-                          <div className="grid grid-cols-2 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-100 sm:grid-cols-4">
-                            <StatBox label="누적 시간" value={formatTime(reviewSubject.totalTimeSpent)} unit="" color="text-slate-900" />
-                            <StatBox label="하루 평균 시간" value={formatTime(getDisplayNeededMinutes(reviewSubject))} unit="" color="text-indigo-600" />
-                            <StatBox label="하루 평균 페이지" value={formatPageValue(getDisplayRecommendedPages(reviewSubject))} unit="P" color="text-amber-500" />
-                            <StatBox
-                              label="효율"
-                              value={(reviewMinutesPerPage || reviewSubject.stats.averageTimePerPage) > 0 ? (reviewMinutesPerPage || reviewSubject.stats.averageTimePerPage).toFixed(1) : '-'}
-                              unit={(reviewMinutesPerPage || reviewSubject.stats.averageTimePerPage) > 0 ? 'm/p' : ''}
-                              color="text-rose-500"
-                            />
-                          </div>
-
-                          <div className="space-y-1 px-1">
-                            <div className="flex items-end justify-between">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                {reviewActiveStage
-                                  ? `학습 진척도 · ${reviewActiveStage.name} (p.${reviewActiveStage.startPage}~${reviewActiveStage.endPage}) · ${reviewProgress}%`
-                                  : `학습 진척도 · 전체 완료 · ${reviewProgress}%`}
-                              </p>
-                              <p className="text-base font-black text-slate-900">{reviewStageCompletedPages} / {reviewStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
-                            </div>
-                            <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full bg-rose-500 transition-all duration-1000" style={{ width: `${reviewProgress}%` }} />
-                            </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {isInlineEditing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label={`${stage.name} 수정 저장`}
+                                  onClick={event => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    saveInlineStageEditor(sub);
+                                  }}
+                                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-black text-white"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`${stage.name} 수정 취소`}
+                                  onClick={event => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    cancelInlineStageEditor(sub);
+                                  }}
+                                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-200 text-sm font-black text-slate-500"
+                                >
+                                  ×
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                aria-label={`${stage.name} 수정`}
+                                onClick={event => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  openInlineStageEditor(sub, stage);
+                                }}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-sm font-black text-slate-400 hover:text-indigo-600"
+                              >
+                                ✎
+                              </button>
+                            )}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+
+                        {!isInlineEditing && (
+                          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200/70">
+                            <div
+                              className={`h-full rounded-full ${isCurrentStage ? 'bg-indigo-500' : 'bg-slate-400'}`}
+                              style={{ width: `${stageProgress}%` }}
+                            />
+                          </div>
+                        )}
+
+                        {linkedReviewSubjects.length > 0 && !isInlineEditing && (
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {linkedReviewSubjects.map(reviewSubject => {
+                              const reviewActiveStage = getActiveSubjectStage(reviewSubject);
+                              const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id)
+                                || reviewSubject.stats.averageTimePerPage;
+                              const reviewCompletionDate = estimateReviewSubjectCompletion(
+                                sub,
+                                stage,
+                                reviewSubject,
+                                stageSchedule.studyEvents.get(stage.id) || [],
+                                logs
+                              );
+                              return (
+                                <div key={reviewSubject.id} className="rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-2.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="min-w-0 truncate text-xs font-black text-slate-800">{reviewSubject.name}</p>
+                                    <div className="flex shrink-0 items-center gap-1.5">
+                                      <span className="text-[9px] font-black text-rose-500">복습과목</span>
+                                      <span className="rounded-full bg-white px-2 py-1 text-[9px] font-black text-rose-600">
+                                        {getSubjectRemainingPageCount(reviewSubject) <= 0
+                                          ? '완료'
+                                          : `완료 예상 ${formatEstimatedDate(reviewCompletionDate)}`}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <p className="mt-1 text-[10px] font-bold text-slate-400">
+                                    {reviewActiveStage
+                                      ? `p.${formatPageValue(reviewActiveStage.currentPage)}~${formatPageValue(reviewActiveStage.endPage)}`
+                                      : '완료'}
+                                    {' · '}
+                                    {reviewMinutesPerPage > 0 ? `${reviewMinutesPerPage.toFixed(1)}분/P` : '측정 필요'}
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {isInlineEditing && stageEditForm && (
+                          <div className="mt-3 rounded-xl bg-slate-900 p-3">
+                            <p className="mb-2 text-[10px] font-black text-slate-500">복습과목</p>
+                            <div className="max-h-40 overflow-y-auto">
+                              <div className="flex flex-wrap gap-2">
+                                {subjects
+                                  .filter(candidate => {
+                                    if (candidate.id === sub.id) return false;
+                                    if (getAllSubjectReviewIds(candidate).length > 0) return false;
+                                    const selectedHere = stageEditForm.reviewSubjectIds.includes(candidate.id);
+                                    const ownerStageKey = reviewSubjectStageOwnerMap.get(candidate.id);
+                                    const editingStageKey = `${sub.id}:${stage.id}`;
+                                    if (!selectedHere && ownerStageKey && ownerStageKey !== editingStageKey) return false;
+                                    if (followUpSourceOwnerMap.has(candidate.id)) return false;
+                                    if ((sub.followUpSubjects || []).some(item => item.sourceSubjectId === candidate.id)) return false;
+                                    return !getAllSubjectReviewIds(candidate).includes(sub.id);
+                                  })
+                                  .sort((a, b) => {
+                                    const indexA = stageEditForm.reviewSubjectIds.indexOf(a.id);
+                                    const indexB = stageEditForm.reviewSubjectIds.indexOf(b.id);
+                                    if (indexA >= 0 || indexB >= 0) {
+                                      if (indexA < 0) return 1;
+                                      if (indexB < 0) return -1;
+                                      return indexA - indexB;
+                                    }
+                                    return a.name.localeCompare(b.name, 'ko');
+                                  })
+                                  .map(candidate => {
+                                    const selectedIndex = stageEditForm.reviewSubjectIds.indexOf(candidate.id);
+                                    return (
+                                      <button
+                                        key={candidate.id}
+                                        type="button"
+                                        onClick={event => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          toggleStageEditReviewSubject(candidate.id);
+                                        }}
+                                        className={`rounded-lg border px-3 py-2 text-xs font-black transition-all ${
+                                          selectedIndex >= 0
+                                            ? 'border-rose-400 bg-rose-500 text-white'
+                                            : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-rose-400'
+                                        }`}
+                                      >
+                                        {selectedIndex >= 0 ? `${selectedIndex + 1}. ` : ''}{candidate.name}
+                                      </button>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
