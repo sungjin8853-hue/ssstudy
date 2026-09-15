@@ -533,11 +533,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                <SubjectDataBox label="하루 평균 공부량" value={`${formatNumber(detailData.dailyAveragePages)}P`} color="text-indigo-600" />
-                <SubjectDataBox label="하루 평균 공부시간" value={`${formatNumber(detailData.dailyAverageMinutes)}분`} color="text-violet-600" />
+              <div className="grid grid-cols-2 gap-2">
+                <SubjectDataBox
+                  label="하루 평균 공부량 · 시간"
+                  value={`${formatNumber(detailData.dailyAveragePages)}P · ${formatNumber(detailData.dailyAverageMinutes)}분`}
+                  color="text-indigo-600"
+                />
                 <SubjectDataBox label="최근 7일" value={`${formatNumber(detailData.weeklyMinutes)}분 · ${formatNumber(detailData.weeklyPages)}P`} color="text-slate-900" />
-                <SubjectDataBox label={`${detailData.folderName} 하루 평균`} value={`${formatNumber(detailData.folderDailyMinutes)}분`} color="text-amber-600" />
               </div>
 
               <SubjectEfficiencyTrend points={detailData.efficiencyTrend} />

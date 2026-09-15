@@ -104,6 +104,9 @@ export interface StudyLog {
     timestamp: string;
   }>;
   reviewMemo?: string;
+  reviewGatePendingResult?: 'correct' | 'wrong';
+  reviewQuestionSchedules?: Record<string, { reviewStep: number; nextReviewDate: string }>;
+  reviewGatePendingSteps?: Record<string, number>;
   reviewGateRetry?: {
     dueAt: string;
     intervalMs: number;

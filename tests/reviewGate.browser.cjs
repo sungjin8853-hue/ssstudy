@@ -40,6 +40,11 @@ async function seedData(browser, data) {
     localStorage.setItem('swp_subjects', JSON.stringify(data.subjects));
     localStorage.setItem('swp_logs', JSON.stringify(data.logs));
     localStorage.setItem('swp_tags', '[]');
+    if (data.reviewPolicyVersion === null) {
+      localStorage.removeItem('swp_review_interval_policy');
+    } else {
+      localStorage.setItem('swp_review_interval_policy', 'power-of-two-v1');
+    }
     sessionStorage.setItem('gate-fixture', 'true');
   }, data);
   await page.goto(url);
@@ -62,7 +67,9 @@ async function answer(page, correct) {
   await page.getByRole('button', { name: correct ? '맞음' : '오답', exact: true }).click();
 }
 
-(async () => {
+module.exports = { fixture, seedData, openCard, answer, now, hour, second };
+
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   let activePage;
   try {
@@ -76,117 +83,76 @@ async function answer(page, correct) {
     await scheduled.context.close();
     console.log('PASS: a scheduled regular review appears without changing weekdays');
 
-    const basic = await seed(browser, false);
-    activePage = basic.page;
-    await openCard(basic.page, '기본 복습');
-    assert.equal(await basic.page.getByText(/1단계|2단계|3단계/).count(), 0);
-    assert.equal(await basic.page.getByText('[alpha]', { exact: true }).count() > 0, true);
-    assert.equal(await basic.page.getByText('hidden answer', { exact: true }).count(), 0);
-    await answer(basic.page, false);
-    await answer(basic.page, true);
-    await answer(basic.page, true);
-    await basic.page.getByRole('button', { name: '복습 완료', exact: true }).click();
-    const afterGate = await storedLogs(basic.page);
-    assert.equal(afterGate.length, 2);
-    assert.ok(afterGate[0].reviewGateRetry);
-    assert.deepEqual(afterGate[0].reviewGateRetry.questionKeys, ['answer:0']);
-    assert.equal(afterGate[1].reviewGateRetry, undefined);
-    assert.equal(afterGate[0].reviewStep, 1);
-    assert.equal(afterGate[1].reviewStep, 1);
-    assert.equal(afterGate[0].reviewGateRetry.intervalMs, 2 * hour);
+    const migrationData = fixture(false, 2, 4 * 24 * hour);
+    migrationData.reviewPolicyVersion = null;
+    const migration = await seedData(browser, migrationData);
+    activePage = migration.page;
+    const migratedLogs = await storedLogs(migration.page);
+    assert.equal(
+      Date.parse(migratedLogs[0].nextReviewDate),
+      now + 2 * 24 * hour
+    );
+    assert.equal(
+      await migration.page.evaluate(() => localStorage.getItem('swp_review_interval_policy')),
+      'power-of-two-v1'
+    );
+    await migration.context.close();
+    console.log('PASS: existing schedules migrate once from the legacy intervals to powers of two');
 
-    await basic.page.reload();
-    assert.equal((await storedLogs(basic.page))[0].reviewGateRetry.dueAt, afterGate[0].reviewGateRetry.dueAt);
-    await basic.page.clock.fastForward(2 * hour + 2 * second);
-    await openCard(basic.page, '기본 복습 · 오답');
-    assert.equal(await basic.page.getByText('0 / 1', { exact: true }).count(), 1);
-    const retryScreenText = await basic.page.locator('body').innerText();
-    assert.match(retryScreenText, /kept answer/);
-    assert.doesNotMatch(retryScreenText, /second answer/);
-    await answer(basic.page, true);
-    assert.equal(await basic.page.getByRole('button', { name: '정답 확인', exact: true }).count(), 0);
-    await basic.page.getByRole('button', { name: '복습 완료', exact: true }).click();
-    const afterRetry = await storedLogs(basic.page);
-    const { reviewGateRetry, ...originalWithoutRetry } = afterGate[0];
-    assert.deepEqual(afterRetry[0], originalWithoutRetry);
-    assert.deepEqual(afterRetry[1], afterGate[1]);
-    assert.equal(await basic.page.getByText('기본 복습 · 오답', { exact: true }).count(), 0);
-    await basic.page.clock.fastForward(23 * hour);
-    await basic.page.getByRole('button').filter({ hasText: '기본 복습' }).first().waitFor();
-    assert.equal(await basic.page.getByRole('button').filter({ hasText: '기본 복습 · 오답' }).count(), 0);
-    assert.deepEqual(basic.errors, []);
-    console.log('PASS: no difficulty stages; only the wrong item returns, then the next regular review appears automatically');
-    await basic.context.close();
-
-    const linked = await seed(browser, true);
-    activePage = linked.page;
-    await openCard(linked.page, '과목 복습');
-    await answer(linked.page, false);
-    await answer(linked.page, true);
-    await answer(linked.page, true);
-    await linked.page.getByRole('button', { name: '복습과목 시작', exact: true }).click();
-    await linked.page.getByRole('button', { name: '완료', exact: true }).waitFor();
-    const beforeRetry = await storedLogs(linked.page);
-    assert.equal(beforeRetry[0].reviewStep, 0);
-    assert.ok(beforeRetry[0].reviewGateRetry);
-    await linked.page.reload();
-    await storedLogs(linked.page);
-    await linked.page.clock.fastForward(2 * hour + 2 * second);
-    await openCard(linked.page, '기본 복습 · 오답');
-    await answer(linked.page, false);
-    assert.equal(await linked.page.getByRole('button', { name: '복습과목 시작', exact: true }).count(), 0);
-    await linked.page.getByRole('button', { name: '복습 완료', exact: true }).click();
-    const failedRetry = await storedLogs(linked.page);
-    assert.equal(failedRetry.length, 2);
-    assert.equal(failedRetry[0].reviewStep, 0);
-    assert.equal(failedRetry[0].nextReviewDate, beforeRetry[0].nextReviewDate);
-    assert.equal(failedRetry[0].timeSpentMinutes, beforeRetry[0].timeSpentMinutes);
-    assert.ok(Date.parse(failedRetry[0].reviewGateRetry.dueAt) > Date.parse(beforeRetry[0].reviewGateRetry.dueAt));
-    assert.equal(failedRetry[0].reviewGateRetry.intervalMs, 2 * hour);
-    assert.equal(await linked.page.getByRole('button', { name: '완료', exact: true }).count(), 0);
-    assert.deepEqual(linked.errors, []);
-    console.log('PASS: linked subject starts after regular gate; retry stays gate-only and reschedules independently');
-    await linked.context.close();
-
-    const sequenceData = fixture(true);
-    sequenceData.subjects.push({
-      ...sequenceData.subjects[1],
-      id: 'gate-practice-b',
-      name: 'Practice B'
+    const measurement = await seedData(browser, {
+      subjects: [{
+        id: 'study-run', name: 'StudyRun', startPage: 1, totalPages: 100, completedPages: 0,
+        targetDate: '2026-10-31', createdAt: '2026-09-13T00:00:00.000Z', tagIds: [],
+        reviewSubjectIds: [], scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], initialAverageTimePerPage: 1
+      }],
+      logs: []
     });
-    sequenceData.subjects[0].reviewSubjectIds = ['gate-practice', 'gate-practice-b'];
-    sequenceData.logs = [sequenceData.logs[0]];
-    sequenceData.logs[0].reviewSubjectIdsSnapshot = ['gate-practice', 'gate-practice-b'];
-    const sequence = await seedData(browser, sequenceData);
-    activePage = sequence.page;
-    await openCard(sequence.page, '과목 복습');
-    await answer(sequence.page, false);
-    await answer(sequence.page, true);
-    await sequence.page.getByRole('button', { name: '복습과목 시작', exact: true }).click();
-    await sequence.page.getByRole('button', { name: '노트 보기', exact: true }).click();
-    const visibleReviewNotes = await sequence.page.locator('textarea').evaluateAll(elements => elements.map(element => element.value));
-    assert.equal(visibleReviewNotes.some(value => value.includes('hidden answer')), true);
-    await sequence.page.getByRole('button').filter({ hasText: '복습 제외' }).click();
-    await sequence.page.getByPlaceholder('복습 때 바로 떠올릴 핵심어를 적어주세요.').fill('[practice] item: answer,');
-    await sequence.page.getByRole('button', { name: '완료', exact: true }).click();
-    await sequence.page.getByRole('button', { name: '복습 완료 후 다음 과목', exact: true }).click();
-    let sequenceLogs = await sequence.page.evaluate(() => JSON.parse(localStorage.getItem('swp_logs') || '[]'));
-    assert.equal(sequenceLogs[0].reviewStep, 0);
-    assert.equal(sequenceLogs.find(log => log.subjectId === 'gate-practice').reviewEnabled, true);
-    assert.equal(sequenceLogs.find(log => log.subjectId === 'gate-practice').reviewMemo, '[practice] item: answer,');
-    await sequence.page.getByText('복습 과목 · Practice B', { exact: true }).waitFor();
-    assert.equal(await sequence.page.getByRole('button').filter({ hasText: '복습 제외' }).count(), 1);
-    await sequence.page.getByRole('button', { name: '완료', exact: true }).click();
-    await sequence.page.getByRole('button', { name: '복습 완료', exact: true }).click();
-    sequenceLogs = await sequence.page.evaluate(() => JSON.parse(localStorage.getItem('swp_logs') || '[]'));
-    assert.equal(sequenceLogs[0].reviewStep, 1);
-    assert.equal(sequenceLogs.find(log => log.subjectId === 'gate-practice-b').reviewEnabled, false);
-    await sequence.page.clock.fastForward(2 * hour + 2 * second);
-    const queueText = await sequence.page.locator('body').innerText();
-    assert.match(queueText, /PracticeTest/);
-    assert.deepEqual(sequence.errors, []);
-    console.log('PASS: linked subjects run in order; only opted-in review subjects create their own basic review');
-    await sequence.context.close();
+    activePage = measurement.page;
+    const studyButton = measurement.page.getByRole('button').filter({ hasText: 'StudyRun' }).filter({ hasText: '권장' }).first();
+    await studyButton.click();
+    await studyButton.click();
+    await measurement.page.getByRole('button', { name: '완료', exact: true }).waitFor();
+    await measurement.page.clock.fastForward(5 * second);
+    await measurement.page.getByRole('button', { name: '완료', exact: true }).click();
+    await measurement.page.getByRole('heading', { name: '학습량 입력', exact: true }).waitFor();
+    await measurement.page.getByRole('button', { name: '← 측정으로 돌아가기', exact: true }).click();
+    await measurement.page.clock.fastForward(2 * second);
+    await measurement.page.getByRole('button', { name: '완료', exact: true }).click();
+    await measurement.page.getByRole('heading', { name: '학습량 입력', exact: true }).waitFor();
+    assert.match(await measurement.page.locator('body').innerText(), /현재 시간\s+00:0[7-9]/);
+    assert.deepEqual(measurement.errors, []);
+    await measurement.context.close();
+    console.log('PASS: returning from page entry resumes the same measurement time');
+
+    await require('./reviewFlow.audit.cjs').runAudit(browser);
+
+    const nestedData = fixture(true);
+    nestedData.subjects.push({
+      ...nestedData.subjects[1], id: 'nested-child', name: 'Nested child', reviewSubjectIds: []
+    });
+    nestedData.subjects[1].reviewSubjectIds = ['nested-child'];
+    nestedData.subjects[1].followUpSubjects = [{
+      id: 'practice-next', name: 'Next practice', startPage: 1, endPage: 10,
+      completedPage: 0, reviewSubjectIds: ['nested-child']
+    }];
+    const nested = await seedData(browser, nestedData);
+    activePage = nested.page;
+    await nested.page.waitForFunction(() => {
+      const saved = JSON.parse(localStorage.getItem('swp_subjects') || '[]');
+      return saved.find(subject => subject.id === 'gate-practice')?.reviewSubjectIds.length === 0;
+    });
+    const savedSubjects = await nested.page.evaluate(() => JSON.parse(localStorage.getItem('swp_subjects')));
+    assert.deepEqual(savedSubjects.find(subject => subject.id === 'gate-main').reviewSubjectIds, ['gate-practice']);
+    assert.deepEqual(savedSubjects.find(subject => subject.id === 'gate-practice').followUpSubjects[0].reviewSubjectIds, []);
+    assert.equal(savedSubjects.length, 3);
+    assert.deepEqual((await storedLogs(nested.page)).map(log => log.id), nestedData.logs.map(log => log.id));
+    await nested.page.reload();
+    await nested.page.getByRole('heading', { name: '학습 실행', exact: true }).waitFor();
+    const reloadedSubjects = await nested.page.evaluate(() => JSON.parse(localStorage.getItem('swp_subjects')));
+    assert.deepEqual(reloadedSubjects, savedSubjects);
+    assert.deepEqual(nested.errors, []);
+    console.log('PASS: nested review links are removed without deleting subjects; reload preserves the cleanup');
+    await nested.context.close();
   } catch (error) {
     if (activePage && !activePage.isClosed()) console.error(await activePage.locator('body').innerText());
     throw error;

@@ -44,7 +44,7 @@ const source = (overrides = {}) => ({
 const wrong = { logId: 'note-a', passed: false, wrongQuestionKeys: ['answer:0'] };
 const right = { logId: 'note-a', passed: true, wrongQuestionKeys: [] };
 const withRetry = (overrides = {}) => gate.applyReviewGateOutcomes([source(overrides)], [wrong], false, now)[0];
-const withoutRetry = ({ reviewGateRetry, ...log }) => log;
+const withoutGateState = ({ reviewGateRetry, reviewGatePendingResult, reviewGatePendingSteps, ...log }) => log;
 const subjects = [
   { id: 'main', name: 'Main', totalPages: 100, completedPages: 4, targetDate: '2026-10-31', reviewSubjectIds: ['practice'] },
   { id: 'practice', name: 'Practice', totalPages: 100, completedPages: 0, targetDate: '2026-10-31' }
@@ -67,12 +67,14 @@ test('questions are stable items and do not depend on a difficulty stage', () =>
   assert.deepEqual(gate.getReviewGateQuestionKeys(' '), []);
 });
 
-test('retries use the current interval, not the next interval', () => {
-  const expectedIntervals = [2 * hour, day, 4 * day, 7 * day, 14 * day, 28 * day, 56 * day];
+test('a wrong answer lowers one step and schedules only the wrong items', () => {
+  const expectedIntervals = [2 * hour, 2 * hour, day, 2 * day, 4 * day, 8 * day, 16 * day];
   expectedIntervals.forEach((expectedInterval, step) => {
     const log = withRetry({ reviewStep: step });
     assert.equal(log.reviewGateRetry.intervalMs, expectedInterval);
     assert.equal(Date.parse(log.reviewGateRetry.dueAt), now + expectedInterval);
+    assert.equal(log.reviewGateRetry.reviewStep, Math.max(0, step - 1));
+    assert.equal(log.reviewGatePendingResult, 'wrong');
   });
 });
 
@@ -93,7 +95,7 @@ test('scheduling retry leaves original dates, study totals and review records un
     reviewSubjectTimeRecords: [{ subjectId: 'practice', pages: 4, minutes: 10, timestamp: new Date(now).toISOString() }]
   });
   const result = gate.applyReviewGateOutcomes([original], [wrong], false, now)[0];
-  assert.deepEqual(withoutRetry(result), original);
+  assert.deepEqual(withoutGateState(result), original);
 });
 
 test('pending retry is not duplicated or postponed by another normal attempt', () => {
@@ -110,26 +112,32 @@ test('due boundary, deduplication and refresh persistence', () => {
   assert.equal(gate.getDueReviewGateRetries([source({ reviewGateRetry: { dueAt: 'invalid' } })], now).length, 0);
 });
 
-test('retry failure preserves original cycle interval even after regular review advances', () => {
+test('retry failure lowers the retry step and keeps regular study statistics untouched', () => {
   const log = { ...withRetry(), reviewStep: 4, nextReviewDate: new Date(now + 14 * day).toISOString() };
   const failedAt = now + 2 * hour;
   const again = gate.applyReviewGateOutcomes([log], [wrong], true, failedAt)[0];
   assert.equal(again.reviewGateRetry.intervalMs, 2 * hour);
   assert.equal(again.reviewGateRetry.dueAt, new Date(failedAt + 2 * hour).toISOString());
-  assert.deepEqual(withoutRetry(again), withoutRetry(log));
+  assert.equal(again.reviewStep, log.reviewStep);
+  assert.equal(again.nextReviewDate, log.nextReviewDate);
+  assert.deepEqual(again.basicReviewTimeRecords, log.basicReviewTimeRecords);
+  assert.deepEqual(again.reviewSubjectTimeRecords, log.reviewSubjectTimeRecords);
 });
 
-test('retry success removes only retry, without advancing regular schedule or adding study time', () => {
+test('retry success clears only the retry and preserves the regular schedule', () => {
   const log = { ...withRetry(), reviewStep: 2 };
   const result = gate.applyReviewGateOutcomes([log], [right], true, now + 3 * hour)[0];
   assert.equal(result.reviewGateRetry, undefined);
-  assert.deepEqual(withoutRetry(result), withoutRetry(log));
+  assert.equal(result.reviewStep, log.reviewStep);
+  assert.equal(result.nextReviewDate, log.nextReviewDate);
+  assert.equal(result.timeSpentMinutes, log.timeSpentMinutes);
   assert.equal(gate.applyReviewGateOutcomes([result], [right], true, now)[0], result);
 });
 
-test('passing a regular gate also clears an already pending retry for that note', () => {
+test('passing a regular gate marks one upward step and clears an already pending retry', () => {
   const result = gate.applyReviewGateOutcomes([withRetry()], [right], false, now)[0];
   assert.equal(result.reviewGateRetry, undefined);
+  assert.equal(result.reviewGatePendingResult, 'correct');
 });
 
 test('editing the original note updates retry content without changing due time', () => {
@@ -142,9 +150,9 @@ test('editing the original note updates retry content without changing due time'
   assert.equal(gate.updateReviewGateMemo(edited, 'plain recall note').reviewGateRetry, undefined);
 });
 
-test('a failed retry can narrow the next retry to the items still wrong', () => {
+test('legacy retries narrow errors without changing the regular cycle', () => {
   const first = gate.applyReviewGateOutcomes(
-    [source()],
+    [source({ reviewStep: 3 })],
     [{ logId: 'note-a', passed: false, wrongQuestionKeys: ['answer:0', 'answer:1'] }],
     false,
     now
@@ -153,35 +161,46 @@ test('a failed retry can narrow the next retry to the items still wrong', () => 
     [first],
     [{ logId: 'note-a', passed: false, wrongQuestionKeys: ['answer:1'] }],
     true,
-    now + 2 * hour
+    now + 2 * day
   )[0];
+  assert.equal(first.reviewGateRetry.reviewStep, 2);
   assert.deepEqual(narrowed.reviewGateRetry.questionKeys, ['answer:1']);
+  assert.equal(narrowed.reviewStep, first.reviewStep);
+  assert.equal(narrowed.reviewGateRetry.reviewStep, 1);
+  assert.equal(narrowed.reviewGateRetry.intervalMs, day);
+
+  const cleared = gate.applyReviewGateOutcomes(
+    [narrowed],
+    [right],
+    true,
+    now + 3 * day
+  )[0];
+  assert.equal(cleared.reviewGateRetry, undefined);
+  assert.equal(cleared.reviewStep, first.reviewStep);
+  assert.equal(cleared.nextReviewDate, first.nextReviewDate);
 });
 
 test('condensing retry does not condense original review or alter its statistics', () => {
   const log = withRetry();
   const other = withRetry({ id: 'note-b' });
   const result = gate.clearReviewGateRetries([log, other], [log.id]);
-  assert.deepEqual(withoutRetry(result[0]), withoutRetry(log));
+  assert.deepEqual(withoutGateState(result[0]), withoutGateState(log));
   assert.equal(result[0].reviewGateRetry, undefined);
   assert.equal(result[1], other);
 });
 
-test('queue keeps regular subject reviews separate from gate-only retries', () => {
+test('a pending retry does not hide the unfinished linked review subject', () => {
   const log = withRetry();
   const groups = buildDueReviewGroups([log], subjects, now + 2 * hour);
-  const regular = groups.find(group => !group.isGateRetry);
   const retry = groups.find(group => group.isGateRetry);
   assert.equal(groups.length, 2);
-  assert.equal(regular.reviewType, 'subject');
-  assert.equal(regular.subjectId, 'practice');
+  assert.equal(groups.find(group => !group.isGateRetry).subjectId, 'practice');
   assert.equal(retry.reviewType, 'basic');
   assert.equal(retry.subjectId, 'main');
   assert.deepEqual(retry.reviewSubjectIds, []);
-  assert.notEqual(regular.id, retry.id);
 });
 
-test('handling the regular review does not hide a due retry for the same log', () => {
+test('handling the regular review still leaves its due retry visible', () => {
   const groups = buildDueReviewGroups([withRetry()], subjects, now + 2 * hour, new Set(['note-a']));
   assert.equal(groups.length, 1);
   assert.equal(groups[0].isGateRetry, true);
@@ -200,7 +219,7 @@ test('same-subject retries combine, different subjects stay separate, and each i
   assert.deepEqual(later.find(group => group.subjectId === 'main').logs.map(log => log.id), ['note-a', 'note-b']);
   const retried = gate.applyReviewGateOutcomes(logs, [wrong, { ...wrong, logId: 'note-b' }], true, now + 14 * day);
   assert.equal(Date.parse(retried[0].reviewGateRetry.dueAt), now + 14 * day + 2 * hour);
-  assert.equal(Date.parse(retried[1].reviewGateRetry.dueAt), now + 28 * day);
+  assert.equal(Date.parse(retried[1].reviewGateRetry.dueAt), now + 16 * day);
 });
 
 test('linked review subjects merge only matching sequences and contiguous page ranges', () => {
@@ -227,4 +246,60 @@ test('linked review subjects merge only matching sequences and contiguous page r
   );
   assert.equal(practiceBGroups.length, 1);
   assert.deepEqual(practiceBGroups[0].logs.map(log => log.id), ['different-subject']);
+});
+
+test('an empty historical review-subject snapshot uses the subjects linked now', () => {
+  const groups = buildDueReviewGroups([
+    source({ reviewSubjectIdsSnapshot: [] })
+  ], subjects, now).filter(group => !group.isGateRetry);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].reviewType, 'subject');
+  assert.equal(groups[0].subjectId, 'practice');
+  assert.deepEqual(groups[0].reviewSubjectIds, ['practice']);
+});
+
+test('one initial error lowers only that question even after immediate correction', () => {
+  const original = source({ reviewStep: 3 });
+  const graded = gate.applyReviewGateOutcomes([original], [{
+    ...wrong, completedQuestionKeys: ['answer:0', 'answer:1']
+  }], false, now)[0];
+  assert.deepEqual(graded.reviewGatePendingSteps, { 'answer:0': 2, 'answer:1': 4 });
+  assert.equal(graded.reviewStep, 3);
+  assert.equal(graded.nextReviewDate, original.nextReviewDate);
+  assert.equal(graded.reviewGateRetry, undefined);
+  const finished = { ...graded, ...gate.completeRegularReviewSchedule(graded, now) };
+  assert.equal(finished.reviewStep, 4);
+  assert.equal(finished.reviewQuestionSchedules['answer:0'].nextReviewDate, new Date(now + 2 * day).toISOString());
+  assert.equal(finished.reviewQuestionSchedules['answer:1'].nextReviewDate, new Date(now + 8 * day).toISOString());
+  assert.deepEqual(gate.getDueReviewGateQuestionKeys(finished, now + 2 * day - 1), []);
+  assert.deepEqual(gate.getDueReviewGateQuestionKeys(finished, now + 2 * day), ['answer:0']);
+  const nextGate = gate.applyReviewGateOutcomes([finished], [{
+    ...right, completedQuestionKeys: ['answer:0']
+  }], false, now + 2 * day)[0];
+  const nextFinished = { ...nextGate, ...gate.completeRegularReviewSchedule(nextGate, now + 2 * day) };
+  assert.deepEqual(nextFinished.reviewQuestionSchedules['answer:1'], finished.reviewQuestionSchedules['answer:1']);
+  assert.equal(nextFinished.reviewQuestionSchedules['answer:0'].nextReviewDate, new Date(now + 6 * day).toISOString());
+});
+
+test('new and already-gated logs stay separate so resume cannot skip new questions', () => {
+  const grouped = buildDueReviewGroups([
+    source({ id: 'started', reviewGatePendingSteps: { 'answer:0': 1 }, startPage: 1, endPage: 2 }),
+    source({ id: 'unstarted', startPage: 3, endPage: 4 })
+  ], subjects, now);
+  assert.equal(grouped.length, 2);
+  assert.deepEqual(grouped.map(group => group.logs.length), [1, 1]);
+});
+
+test('finishing a regular review preserves existing additional review dates', () => {
+  const original = withRetry({ reviewStep: 3 });
+  const completed = { ...original, ...gate.completeRegularReviewSchedule(original, now) };
+  assert.deepEqual(completed.reviewGateRetry, original.reviewGateRetry);
+  const retryCompleted = gate.applyReviewGateOutcomes([completed], [{
+    ...wrong, completedQuestionKeys: ['answer:0']
+  }], true, now + day)[0];
+  assert.equal(retryCompleted.nextReviewDate, completed.nextReviewDate);
+  assert.equal(retryCompleted.reviewStep, completed.reviewStep);
+  assert.deepEqual(retryCompleted.reviewQuestionSchedules, completed.reviewQuestionSchedules);
+  assert.equal(retryCompleted.reviewGateRetry, undefined);
 });

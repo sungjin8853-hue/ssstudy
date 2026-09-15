@@ -7,8 +7,8 @@ import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds } from './utils/schedule';
-import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE } from './utils/review';
-import { applyReviewGateOutcomes, clearReviewGateRetries, getCurrentReviewIntervalMs, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
+import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE } from './utils/review';
+import { applyReviewGateOutcomes, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -26,6 +26,27 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
 
 const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
 const TEST_REVIEW_DELAY_THRESHOLD_MS = 10 * 60 * 1000;
+const REVIEW_INTERVAL_POLICY_KEY = 'swp_review_interval_policy';
+const REVIEW_INTERVAL_POLICY_VERSION = 'power-of-two-v1';
+
+const getLegacyReviewIntervalMs = (reviewStep: number) => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (reviewStep <= 0) return INITIAL_REVIEW_DELAY_MS;
+  if (reviewStep === 1) return dayMs;
+  if (reviewStep === 2) return 4 * dayMs;
+  if (reviewStep === 3) return 7 * dayMs;
+  if (reviewStep === 4) return 14 * dayMs;
+  if (reviewStep === 5) return 28 * dayMs;
+  return 28 * dayMs * Math.pow(2, reviewStep - 5);
+};
+
+const migrateReviewDateToPowerOfTwo = (date: string, reviewStep: number) => {
+  const dueAt = Date.parse(date);
+  if (!Number.isFinite(dueAt)) return date;
+  const oldInterval = getLegacyReviewIntervalMs(reviewStep);
+  const nextInterval = getCurrentReviewIntervalMs(reviewStep);
+  return new Date(dueAt - oldInterval + nextInterval).toISOString();
+};
 
 const inheritReviewSubjectTargetDates = (sourceSubjects: Subject[]) => sourceSubjects.map(subject => {
   const owner = sourceSubjects.find(candidate => getAllSubjectReviewIds(candidate).includes(subject.id));
@@ -131,6 +152,7 @@ const App: React.FC = () => {
       }> = savedSubs ? JSON.parse(savedSubs) || [] : [];
       const loadedLogs: StudyLog[] = savedLogs ? JSON.parse(savedLogs) || [] : [];
       const loadedTags: TagDefinition[] = savedTags ? JSON.parse(savedTags) || [] : [];
+      const shouldMigrateReviewIntervals = localStorage.getItem(REVIEW_INTERVAL_POLICY_KEY) !== REVIEW_INTERVAL_POLICY_VERSION;
       
       if (savedSubs) {
         const migratedSubjects = loadedSubjects.map(subject => {
@@ -224,13 +246,25 @@ const App: React.FC = () => {
             ? getCurrentReviewIntervalMs(log.reviewGateRetry.reviewStep)
             : 0;
           const reviewGateRetry = log.reviewGateRetry
-            && log.reviewGateRetry.intervalMs < TEST_REVIEW_DELAY_THRESHOLD_MS
             ? {
                 ...log.reviewGateRetry,
                 intervalMs: restoredRetryInterval,
-                dueAt: new Date(Date.now() + restoredRetryInterval).toISOString()
+                dueAt: log.reviewGateRetry.intervalMs < TEST_REVIEW_DELAY_THRESHOLD_MS
+                  ? new Date(Date.now() + restoredRetryInterval).toISOString()
+                  : shouldMigrateReviewIntervals
+                    ? migrateReviewDateToPowerOfTwo(log.reviewGateRetry.dueAt, log.reviewGateRetry.reviewStep)
+                    : log.reviewGateRetry.dueAt
               }
-            : log.reviewGateRetry;
+            : undefined;
+          const repairedNextReviewDate = repairTestReviewDate({
+            ...log,
+            reviewStep: log.reviewStep ?? 0,
+            nextReviewDate: log.nextReviewDate ?? log.timestamp,
+            isCondensed: log.isCondensed ?? false
+          });
+          const nextReviewDate = shouldMigrateReviewIntervals
+              ? migrateReviewDateToPowerOfTwo(repairedNextReviewDate, log.reviewStep ?? 0)
+              : repairedNextReviewDate;
 
           return {
             ...log,
@@ -240,16 +274,12 @@ const App: React.FC = () => {
             studyDate: log.studyDate || getLocalDateKey(timestampDate),
             studyWeekday: log.studyWeekday ?? timestampDate.getDay(),
             reviewStep: log.reviewStep ?? 0,
-            nextReviewDate: repairTestReviewDate({
-              ...log,
-              reviewStep: log.reviewStep ?? 0,
-              nextReviewDate: log.nextReviewDate ?? log.timestamp,
-              isCondensed: log.isCondensed ?? false
-            }),
+            nextReviewDate,
             isCondensed: log.isCondensed ?? false
           };
         });
         setLogs(migratedLogs);
+        localStorage.setItem(REVIEW_INTERVAL_POLICY_KEY, REVIEW_INTERVAL_POLICY_VERSION);
       }
       if (savedTags) setTagDefinitions(loadedTags);
     } catch (e) {
@@ -657,12 +687,7 @@ const App: React.FC = () => {
 
         // 복습 완료 시 다음 주기 계산
         const currentStep = log.reviewStep || 0;
-        // currentStep은 "현재 완료한 단계"가 아니라 "도래한 단계"를 의미한다.
-        const nextInterval = getNextReviewIntervalMs(currentStep);
-
-        const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
-        const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
-        const nextDate = new Date(nextDateBase + nextInterval);
+        const schedule = completeRegularReviewSchedule(log, Date.now());
         const reviewTimeShare = shouldRecordReviewTime
           ? reviewTimeSpentMinutes * (Math.max(0, log.pagesRead) / totalReviewPages)
           : 0;
@@ -670,9 +695,7 @@ const App: React.FC = () => {
         return {
             ...log,
             isReviewed: true, // 레거시 호환용
-            reviewStep: currentStep + 1,
-            nextReviewDate: nextDate.toISOString(),
-            reviewSubjectId: undefined,
+            ...schedule,
             reviewTimeSpentMinutes: (log.reviewTimeSpentMinutes || 0) + reviewTimeShare,
             reviewCompletedPages: (log.reviewCompletedPages || 0) + (shouldRecordReviewTime ? Math.max(0, log.pagesRead) : 0),
             basicReviewTimeRecords: shouldRecordReviewTime
@@ -756,18 +779,10 @@ const App: React.FC = () => {
           };
         }
 
-        const currentStep = log.reviewStep || 0;
-        const nextInterval = getNextReviewIntervalMs(currentStep);
-
-        const scheduledReviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : NaN;
-        const nextDateBase = Number.isFinite(scheduledReviewTime) ? scheduledReviewTime : Date.now();
-
         return {
           ...log,
           isReviewed: true,
-          reviewStep: currentStep + 1,
-          nextReviewDate: new Date(nextDateBase + nextInterval).toISOString(),
-          reviewSubjectId: undefined,
+          ...completeRegularReviewSchedule(log, Date.now()),
           reviewSubjectTimeRecords
         };
       });
