@@ -9,8 +9,11 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
+const Screen = new URLSearchParams(window.location.search).get('demo') === 'note-logic'
+  ? React.lazy(() => import('./components/ReviewPracticeDemo'))
+  : App;
 root.render(
   <React.StrictMode>
-    <App />
+    <React.Suspense fallback={<div className="p-8 text-slate-500">불러오는 중</div>}><Screen /></React.Suspense>
   </React.StrictMode>
 );

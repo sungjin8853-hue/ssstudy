@@ -2,13 +2,15 @@ import React, { useMemo, useState } from 'react';
 import { Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../utils/math';
 import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/review';
+import { ReviewGrowthSettings } from './PageGrowth';
 import {
   calculateFreshWeekdayPagePlan,
   calculateWeeklyRequiredPages,
-  distributePagesByWeekdayWeights,
   getDiffDays,
   getLocalDateKey,
   getPastCarryoverPages,
+  getPlanningDayCount,
+  getSubjectDayRemainingPages,
   getWeekdayPagePlan,
   getLogStudyDate,
   getActiveSubjectStage,
@@ -82,17 +84,13 @@ const estimateStageSchedule = (subject: Subject): StageScheduleEstimate => {
   const totalRemainingPages = getSubjectRemainingPageCount(subject);
   if (totalRemainingPages <= 0) return { completionDates, studyEvents };
 
-  const selectedWeekdays = normalizeWeekdays(subject.scheduledWeekdays);
-  const diffDays = Math.max(1, getDiffDays(subject.targetDate));
+  const diffDays = getDiffDays(subject.targetDate);
   let weekdayPlan = getWeekdayPagePlan(subject, totalRemainingPages, diffDays);
-  let weeklyCapacity = selectedWeekdays.reduce((sum, weekday) => sum + (weekdayPlan[weekday] || 0), 0);
+  let weeklyCapacity = Object.values(weekdayPlan).reduce((sum, pages) => sum + pages, 0);
 
   if (weeklyCapacity <= 0) {
-    weekdayPlan = distributePagesByWeekdayWeights(
-      Math.max(1, calculateWeeklyRequiredPages(totalRemainingPages, diffDays)),
-      selectedWeekdays
-    );
-    weeklyCapacity = selectedWeekdays.reduce((sum, weekday) => sum + (weekdayPlan[weekday] || 0), 0);
+    weekdayPlan = calculateFreshWeekdayPagePlan(subject, totalRemainingPages, diffDays);
+    weeklyCapacity = Object.values(weekdayPlan).reduce((sum, pages) => sum + pages, 0);
   }
 
   if (weeklyCapacity <= 0) return { completionDates, studyEvents };
@@ -205,6 +203,7 @@ export const Analytics: React.FC<Props> = ({
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [expandedSubjectReviewIds, setExpandedSubjectReviewIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [growthEditingSubjectId, setGrowthEditingSubjectId] = useState<string | null>(null);
   const [stageEditForm, setStageEditForm] = useState<{
     subjectId: string;
     stageId: string;
@@ -447,12 +446,15 @@ export const Analytics: React.FC<Props> = ({
       const planningRemaining = remaining + activeDayCompletedPages;
       const scheduledWeekdays = normalizeWeekdays(sub.scheduledWeekdays);
       const weeklyRequiredPages = calculateWeeklyRequiredPages(planningRemaining, diffDays);
-      const weekdayPagePlan = getWeekdayPagePlan(sub, planningRemaining, diffDays);
+      const weekdayPagePlan = getWeekdayPagePlan({ ...sub, targetDate: effectiveTargetDate }, planningRemaining, diffDays);
       const rawCarryoverPages = getPastCarryoverPages(sub, logs, activeStudyDate, todayDateKey);
       const carryoverPaidPages = Math.min(rawCarryoverPages, activeDayCompletedPages);
-      const carryoverPages = Math.min(remaining, Math.max(0, rawCarryoverPages - carryoverPaidPages));
+      const deadlinePlan = getPlanningDayCount(diffDays) < 7
+        ? getSubjectDayRemainingPages({ ...sub, targetDate: effectiveTargetDate }, logs, activeWeekday, activeStudyDate)
+        : null;
+      const carryoverPages = deadlinePlan?.carryoverPages ?? Math.min(remaining, Math.max(0, rawCarryoverPages - carryoverPaidPages));
       const activeDayPagesAfterCarryover = Math.max(0, activeDayCompletedPages - carryoverPaidPages);
-      const recommendedDailyPages = Math.min(
+      const recommendedDailyPages = deadlinePlan?.remainingDayPages ?? Math.min(
         remaining,
         Math.max(0, (weekdayPagePlan[activeWeekday] || 0) - activeDayPagesAfterCarryover)
         + carryoverPages
@@ -461,7 +463,7 @@ export const Analytics: React.FC<Props> = ({
         subLogs,
         remaining,
         recommendedDailyPages,
-        sub.initialAverageTimePerPage
+        sub.initialAverageTimePerPage, sub.growthPageUnit
       );
       const weeklyPages = weeklyLogs.reduce((sum, log) => sum + log.pagesRead, 0);
       const weeklyMinutes = weeklyLogs.reduce((sum, log) => sum + log.timeSpentMinutes, 0);
@@ -662,7 +664,7 @@ export const Analytics: React.FC<Props> = ({
   const getReviewMinutesPerPage = (reviewSubjectId: string) => {
     const parentSubjectId = reviewSubjectOwnerMap.get(reviewSubjectId);
     return parentSubjectId
-      ? calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId)
+      ? calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId, subjects.find(subject => subject.id === reviewSubjectId)?.growthPageUnit)
       : 0;
   };
 
@@ -1344,8 +1346,7 @@ export const Analytics: React.FC<Props> = ({
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
                             {linkedReviewSubjects.map(reviewSubject => {
                               const reviewActiveStage = getActiveSubjectStage(reviewSubject);
-                              const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id)
-                                || reviewSubject.stats.averageTimePerPage;
+                              const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id);
                               const reviewCompletionDate = estimateReviewSubjectCompletion(
                                 sub,
                                 stage,
@@ -1364,6 +1365,16 @@ export const Analytics: React.FC<Props> = ({
                                           ? '완료'
                                           : `완료 예상 ${formatEstimatedDate(reviewCompletionDate)}`}
                                       </span>
+                                      <button type="button"
+                                        aria-label={`${reviewSubject.name} 성장 표시 ${growthEditingSubjectId === reviewSubject.id ? '닫기' : '수정'}`}
+                                        aria-expanded={growthEditingSubjectId === reviewSubject.id}
+                                        onClick={event => {
+                                          event.stopPropagation();
+                                          setGrowthEditingSubjectId(current => current === reviewSubject.id ? null : reviewSubject.id);
+                                        }}
+                                        className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-sm font-black text-slate-500 hover:text-rose-600">
+                                        {growthEditingSubjectId === reviewSubject.id ? '✓' : '✎'}
+                                      </button>
                                     </div>
                                   </div>
                                   <p className="mt-1 text-[10px] font-bold text-slate-400">
@@ -1371,8 +1382,14 @@ export const Analytics: React.FC<Props> = ({
                                       ? `p.${formatPageValue(reviewActiveStage.currentPage)}~${formatPageValue(reviewActiveStage.endPage)}`
                                       : '완료'}
                                     {' · '}
-                                    {reviewMinutesPerPage > 0 ? `${reviewMinutesPerPage.toFixed(1)}분/P` : '측정 필요'}
+                                    {reviewMinutesPerPage > 0 ? `1P당 ${reviewMinutesPerPage.toFixed(1)}분` : '측정 필요'}
                                   </p>
+                                  {growthEditingSubjectId === reviewSubject.id && <ReviewGrowthSettings
+                                    value={reviewSubject.reviewGrowthDisplay === 'unit' ? 'unit' : 'review'}
+                                    onChange={value => {
+                                      const original = subjects.find(subject => subject.id === reviewSubject.id);
+                                      if (original) onUpdateSubject?.({ ...original, reviewGrowthDisplay: value });
+                                    }} />}
                                 </div>
                               );
                             })}

@@ -27,6 +27,7 @@ export interface Subject {
   completedPages: number;
   targetDate: string;
   initialAverageTimePerPage?: number;
+  reviewStartPage?: number;
   tagIds?: string[];
   reviewEnabled?: boolean;
   reviewSubjectIds?: string[];
@@ -36,6 +37,9 @@ export interface Subject {
   scheduledWeekdayWeights?: Record<string, number>;
   scheduledWeekdayRemainderDay?: number;
   followUpSubjects?: FollowUpSubject[];
+  growthPageUnit?: number;
+  growthComparisonUnits?: number;
+  reviewGrowthDisplay?: 'review' | 'unit';
 }
 
 export interface TestRecord {
@@ -63,6 +67,52 @@ export interface TestCategory {
   difficultySpaces: TestDifficultySpace[];
 }
 
+export interface ReviewMemoLogicalOperator {
+  index: number;
+  operator: 'and' | 'or' | 'sequence';
+}
+
+export type ReviewMemoChildrenRelation = {
+  separatorIndex: number;
+  operator: 'and';
+  type: 'part';
+} | {
+  separatorIndex: number;
+  operator: 'or';
+  type: 'alternative';
+};
+
+export type ReviewMemoLogicalExpression = {
+  type: 'text';
+  startIndex: number;
+  endIndex: number;
+} | {
+  type: 'group';
+  startIndex: number;
+  endIndex: number;
+  expression: ReviewMemoLogicalExpression;
+} | {
+  type: 'and' | 'or' | 'sequence';
+  operands: ReviewMemoLogicalExpression[];
+};
+
+export interface ReviewMemoNode {
+  id: string;
+  parentId: string | null;
+  type: 'text' | 'toggle';
+  text: string;
+  order: number;
+  logicalOperators?: ReviewMemoLogicalOperator[];
+  logicalExpressions?: ReviewMemoLogicalExpression[];
+  relationSeparators?: number[];
+  childrenRelation?: ReviewMemoChildrenRelation;
+}
+
+export interface ReviewMemoDocument {
+  version: 1;
+  nodes: ReviewMemoNode[];
+}
+
 export interface StudyLog {
   id: string;
   subjectId: string;
@@ -76,9 +126,14 @@ export interface StudyLog {
     parentId?: string;
   }>;
   pagesRead: number;
+  pageCountIsExplicit?: boolean;
+  pomodoroSession?: boolean;
   startPage?: number;
   endPage?: number;
   timeSpentMinutes: number;
+  timeAttackMinutes?: number;
+  organizationMinutes?: number;
+  reviewBaselineTimePerPage?: number;
   timestamp: string;
   studyDate?: string;
   studyWeekday?: number;
@@ -91,6 +146,10 @@ export interface StudyLog {
   reviewSubjectId?: string;
   reviewTimeSpentMinutes?: number;
   reviewCompletedPages?: number;
+  reviewParentSubjectId?: string;
+  reviewPageRangeBased?: boolean;
+  isRepeatReview?: boolean;
+  reviewRepeatStartPage?: number;
   basicReviewTimeRecords?: Array<{
     minutes: number;
     pages: number;
@@ -99,13 +158,27 @@ export interface StudyLog {
   }>;
   reviewSubjectTimeRecords?: Array<{
     subjectId: string;
+    completed?: boolean;
+    reviewNumber?: number;
     minutes: number;
     pages: number;
     timestamp: string;
+    measurementId?: string;
+    includedMeasurementIds?: string[];
+    baselineTimePerPage?: number;
+    timeAttackMinutes?: number;
+    organizationMinutes?: number;
+    baselineTimeAttackPerPage?: number;
+    timeChangePercent?: number;
+    lastEndPage?: number;
   }>;
   reviewMemo?: string;
+  reviewMemoDocument?: ReviewMemoDocument;
   reviewGatePendingResult?: 'correct' | 'wrong';
-  reviewQuestionSchedules?: Record<string, { reviewStep: number; nextReviewDate: string }>;
+  reviewQuestionSchedules?: Record<string, ReviewQuestionSchedule>;
+  reviewQuestionFormat?: 2;
+  reviewGateLevel?: number;
+  reviewGatePendingSchedules?: Record<string, ReviewQuestionSchedule>;
   reviewGatePendingSteps?: Record<string, number>;
   reviewGateRetry?: {
     dueAt: string;
@@ -113,6 +186,24 @@ export interface StudyLog {
     reviewStep: number;
     questionKeys: string[];
   };
+}
+
+export interface ReviewQuestionSchedule {
+  reviewStep: number;
+  nextReviewDate: string;
+  wrongCount?: number;
+  attempts?: number;
+  intervalMs?: number;
+  masked?: boolean;
+}
+
+export interface ReviewMeasurement {
+  pagesRead: number;
+  baselineTimePerPage: number;
+  lastEndPage: number;
+  measurementId: string;
+  timeAttackMinutes?: number;
+  baselineTimeAttackPerPage?: number;
 }
 
 export interface PredictionInputs {

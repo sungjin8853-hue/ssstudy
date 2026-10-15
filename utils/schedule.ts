@@ -167,6 +167,14 @@ export const getLogStudyDate = (log: StudyLog) => {
   return getLocalDateKey(new Date(log.timestamp));
 };
 
+export const getLogProgressPages = (log: StudyLog) => {
+  if (log.pageCountIsExplicit && log.startPage !== undefined && log.endPage !== undefined) {
+    return Math.max(0, log.endPage - log.startPage + 1);
+  }
+  if (log.reviewParentSubjectId && !log.reviewPageRangeBased) return 0;
+  return Math.max(0, log.pagesRead);
+};
+
 export const getDiffDays = (targetDate: string, from = new Date()) => {
   const today = new Date(from);
   today.setHours(0, 0, 0, 0);
@@ -175,13 +183,27 @@ export const getDiffDays = (targetDate: string, from = new Date()) => {
   return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+export const getPlanningDayCount = (diffDays: number) => (
+  Math.max(1, Math.min(7, diffDays + 1))
+);
+
+export const getPlanningWeekdays = (days: number[] | undefined, diffDays: number, from = new Date()) => {
+  const selectedDays = normalizeWeekdays(days);
+  const availableDays = Array.from({ length: getPlanningDayCount(diffDays) }, (_, offset) => (
+    (from.getDay() + offset) % 7
+  )).filter(day => selectedDays.includes(day));
+
+  // If every chosen weekday is after the deadline, keep the work available today.
+  return availableDays.length ? availableDays : [from.getDay()];
+};
+
 export const calculateWeeklyRequiredPages = (remainingPages: number, diffDays: number) => {
   const remaining = Math.max(0, Math.ceil(remainingPages));
   if (remaining <= 0) return 0;
   if (diffDays <= 0) return remaining;
 
-  const daysInScope = Math.max(1, Math.min(7, diffDays));
-  return Math.min(remaining, Math.ceil((remainingPages / diffDays) * daysInScope));
+  const daysInScope = getPlanningDayCount(diffDays);
+  return Math.min(remaining, Math.ceil((remainingPages / (diffDays + 1)) * daysInScope));
 };
 
 export const normalizeWeekdayWeights = (weights?: Record<string, number>, days?: number[]) => {
@@ -231,15 +253,16 @@ export const distributePagesByWeekdayWeights = (
   return plan;
 };
 
-export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
-  const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
+export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
+  const selectedDays = getPlanningWeekdays(subject.scheduledWeekdays, diffDays, from);
   const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, diffDays);
   return distributePagesByWeekdayWeights(weeklyRequiredPages, selectedDays);
 };
 
-export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number) => {
+export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
   const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
-  const weightPlan = calculateFreshWeekdayPagePlan(subject, remainingPages, diffDays);
+  const weightPlan = calculateFreshWeekdayPagePlan(subject, remainingPages, diffDays, from);
+  if (getPlanningDayCount(diffDays) < 7) return weightPlan;
   const storedPlan = subject.scheduledWeekdayPages || {};
   const hasStoredPlan = Object.keys(storedPlan).length > 0;
   const plan: Record<string, number> = {};
@@ -267,8 +290,8 @@ export const cleanWeekdayPagePlan = (plan: Record<string, number>, days?: number
   }, {});
 };
 
-export const getSubjectDayTarget = (subject: Subject, remainingPages: number, diffDays: number, dayId: number) => {
-  const plan = getWeekdayPagePlan(subject, remainingPages, diffDays);
+export const getSubjectDayTarget = (subject: Subject, remainingPages: number, diffDays: number, dayId: number, from = new Date()) => {
+  const plan = getWeekdayPagePlan(subject, remainingPages, diffDays, from);
   return Math.min(Math.max(0, Math.ceil(remainingPages)), Math.max(0, plan[dayId] || 0));
 };
 
@@ -300,19 +323,66 @@ export const getSubjectDayRemainingPages = (
   logs: StudyLog[],
   targetWeekday: number,
   targetStudyDate: string,
-  today = new Date()
+  today = new Date(),
+  includeCarryover = true
 ) => {
   const remainingPages = getSubjectRemainingPageCount(subject);
   const scopedPages = logs
     .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
-    .reduce((sum, log) => sum + log.pagesRead, 0);
+    .reduce((sum, log) => sum + getLogProgressPages(log), 0);
   const remainingBeforeStudyDate = remainingPages + scopedPages;
   const diffDays = getDiffDays(subject.targetDate, today);
-  const dayTarget = getSubjectDayTarget(subject, remainingBeforeStudyDate, diffDays, targetWeekday);
+  if (includeCarryover && getPlanningDayCount(diffDays) < 7) {
+    const todayDateKey = getLocalDateKey(today);
+    const dates = Array.from({ length: getPlanningDayCount(diffDays) }, (_, offset) => {
+      const date = new Date(today);
+      date.setDate(date.getDate() + offset);
+      return { dateKey: getLocalDateKey(date), weekday: date.getDay() };
+    });
+    const pagesByDate = logs
+      .filter(log => log.subjectId === subject.id && dates.some(date => date.dateKey === getLogStudyDate(log)))
+      .reduce<Record<string, number>>((pages, log) => {
+        const dateKey = getLogStudyDate(log);
+        pages[dateKey] = (pages[dateKey] || 0) + getLogProgressPages(log);
+        return pages;
+      }, {});
+    // Reconstruct one shared budget so a record is deducted only on its own day.
+    const windowPages = Object.values(pagesByDate).reduce((sum, pages) => sum + pages, 0);
+    const subjectBeforeWindow = adjustSubjectProgress(subject, -windowPages);
+    const rawCarryover = getPastCarryoverPages(subjectBeforeWindow, logs, todayDateKey, todayDateKey);
+    const initialCarryover = Math.min(remainingPages + windowPages, rawCarryover);
+    const plan = getWeekdayPagePlan(subject, remainingPages + windowPages - initialCarryover, diffDays, today);
+    const days = dates.map(({ dateKey, weekday }) => {
+      const targetPages = (plan[weekday] || 0) + (dateKey === todayDateKey ? initialCarryover : 0);
+      const paidPages = pagesByDate[dateKey] || 0;
+      return { dateKey, remaining: Math.max(0, targetPages - paidPages), excess: Math.max(0, paidPages - targetPages) };
+    });
+    let excessPages = days.reduce((sum, day) => sum + day.excess, 0);
+    const unpaidCarryover = Math.max(0, initialCarryover - (pagesByDate[todayDateKey] || 0));
+    let carryoverPages = 0;
+    let remainingDayPages = 0;
+    days.forEach(day => {
+      const deductedPages = Math.min(day.remaining, excessPages);
+      excessPages -= deductedPages;
+      if (day.dateKey === targetStudyDate) {
+        remainingDayPages = Math.min(remainingPages, day.remaining - deductedPages);
+        carryoverPages = day.dateKey === todayDateKey
+          ? Math.min(remainingDayPages, Math.max(0, unpaidCarryover - deductedPages))
+          : 0;
+      }
+    });
+    return {
+      scopedPages,
+      carryoverPages,
+      remainingDayPages
+    };
+  }
+  const dayTarget = getSubjectDayTarget(subject, remainingBeforeStudyDate, diffDays, targetWeekday, today);
   const remainingDayPages = Math.min(remainingPages, Math.max(0, dayTarget - scopedPages));
 
   return {
     scopedPages,
+    carryoverPages: 0,
     remainingDayPages
   };
 };
@@ -342,7 +412,8 @@ export const getPastCarryoverPages = (
         logs,
         cursorWeekday,
         cursorDateKey,
-        new Date(cursor)
+        new Date(cursor),
+        false
       ).remainingDayPages;
     }
 

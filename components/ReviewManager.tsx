@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { StudyLog, Subject } from '../types';
+import { StudyLog, Subject, ReviewMemoDocument } from '../types';
+import { ReviewMemoEditor } from './ReviewMemoEditor';
 
 interface Props {
   logs: StudyLog[];
   subjects: Subject[];
   onReviewAction: (logIds: string[], action: 'complete' | 'condense') => void;
-  onUpdateReviewMemo: (logId: string, memo: string) => void;
+  onUpdateReviewMemo: (logId: string, memo: string, document?: ReviewMemoDocument) => void;
 }
 
 interface ReviewGroup {
@@ -324,11 +325,11 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const handleMemoChange = (logId: string, memo: string) => {
+  const handleMemoChange = (logId: string, memo: string, document: ReviewMemoDocument) => {
     setMemoDrafts(prev => ({ ...prev, [logId]: memo }));
-    onUpdateReviewMemo(logId, memo);
+    onUpdateReviewMemo(logId, memo, document);
     setActiveReviewGroup(prev => prev
-      ? { ...prev, logs: prev.logs.map(log => log.id === logId ? { ...log, reviewMemo: memo } : log) }
+      ? { ...prev, logs: prev.logs.map(log => log.id === logId ? { ...log, reviewMemo: memo, reviewMemoDocument: document } : log) }
       : prev
     );
   };
@@ -391,12 +392,13 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                   {activeReviewGroup.logs.map(log => (
                     <div key={log.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-1.5">
                       <p className="mb-0.5 text-[10px] font-black text-rose-400">{formatPageRange(log)}</p>
-                      <textarea
+                      <ReviewMemoEditor
                         value={getMemoValue(log)}
-                        onChange={event => handleMemoChange(log.id, event.target.value)}
+                        document={log.reviewMemoDocument}
+                        onChange={(memo, document) => handleMemoChange(log.id, memo, document)}
                         placeholder="복습하면서 떠오른 핵심어를 바로 수정하세요."
-                        className="w-full resize-none overflow-hidden rounded-md border border-rose-100 bg-white p-2 text-lg font-bold leading-snug text-slate-800 outline-none focus:border-rose-500"
-                        style={{ height: getMemoBoxHeight(getMemoValue(log)), scrollbarWidth: 'none' }}
+                        minHeight={48}
+                        maxHeight={300}
                       />
                     </div>
                   ))}

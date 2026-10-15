@@ -1,66 +1,36 @@
 import { StudyLog, PredictionInputs, Stats, Subject } from '../types';
+import { getRepeatedReviewRange } from './review';
+import { calculateUnitEfficiency } from './pageGrowth';
+import { getLocalDateKey } from './schedule';
 
-const RECENT_STUDY_MINUTES_LIMIT = 15 * 60;
+const isSubjectReviewSource = (log: StudyLog, parentSubjectId: string) => (
+  log.subjectId === parentSubjectId || (log.isRepeatReview && log.reviewParentSubjectId === parentSubjectId)
+);
 
 interface TimedPageSample {
   pagesRead: number;
   timeSpentMinutes: number;
   timestamp: string;
+  timeAttackMinutes?: number;
 }
 
-const takeRecentStudyMinutes = (logs: TimedPageSample[]) => {
-  let remainingMinutes = RECENT_STUDY_MINUTES_LIMIT;
-  const samples: Array<{ pagesRead: number; timeSpentMinutes: number; timestamp: string }> = [];
-
-  logs
-    .filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-    .some(log => {
-      if (remainingMinutes <= 0) return true;
-
-      const minutes = Math.min(log.timeSpentMinutes, remainingMinutes);
-      const ratio = minutes / log.timeSpentMinutes;
-      samples.push({
-        pagesRead: log.pagesRead * ratio,
-        timeSpentMinutes: minutes,
-        timestamp: log.timestamp
-      });
-      remainingMinutes -= minutes;
-
-      return remainingMinutes <= 0;
-    });
-
-  return samples;
-};
-
 export const calculateRecentTimedPageAverage = (
-  samples: TimedPageSample[]
+  samples: TimedPageSample[], pageUnit?: number
 ): { averageTimePerPage: number; standardDeviation: number } => {
-  const recentSamples = takeRecentStudyMinutes(samples);
-
-  if (recentSamples.length === 0) {
-    return { averageTimePerPage: 0, standardDeviation: 0 };
-  }
-
-  const totalTime = recentSamples.reduce((acc, sample) => acc + sample.timeSpentMinutes, 0);
-  const totalPages = recentSamples.reduce((acc, sample) => acc + sample.pagesRead, 0);
-  const averageTimePerPage = totalPages > 0 ? totalTime / totalPages : 0;
-  const timePerPageSamples = recentSamples.map(sample => sample.timeSpentMinutes / sample.pagesRead);
-  const mean = timePerPageSamples.reduce((a, b) => a + b, 0) / timePerPageSamples.length;
-  const variance = timePerPageSamples.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / timePerPageSamples.length;
-
-  return {
-    averageTimePerPage,
-    standardDeviation: Math.sqrt(variance)
-  };
+  const result = calculateUnitEfficiency(samples, pageUnit);
+  return { averageTimePerPage: result.averageTimePerPage, standardDeviation: result.standardDeviation };
 };
 
 export const calculateRecentCompletedDayAverage = (
   logs: StudyLog[],
-  _dailyTargetPages: number
+  _dailyTargetPages: number, pageUnit?: number
 ): { averageTimePerPage: number; standardDeviation: number } => {
-  return calculateRecentTimedPageAverage(logs);
+  return calculateRecentTimedPageAverage(logs, pageUnit);
 };
+
+export const calculateTimeAttackAverage = (logs: StudyLog[], pageUnit?: number) => (
+  calculateUnitEfficiency(logs, pageUnit).timeAttackAverageTimePerPage
+);
 
 export interface BasicReviewEfficiencyPoint {
   reviewNumber: number;
@@ -146,19 +116,30 @@ export const calculateBasicReviewAverageTimePerPage = (
 export const calculateSubjectReviewAverageTimePerPage = (
   logs: StudyLog[],
   parentSubjectId: string,
-  reviewSubjectId: string
+  reviewSubjectId: string, pageUnit?: number
 ) => {
-  const samples = logs
-    .filter(log => log.subjectId === parentSubjectId)
-    .flatMap(log => (log.reviewSubjectTimeRecords || [])
-      .filter(record => record.subjectId === reviewSubjectId)
-      .map<TimedPageSample>(record => ({
-        pagesRead: record.pages,
-        timeSpentMinutes: record.minutes,
-        timestamp: record.timestamp
-      })));
+  return calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, parentSubjectId, reviewSubjectId), pageUnit).averageTimePerPage;
+};
 
-  return calculateRecentTimedPageAverage(samples).averageTimePerPage;
+export const getReviewEfficiencySamples = (logs: StudyLog[], parentSubjectId: string, subjectId: string): TimedPageSample[] => {
+  const ownLogs = logs.filter(log => log.subjectId === subjectId && log.reviewParentSubjectId === parentSubjectId);
+  const ownIds = new Set(ownLogs.map(log => log.id));
+  const records = logs.filter(log => isSubjectReviewSource(log, parentSubjectId))
+    .flatMap(log => (log.reviewSubjectTimeRecords || []).filter(record => record.subjectId === subjectId
+      && record.completed !== false && Boolean(record.measurementId)));
+  const skipOwnIds = new Set<string>();
+  const legacy = new Map<string, TimedPageSample>();
+  records.forEach(record => {
+    const ids = record.includedMeasurementIds || [record.measurementId!];
+    if (ids.every(id => ownIds.has(id))) return;
+    ids.forEach(id => skipOwnIds.add(id));
+    const sample = legacy.get(record.measurementId!) || { pagesRead: 0, timeSpentMinutes: 0, timeAttackMinutes: 0, timestamp: record.timestamp };
+    sample.pagesRead += record.pages;
+    sample.timeSpentMinutes += record.minutes;
+    sample.timeAttackMinutes! += record.timeAttackMinutes ?? record.minutes;
+    legacy.set(record.measurementId!, sample);
+  });
+  return [...ownLogs.filter(log => !skipOwnIds.has(log.id)), ...legacy.values()];
 };
 
 export const resolveBasicReviewAverageTimePerPage = (
@@ -187,7 +168,7 @@ export const resolveBasicReviewAverageTimePerPage = (
   for (const fallbackSubject of fallbackSubjects) {
     const measuredAverage = calculateRecentCompletedDayAverage(
       logs.filter(log => log.subjectId === fallbackSubject.id),
-      0
+      0, fallbackSubject.growthPageUnit
     ).averageTimePerPage;
     const studyAverage = measuredAverage || fallbackSubject.initialAverageTimePerPage || 0;
     if (studyAverage > 0) return studyAverage / 2;
@@ -224,19 +205,142 @@ export const resolveSubjectReviewAverageTimePerPage = (
   logs: StudyLog[],
   parentSubjectId: string,
   reviewSubjectId: string,
-  subjects: Subject[] = []
+  subjects: Subject[] = [],
+  reviewLogs?: StudyLog[],
+  reviewSubjectIds?: string[]
 ) => {
-  const subjectReviewAverage = calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId);
-  if (subjectReviewAverage > 0) return subjectReviewAverage;
+  return calculateReviewSubjectTiming(logs, parentSubjectId, reviewSubjectId, subjects, reviewLogs, reviewSubjectIds).averageTimePerPage;
+};
 
-  return resolveBasicReviewAverageTimePerPage(logs, parentSubjectId, subjects);
+export const calculateReviewTimeChangeAverage = (
+  logs: StudyLog[], parentSubjectId: string, subjectId: string, reviewNumber?: number, timeAttack = false
+) => {
+  const measurements = new Map<string, { minutes: number; baselineMinutes: number }>();
+  logs.filter(log => isSubjectReviewSource(log, parentSubjectId)).forEach(log => {
+    (log.reviewSubjectTimeRecords || []).forEach((record, index) => {
+      const baseline = timeAttack ? record.baselineTimeAttackPerPage ?? record.baselineTimePerPage : record.baselineTimePerPage;
+      const minutes = timeAttack ? record.timeAttackMinutes ?? record.minutes : record.minutes;
+      if (record.subjectId !== subjectId || record.completed === false || record.pages <= 0
+        || !(baseline! > 0) || !(minutes > 0)
+        || (reviewNumber !== undefined && record.reviewNumber !== reviewNumber)) return;
+      const key = record.measurementId || `${log.id}:${index}`;
+      const value = measurements.get(key) || { minutes: 0, baselineMinutes: 0 };
+      value.minutes += minutes;
+      value.baselineMinutes += record.pages * baseline!;
+      measurements.set(key, value);
+    });
+  });
+  const changes = [...measurements.values()].map(value => (value.minutes / value.baselineMinutes - 1) * 100);
+  return changes.length > 0 ? changes.reduce((sum, value) => sum + value, 0) / changes.length : null;
+};
+
+export const calculateReviewSpeedChanges = (logs: StudyLog[], parentSubjectId: string, subjectId: string, measurementDate?: string) => {
+  const measurements = new Map<string, { minutes: number; baselineMinutes: number; hasBaseline: boolean; timestamp: string }>();
+  logs.filter(log => isSubjectReviewSource(log, parentSubjectId)).forEach(log => {
+    (log.reviewSubjectTimeRecords || []).forEach(record => {
+      if (record.subjectId !== subjectId || !record.completed || !record.measurementId || record.pages <= 0) return;
+      const value = measurements.get(record.measurementId)
+        || { minutes: 0, baselineMinutes: 0, hasBaseline: true, timestamp: record.timestamp };
+      value.minutes += record.minutes;
+      value.baselineMinutes += record.pages * (record.baselineTimePerPage || 0);
+      value.hasBaseline &&= (record.baselineTimePerPage || 0) > 0;
+      if (record.timestamp > value.timestamp) value.timestamp = record.timestamp;
+      measurements.set(record.measurementId, value);
+    });
+  });
+  const values = [...measurements.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .map(value => ({
+      timestamp: value.timestamp,
+      percent: value.hasBaseline && value.minutes > 0 ? (value.baselineMinutes / value.minutes - 1) * 100 : null
+    }));
+  const measured = values.filter(value => value.percent !== null);
+  const latest = measurementDate ? values.find(value => getLocalDateKey(new Date(value.timestamp)) === measurementDate) : values[0];
+  return {
+    average: measured.length > 0 ? measured.reduce((sum, value) => sum + value.percent!, 0) / measured.length : null,
+    latest: latest?.percent ?? null
+  };
+};
+
+export const calculateReviewSubjectTiming = (
+  logs: StudyLog[], parentSubjectId: string, subjectId: string, subjects: Subject[] = [],
+  reviewLogs = logs.filter(log => log.subjectId === parentSubjectId), reviewSubjectIds?: string[], timeAttack = false
+) => {
+  let pages = 0;
+  let baselineMinutes = 0;
+  let estimatedMinutes = 0;
+  let pendingPages = 0;
+  let known = true;
+  const changes = new Map<string, number>();
+  const rateFor = (id: string) => {
+    const subject = subjects.find(item => item.id === id);
+    const samples = id === parentSubjectId ? logs.filter(log => log.subjectId === id)
+      : getReviewEfficiencySamples(logs, parentSubjectId, id);
+    const efficiency = calculateUnitEfficiency(samples, subject?.growthPageUnit);
+    return timeAttack ? efficiency.timeAttackAverageTimePerPage : efficiency.averageTimePerPage;
+  };
+  const parentRate = rateFor(parentSubjectId);
+  const getChange = (id: string, round: number) => {
+    const key = `${id}:${round}`;
+    if (!changes.has(key)) changes.set(key, calculateReviewTimeChangeAverage(logs, parentSubjectId, id, round, timeAttack) || 0);
+    return changes.get(key)!;
+  };
+  for (const log of reviewLogs) {
+    const sequence = log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot
+      : subjects.find(subject => subject.id === parentSubjectId)?.reviewSubjectIds || reviewSubjectIds || [];
+    const index = sequence.indexOf(subjectId);
+    const reviewNumber = (log.reviewStep || 0) + 1;
+    let incomingPages = Math.max(0, log.pagesRead);
+    let incomingMinutes = Math.max(0, timeAttack ? log.timeAttackMinutes ?? log.timeSpentMinutes : log.timeSpentMinutes);
+    if (!log.isRepeatReview && parentRate > 0) incomingMinutes = incomingPages * parentRate;
+    const repeatedSubject = log.isRepeatReview ? subjects.find(subject => subject.id === log.subjectId) : undefined;
+    if (repeatedSubject && incomingPages > 0) {
+      const repeatedPages = Math.min(incomingPages, getRepeatedReviewRange(log, repeatedSubject).initialRemainingPages);
+      incomingMinutes *= repeatedPages / incomingPages;
+      incomingPages = repeatedPages;
+    }
+    // Each stage inherits the preceding completed measurement, not another book's average.
+    for (const precedingId of sequence.slice(0, Math.max(0, index))) {
+      const records = (log.reviewSubjectTimeRecords || []).filter(record => (
+        record.subjectId === precedingId && record.completed !== false && record.reviewNumber === reviewNumber && Boolean(record.measurementId)
+      ));
+      if (records.length > 0) {
+        incomingPages = records.reduce((sum, record) => sum + Math.max(0, record.pages), 0);
+        incomingMinutes = records.reduce((sum, record) => sum + Math.max(0, timeAttack ? record.timeAttackMinutes ?? record.minutes : record.minutes), 0);
+        const precedingRate = rateFor(precedingId);
+        if (precedingRate > 0) incomingMinutes = incomingPages * precedingRate;
+      } else {
+        const change = getChange(precedingId, reviewNumber);
+        incomingMinutes *= 1 + change / 100;
+      }
+    }
+    const change = getChange(subjectId, reviewNumber);
+    pages += incomingPages;
+    baselineMinutes += incomingMinutes;
+    estimatedMinutes += incomingMinutes * (1 + change / 100);
+    if (incomingPages > 0 && incomingMinutes <= 0) known = false;
+    pendingPages += (log.reviewSubjectTimeRecords || []).filter(record => (
+      record.subjectId === subjectId && record.completed === false && record.reviewNumber === reviewNumber
+    )).reduce((sum, record) => sum + Math.max(0, record.pages), 0);
+  }
+  const ownEfficiency = calculateUnitEfficiency(getReviewEfficiencySamples(logs, parentSubjectId, subjectId),
+    subjects.find(subject => subject.id === subjectId)?.growthPageUnit);
+  const measuredRate = timeAttack ? ownEfficiency.timeAttackAverageTimePerPage : ownEfficiency.averageTimePerPage;
+  const averageTimePerPage = ownEfficiency.basis ? measuredRate : known && pages > 0 ? estimatedMinutes / pages : 0;
+  const remainingPages = Math.max(0, pages - pendingPages);
+  return {
+    pages, remainingPages,
+    baselineTimePerPage: known && pages > 0 ? baselineMinutes / pages : 0,
+    averageTimePerPage,
+    estimatedMinutes: remainingPages * averageTimePerPage,
+    averageChangePercent: baselineMinutes > 0 ? (averageTimePerPage * pages / baselineMinutes - 1) * 100 : null
+  };
 };
 
 export const calculateStats = (
   logs: StudyLog[],
   remainingPages: number,
   dailyTargetPages = 0,
-  fallbackAverageTimePerPage = 0
+  fallbackAverageTimePerPage = 0, pageUnit?: number
 ): Stats => {
   const validLogs = logs.filter(log => log.pagesRead > 0 && log.timeSpentMinutes > 0);
 
@@ -251,7 +355,7 @@ export const calculateStats = (
   }
 
   const totalTime = validLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
-  const recentAverage = calculateRecentCompletedDayAverage(validLogs, dailyTargetPages);
+  const recentAverage = calculateRecentCompletedDayAverage(validLogs, dailyTargetPages, pageUnit);
 
   return {
     averageTimePerPage: recentAverage.averageTimePerPage,

@@ -1,31 +1,39 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Subject, StudyLog, TagDefinition } from '../types';
+import { Subject, StudyLog, ReviewMemoDocument, ReviewMeasurement } from '../types';
 import {
   calculateBasicReviewGroupTiming,
   calculateRecentCompletedDayAverage,
-  resolveSubjectReviewAverageTimePerPage
+  calculateTimeAttackAverage,
+  calculateReviewSubjectTiming
 } from '../utils/math';
-import { getReviewDetailKey } from '../utils/review';
-import { getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, parseReviewGateMemo, ReviewGateOutcome } from '../utils/reviewGate';
-import { calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage } from '../utils/review';
+import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroRemainingPages, getSessionTimes, isPomodoroGoalExceeded, POMODORO_MINUTES, PomodoroPlan } from '../utils/measurement';
+import { getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, ReviewGateOutcome } from '../utils/reviewGate';
+import { calculateQuestionPerformance, gradeReviewPractice, startReviewPractice, ReviewPractice } from '../utils/reviewPractice';
+import { ReviewQuestionContent } from './ReviewQuestionContent';
+import { ReviewNoteSummary } from './ReviewNoteSummary';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { ReviewMemoEditor } from './ReviewMemoEditor';
+import { MemoColorTextarea } from './MemoColorTextarea';
+import { createSessionMemoRecord, readSessionMemos, writeSessionMemo } from '../utils/sessionMemo';
 
 interface Props {
   subjects: Subject[];
-  tagDefinitions: TagDefinition[];
   logs: StudyLog[];
   activeWeekday: number;
   activeStudyDate: string;
-  onActiveWeekdayChange: (weekday: number) => void;
   detailSubjectId: string;
   onDetailSubjectChange: (subjectId: string) => void;
+  renderSummary: (taskSelector: React.ReactNode, onSelectSubject: (subjectId: string) => void, completedStudySubjectIds: string[], pomodoroPlan: PomodoroPlan | null) => React.ReactNode;
   onLogSession: (log: StudyLog) => void;
   onUpdateSubjects?: (subjects: Subject[]) => void;
   onReviewAction: (logIds: string[], action: 'complete' | 'condense', reviewTimeSpentMinutes?: number) => void;
-  onAdvanceReviewSubject: (logIds: string[], completedReviewSubjectId: string, nextReviewSubjectId: string | null, reviewTimeSpentMinutes: number) => void;
-  onRecordReviewSubjectTime: (logIds: string[], completedReviewSubjectId: string, reviewTimeSpentMinutes: number) => void;
-  onUpdateReviewMemo: (logId: string, memo: string) => void;
+  onAdvanceReviewSubject: (logIds: string[], completedReviewSubjectId: string, nextReviewSubjectId: string | null, reviewTimeSpentMinutes: number, measurement: ReviewMeasurement) => void;
+  onRecordReviewSubjectTime: (logIds: string[], completedReviewSubjectId: string, reviewTimeSpentMinutes: number, measurement: ReviewMeasurement) => void;
+  onUpdateReviewMemo: (logId: string, memo: string, document?: ReviewMemoDocument) => void;
   onFinishReviewGate: (outcomes: ReviewGateOutcome[], isRetry: boolean) => void;
   onClearReviewGateRetries: (logIds: string[]) => void;
+  sessionMemoOverrides?: Record<string, string>;
 }
 
 interface SessionTimer {
@@ -77,7 +85,66 @@ type StudyRunQueueItem =
       name: string;
     };
 
-type Step = 'idle' | 'timer' | 'pages';
+export const getSelectedRunQueueItem = (items: StudyRunQueueItem[], selectedKey: string) => (
+  items.find(item => item.key === selectedKey) || items[0]
+);
+
+type Step = 'idle' | 'timer' | 'organize' | 'pages';
+
+const formatTime = (totalSeconds: number) => {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  return `${hrs > 0 ? hrs + ':' : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
+export const MeasurementProgress: React.FC<{ pages: number; target: number | null; elapsed: string }> = ({ pages, target, elapsed }) => {
+  const exceeded = isPomodoroGoalExceeded(pages, target);
+  const labelClass = `mb-2 text-xs font-black ${exceeded ? 'text-yellow-300' : 'text-slate-400'}`;
+  return <>
+    <span className="flex min-w-0 flex-1 flex-col">
+      <span className={labelClass}>이번 측정</span>
+      <span className={`whitespace-nowrap font-mono text-3xl font-black tabular-nums ${exceeded ? 'text-yellow-300' : 'text-indigo-200'}`}>
+        {formatPageNumber(pages)} / {target !== null ? formatPageNumber(target) : '-'}P
+      </span>
+    </span>
+    <span className="flex shrink-0 flex-col border-l border-white/10 pl-4">
+      <span className={labelClass}>경과 시간</span>
+      <span className={`font-mono text-3xl font-black tabular-nums ${exceeded ? 'text-yellow-300' : 'text-white'}`}>{elapsed}</span>
+    </span>
+  </>;
+};
+
+export const PageTimeAttack: React.FC<{ remainingSeconds: number; targetSeconds: number; remainingPages: number | null }> = ({ remainingSeconds, targetSeconds, remainingPages }) => (
+  <>
+    <p className="mb-2 text-xs font-black text-slate-400">타임어택</p>
+    <div className={`font-mono font-black text-white tabular-nums ${targetSeconds > 0 ? 'text-5xl' : 'text-2xl'}`}>
+      {targetSeconds > 0 ? formatTime(remainingSeconds) : '측정 필요'}
+    </div>
+    <p className="mt-2 text-xs font-bold text-indigo-200">
+      뽀모도로 {POMODORO_MINUTES}분 · 남은 장수 {remainingPages !== null ? `${formatPageNumber(remainingPages)}P` : '-'}
+    </p>
+  </>
+);
+
+export const OrganizationTimer: React.FC<{ seconds: number; running: boolean; onToggle: () => void; onComplete: () => void }> = ({ seconds, running, onToggle, onComplete }) => (
+  <div className="flex flex-wrap items-center gap-4 rounded-3xl border border-white/10 bg-white/5 p-5">
+    <div className="min-w-0 flex-1">
+      <h3 className="text-xl font-black text-white">막힌 부분 정리</h3>
+      <p className="mt-2 text-xs font-bold text-slate-400">경과 시간</p>
+      <p className="mt-1 font-mono text-4xl font-black tabular-nums text-white">{formatTime(seconds)}</p>
+    </div>
+    <button type="button" onClick={onToggle} className="rounded-2xl bg-indigo-600 px-5 py-4 text-sm font-black text-white">
+      {running ? '일시정지' : '다시 시작'}
+    </button>
+    <button type="button" onClick={onComplete} className="rounded-2xl bg-rose-100 px-5 py-4 text-sm font-black text-rose-700">완료</button>
+  </div>
+);
+
+const getRunQueueDetailKey = (item: StudyRunQueueItem) => item.kind === 'review'
+  ? getReviewDetailKey(item.reviewGroup.reviewType, item.reviewGroup.parentSubjectId, item.reviewGroup.subjectId)
+  : item.studyItem.subject.id;
 type TimerMode = 'remainingPages' | 'elapsedTime' | 'sessionMemo';
 type PreSessionReviewMode = 'before-study' | 'after-study' | 'interrupt';
 
@@ -87,20 +154,25 @@ interface ActiveReviewRun {
   reviewSubjectIds: string[];
   currentIndex: number;
   sourceName: string;
+  startPage?: number;
+  stageId?: string;
 }
 
 interface GateReviewQuestion {
   id: string;
   questionKey: string;
   logId: string;
-  answerIndex?: number;
   range: string;
+  level: number;
+  priority: number;
+  recallUnits: number;
+  providedUnits: number;
+  difficulty: number;
 }
 
 type GateReviewResult = 'correct' | 'wrong';
 
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
-const SESSION_MEMO_KEY = 'swp_session_memos';
 const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
 const getSoundSrc = (path: string) => {
   const basePath = new URL('.', window.location.href).pathname;
@@ -190,13 +262,6 @@ const calculateEndPageValue = (start: number, amount: number) => {
   return Number(endPage.toFixed(2));
 };
 
-const calculateAmountFromEndPage = (start: number, end: number) => {
-  const amount = Number.isInteger(start) && Number.isInteger(end)
-    ? end - start + 1
-    : end - start;
-  return Number(amount.toFixed(2));
-};
-
 const calculateSpeedChangePercent = (logs: StudyLog[]) => {
   const dailySamples = Array.from(
     logs
@@ -252,7 +317,7 @@ const getReviewRange = (log: StudyLog) => {
 const getAvailableReviewSubjectIds = (reviewSubjectIds: string[], parentSubject: Subject | undefined, sourceSubjects: Subject[]) => (
   Array.from(new Set(reviewSubjectIds))
     .filter(id => id !== parentSubject?.id && sourceSubjects.some(subject => (
-      subject.id === id && getSubjectRemainingPageCount(subject) > 0
+      subject.id === id && (getSubjectRemainingPageCount(subject) > 0 || Boolean(subject.reviewStartPage))
     )))
 );
 
@@ -272,6 +337,7 @@ const findReviewSubjectOwner = (reviewSubjectId: string, sourceSubjects: Subject
 };
 
 const getReviewSubjectIdsForLog = (log: StudyLog, parentSubject: Subject | undefined, sourceSubjects: Subject[]) => {
+  if (log.isRepeatReview) return sourceSubjects.some(subject => subject.id === log.subjectId) ? [log.subjectId] : [];
   const configuredIds = Array.isArray(log.reviewSubjectIdsSnapshot) && log.reviewSubjectIdsSnapshot.length > 0
     ? log.reviewSubjectIdsSnapshot
     : parentSubject
@@ -282,6 +348,7 @@ const getReviewSubjectIdsForLog = (log: StudyLog, parentSubject: Subject | undef
 };
 
 const getEffectiveReviewSubjectId = (log: StudyLog, sourceSubjects: Subject[]) => {
+  if (log.isRepeatReview) return log.subjectId;
   const ownerByLogSubject = findReviewSubjectOwner(log.subjectId, sourceSubjects);
   const parentSubject = sourceSubjects.find(subject => subject.id === log.subjectId)
     || ownerByLogSubject?.subject;
@@ -298,6 +365,7 @@ const getEffectiveReviewSubjectId = (log: StudyLog, sourceSubjects: Subject[]) =
 };
 
 const getReviewParentSubject = (log: StudyLog, reviewSubjectId: string, sourceSubjects: Subject[]) => {
+  if (log.isRepeatReview) return sourceSubjects.find(subject => subject.id === log.reviewParentSubjectId);
   const directSubject = sourceSubjects.find(subject => subject.id === log.subjectId);
   if (directSubject) return directSubject;
 
@@ -355,20 +423,6 @@ const writeReviewSessionPreference = (subjectId: string, skipReview: boolean) =>
   localStorage.setItem(REVIEW_SESSION_PREF_KEY, JSON.stringify(preferences));
 };
 
-const readSessionMemos = (): Record<string, string> => {
-  try {
-    return JSON.parse(localStorage.getItem(SESSION_MEMO_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
-};
-
-const writeSessionMemo = (subjectId: string, memo: string) => {
-  const memos = readSessionMemos();
-  memos[subjectId || 'global'] = memo;
-  localStorage.setItem(SESSION_MEMO_KEY, JSON.stringify(memos));
-};
-
 const readSessionMemoCollapsed = () => {
   return localStorage.getItem(SESSION_MEMO_COLLAPSED_KEY) === 'true';
 };
@@ -418,7 +472,7 @@ const getSubjectStudyPlanForDate = (
   targetStudyDate: string,
   today = new Date()
 ) => {
-  const { scopedPages, remainingDayPages } = getSubjectDayRemainingPages(
+  const { scopedPages, remainingDayPages, carryoverPages } = getSubjectDayRemainingPages(
     subject,
     logs,
     targetWeekday,
@@ -430,7 +484,7 @@ const getSubjectStudyPlanForDate = (
     && log.pagesRead > 0
     && log.timeSpentMinutes > 0
   ));
-  const measuredAverage = calculateRecentCompletedDayAverage(subjectLogs, remainingDayPages).averageTimePerPage;
+  const measuredAverage = calculateRecentCompletedDayAverage(subjectLogs, remainingDayPages, subject.growthPageUnit).averageTimePerPage;
   const averageTimePerPage = measuredAverage > 0
     ? measuredAverage
     : Math.max(0, subject.initialAverageTimePerPage || 0);
@@ -438,7 +492,7 @@ const getSubjectStudyPlanForDate = (
 
   return {
     scopedPages,
-    carryoverPages: 0,
+    carryoverPages,
     remainingDayPages,
     averageTimePerPage,
     speedChangePercent: calculateSpeedChangePercent(subjectLogs),
@@ -446,18 +500,21 @@ const getSubjectStudyPlanForDate = (
   };
 };
 
-const buildStudyOrderForDate = (
+export const buildStudyOrderForDate = (
   sourceSubjects: Subject[],
   sourceLogs: StudyLog[],
   targetWeekday: number,
-  targetStudyDate: string
+  targetStudyDate: string,
+  today = new Date()
 ): StudyOrderItem[] => {
-  const today = new Date();
   const todayDateKey = getLocalDateKey(today);
   return sourceSubjects
     .filter(subject => getSubjectRemainingPageCount(subject) > 0)
     .map(subject => {
       const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today);
+      if (getPlanningDayCount(getDiffDays(subject.targetDate, today)) < 7) {
+        return { subject, ...basePlan };
+      }
       const rawCarryoverPages = getPastCarryoverPages(subject, sourceLogs, targetStudyDate, todayDateKey);
       const remainingSubjectPages = getSubjectRemainingPageCount(subject);
       const remainingBeforeStudyDate = remainingSubjectPages + basePlan.scopedPages;
@@ -465,7 +522,8 @@ const buildStudyOrderForDate = (
         subject,
         remainingBeforeStudyDate,
         getDiffDays(subject.targetDate, today),
-        targetWeekday
+        targetWeekday,
+        today
       );
       const carryoverPaidPages = Math.min(rawCarryoverPages, basePlan.scopedPages);
       const carryoverPages = Math.min(
@@ -503,6 +561,20 @@ const buildStudyOrderForDate = (
 
       return a.subject.name.localeCompare(b.subject.name, 'ko');
     });
+};
+
+export const buildCompletedStudySubjectIds = (
+  sourceSubjects: Subject[], sourceLogs: StudyLog[], targetWeekday: number, targetStudyDate: string, today = new Date()
+) => {
+  const recordedPages = new Map<string, number>();
+  sourceLogs.filter(log => getLogStudyDate(log) === targetStudyDate && log.pagesRead > 0).forEach(log => {
+    recordedPages.set(log.subjectId, (recordedPages.get(log.subjectId) || 0) + getLogProgressPages(log));
+  });
+  const subjectsBeforeToday = sourceSubjects.map(subject => adjustSubjectProgress(subject, -(recordedPages.get(subject.id) || 0)));
+  const logsBeforeToday = sourceLogs.filter(log => getLogStudyDate(log) !== targetStudyDate);
+  const plannedIds = new Set(buildStudyOrderForDate(subjectsBeforeToday, logsBeforeToday, targetWeekday, targetStudyDate, today).map(item => item.subject.id));
+  const pendingIds = new Set(buildStudyOrderForDate(sourceSubjects, sourceLogs, targetWeekday, targetStudyDate, today).map(item => item.subject.id));
+  return sourceSubjects.filter(subject => recordedPages.has(subject.id) && plannedIds.has(subject.id) && !pendingIds.has(subject.id)).map(subject => subject.id);
 };
 
 const getReviewGroupSignature = (logs: StudyLog[]) => (
@@ -548,7 +620,7 @@ export const buildDueReviewGroups = (
       const reviewTime = log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : nowMs;
       const reviewSequenceKey = reviewSubjectIds.join('>') || 'basic';
       const gateCompleted = log.reviewGatePendingSteps !== undefined || log.reviewGatePendingResult !== undefined || Boolean(log.reviewSubjectId);
-      const groupId = `${parentSubjectId}:${reviewSubjectId}:${reviewSequenceKey}:${gateCompleted ? 'subjects' : 'gate'}`;
+      const groupId = `${parentSubjectId}:${reviewSubjectId}:${reviewSequenceKey}:${gateCompleted ? 'subjects' : 'gate'}${log.isRepeatReview ? `:repeat:${log.id}` : ''}`;
       const group = groups.get(groupId) || {
         id: groupId,
         parentSubjectId,
@@ -626,15 +698,16 @@ export const buildDueReviewGroups = (
 
   return rangeScopedGroups
     .map(group => {
-      const reviewPages = group.logs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
-      const subjectReviewAverage = group.reviewType === 'subject'
-        ? resolveSubjectReviewAverageTimePerPage(
+      const subjectReviewTiming = group.reviewType === 'subject'
+        ? calculateReviewSubjectTiming(
           sourceLogs,
           group.parentSubjectId,
           group.subjectId,
-          sourceSubjects
+          sourceSubjects,
+          group.logs,
+          group.reviewSubjectIds
         )
-        : 0;
+        : null;
       const basicReviewTiming = group.reviewType === 'basic'
         ? calculateBasicReviewGroupTiming(
           sourceLogs,
@@ -644,9 +717,9 @@ export const buildDueReviewGroups = (
         )
         : null;
       const estimatedMinutes = basicReviewTiming?.estimatedMinutes
-        ?? reviewPages * subjectReviewAverage;
+        ?? subjectReviewTiming?.estimatedMinutes ?? 0;
       const averageTimePerPage = basicReviewTiming?.averageTimePerPage
-        ?? (reviewPages > 0 ? estimatedMinutes / reviewPages : subjectReviewAverage);
+        ?? subjectReviewTiming?.averageTimePerPage ?? 0;
 
       return {
         ...group,
@@ -680,19 +753,25 @@ const formatPlanMinutes = (minutes: number) => {
   return rest > 0 ? `${hours}시간 ${rest}분` : `${hours}시간`;
 };
 
-const formatStudySpeed = (minutesPerPage: number) => (
-  minutesPerPage > 0 ? `${minutesPerPage.toFixed(1)}분/P` : '측정 필요'
-);
+export const buildStudyRunQueue = (reviewGroups: ReviewQueueGroup[], studyOrder: StudyOrderItem[]): StudyRunQueueItem[] => {
+  const reviewItems: StudyRunQueueItem[] = reviewGroups.map(group => ({
+    kind: 'review', key: `review-${group.id}`, reviewGroup: group,
+    isRequired: Boolean(group.subject?.isRequired), estimatedMinutes: group.estimatedMinutes, name: group.subjectName
+  }));
+  const studyItems: StudyRunQueueItem[] = studyOrder.map(item => ({
+    kind: 'study', key: `study-${item.subject.id}`, studyItem: item,
+    isRequired: Boolean(item.subject.isRequired), estimatedMinutes: item.estimatedMinutes, name: item.subject.name
+  }));
+  return [...reviewItems, ...studyItems].sort((a, b) => (
+    Number(a.kind !== 'review') - Number(b.kind !== 'review')
+    || Number(b.isRequired) - Number(a.isRequired)
+    || Number(a.estimatedMinutes <= 0) - Number(b.estimatedMinutes <= 0)
+    || a.estimatedMinutes - b.estimatedMinutes
+    || a.name.localeCompare(b.name, 'ko')
+  ));
+};
 
-const formatStudyEfficiency = (minutesPerPage: number) => (
-  minutesPerPage > 0 ? `${Math.round(60 / minutesPerPage)}P/h` : '-'
-);
-
-const formatSpeedChangePercent = (percent: number) => (
-  `${percent >= 0 ? '+' : ''}${Math.round(percent)}%`
-);
-
-export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs, activeWeekday, activeStudyDate, onActiveWeekdayChange, detailSubjectId, onDetailSubjectChange, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo, onFinishReviewGate, onClearReviewGateRetries }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday, activeStudyDate, detailSubjectId, onDetailSubjectChange, renderSummary, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo, onFinishReviewGate, onClearReviewGateRetries, sessionMemoOverrides }) => {
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(getAllSubjectReviewIds))
   ), [subjects]);
@@ -707,16 +786,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     )),
     [followUpSourceSubjectIdSet, reviewSubjectIdSet, subjects]
   );
-  const measurableSubjects = ordinarySubjects.filter(subject => getSubjectRemainingPageCount(subject) > 0);
   const [step, setStep] = useState<Step>('idle');
   const [subjectId, setSubjectId] = useState('');
-  const [folderPathIds, setFolderPathIds] = useState<string[]>([]);
   const [activeReviewRun, setActiveReviewRun] = useState<ActiveReviewRun | null>(null);
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
   const isSubjectReviewDisabled = selectedSubject?.reviewEnabled === false;
-  const isActiveReviewRunSubject = Boolean(
-    activeReviewRun && subjectId && activeReviewRun.reviewSubjectIds.includes(subjectId)
-  );
   const activeReviewRunLogs = activeReviewRun
     ? logs.filter(log => activeReviewRun.logIds.includes(log.id))
     : [];
@@ -724,9 +798,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     .map(log => ({
       id: log.id,
       range: formatReviewRange(log),
-      memo: (log.reviewMemo || '').trim()
+      memo: log.reviewMemo || '',
+      document: log.reviewMemoDocument
     }))
-    .filter(item => item.memo.length > 0);
+    .filter(item => item.memo.trim().length > 0);
   const nextReviewRunSubjectId = activeReviewRun
     ? activeReviewRun.reviewSubjectIds[activeReviewRun.currentIndex + 1] || null
     : null;
@@ -736,20 +811,25 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const [startPage, setStartPage] = useState('');
   const [readAmount, setReadAmount] = useState('');
+  const [solvedPageCount, setSolvedPageCount] = useState('');
   const [initialReadAmount, setInitialReadAmount] = useState('');
   const [skipReview, setSkipReview] = useState(false);
   const [minutes, setMinutes] = useState(0);
-  const [plannedPageCount, setPlannedPageCount] = useState(0);
   const [timerMode, setTimerMode] = useState<TimerMode>('remainingPages');
   const [seconds, setSeconds] = useState(0);
+  const [studySeconds, setStudySeconds] = useState(0);
+  const [organizationSeconds, setOrganizationSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [isConfirmingCancel, setIsConfirmingCancel] = useState(false);
   const [sessionMemo, setSessionMemo] = useState('');
   const [reviewMemo, setReviewMemo] = useState('');
+  const [reviewMemoDocument, setReviewMemoDocument] = useState<ReviewMemoDocument>();
+  const [colorMemoColons, setColorMemoColons] = useState(() => localStorage.getItem('swp_memo_colon_colors') !== 'false');
   const [isReviewNotePanelOpen, setIsReviewNotePanelOpen] = useState(false);
   const [isReviewCondensePanelOpen, setIsReviewCondensePanelOpen] = useState(false);
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
-  const [isManualPickerOpen, setIsManualPickerOpen] = useState(false);
+  const [selectedTaskKey, setSelectedTaskKey] = useState('');
+  const [inspectedRecordDetailId, setInspectedRecordDetailId] = useState('');
   const [selectedSessionTimerId, setSelectedSessionTimerId] = useState('none');
   const [attackCompletedPages, setAttackCompletedPages] = useState(0);
   const [pageElapsedSeconds, setPageElapsedSeconds] = useState(0);
@@ -767,13 +847,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [isPreSessionReviewRunning, setIsPreSessionReviewRunning] = useState(false);
   const [preSessionReviewSubjectName, setPreSessionReviewSubjectName] = useState('');
   const [preSessionReviewMode, setPreSessionReviewMode] = useState<PreSessionReviewMode>('before-study');
-  const [gateWrongQuestionIds, setGateWrongQuestionIds] = useState<Record<string, boolean>>({});
-  const [gateQuestionQueue, setGateQuestionQueue] = useState<string[]>([]);
-  const [gateRoundWrongQuestionIds, setGateRoundWrongQuestionIds] = useState<string[]>([]);
-  const [gateRoundQuestionCount, setGateRoundQuestionCount] = useState(0);
-  const [gateRoundAnsweredCount, setGateRoundAnsweredCount] = useState(0);
-  const [gateRoundNumber, setGateRoundNumber] = useState(1);
-  const [isGateQueueInitialized, setIsGateQueueInitialized] = useState(false);
+  const [gatePractice, setGatePractice] = useState<ReviewPractice | null>(null);
+  const gateQuestionQueue = gatePractice?.queue || [];
+  const gateRoundQuestionCount = gatePractice?.roundSize || 0;
+  const gateRoundAnsweredCount = gatePractice?.roundAnswered || 0;
+  const gateRoundNumber = gatePractice?.round || 1;
   const gateStartedAtRef = useRef(0);
   const [isGateAnswerRevealed, setIsGateAnswerRevealed] = useState(false);
   const [resumeStudyTimerAfterReview, setResumeStudyTimerAfterReview] = useState(false);
@@ -781,7 +859,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const [handledReviewLogIds, setHandledReviewLogIds] = useState<string[]>([]);
   const [, setPostSaveNextSubjectId] = useState<string | null>(null);
   const [pendingImmediateStartSubjectId, setPendingImmediateStartSubjectId] = useState<string | null>(null);
-  const [selectedReviewSubjectId, setSelectedReviewSubjectId] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingAutoAdvanceLogId, setPendingAutoAdvanceLogId] = useState<string | null>(null);
 
@@ -807,29 +884,32 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         log,
         memo,
         range: formatReviewRange(log),
-        parsed: parseReviewGateMemo(memo)
+        parsed: parseReviewGateMemo(memo),
+        criterion: createSessionMemoRecord(sessionMemoOverrides?.[log.subjectId] ?? readSessionMemos()[log.subjectId] ?? '').classificationCriterion
       };
     }).filter(item => item.memo.trim().length > 0)
-  ), [preSessionReviewDrafts, preSessionReviewLogs]);
+  ), [preSessionReviewDrafts, preSessionReviewLogs, sessionMemoOverrides, sessionMemo]);
 
   const gateReviewQuestions = useMemo<GateReviewQuestion[]>(() => (
     preSessionGateMemoItems.flatMap((item): GateReviewQuestion[] => {
-      const questionKeys = getReviewGateQuestionKeys(item.memo);
+      const questionKeys = item.parsed.questions.map(question => question.key);
       const pendingRetryKeys = preSessionReviewGroup?.isGateRetry
-        ? new Set(item.log.reviewGateRetry?.questionKeys || questionKeys)
-        : new Set(getDueReviewGateQuestionKeys(item.log, gateStartedAtRef.current));
+        ? new Set(getReviewGateRetryKeys(item.log))
+        : new Set(getDueReviewGateQuestionKeys(item.log, gateStartedAtRef.current, true));
       return questionKeys
         .filter(questionKey => !pendingRetryKeys || pendingRetryKeys.has(questionKey))
         .map(questionKey => {
-          const answerIndex = questionKey.startsWith('answer:')
-            ? Number(questionKey.slice('answer:'.length))
-            : undefined;
+          const question = item.parsed.questions.find(question => question.key === questionKey)!;
           return {
             id: `${item.log.id}:${questionKey}`,
             questionKey,
             logId: item.log.id,
-            answerIndex: Number.isInteger(answerIndex) ? answerIndex : undefined,
-            range: item.range
+            range: item.range,
+            level: question.level,
+            priority: question.priority,
+            recallUnits: question.recallUnits,
+            providedUnits: question.providedUnits,
+            difficulty: question.difficulty
           };
         });
     })
@@ -837,8 +917,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const gateReviewQuestionSignature = gateReviewQuestions.map(question => question.id).join('|');
   const currentGateQuestion = gateReviewQuestions.find(question => question.id === gateQuestionQueue[0]);
-  const isGateReviewComplete = isGateQueueInitialized && gateQuestionQueue.length === 0;
-  const gateWrongCount = gateReviewQuestions.filter(question => gateWrongQuestionIds[question.id]).length;
+  const isGateReviewComplete = gatePractice !== null && gateQuestionQueue.length === 0;
+  const gateWrongCount = Object.values(gatePractice?.wrongCounts || {}).filter(count => count > 0).length;
   const currentGateMemoItem = currentGateQuestion
     ? preSessionGateMemoItems.find(item => item.log.id === currentGateQuestion.logId)
     : undefined;
@@ -847,8 +927,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     () => buildStudyOrderForDate(ordinarySubjects, logs, activeWeekday, activeStudyDate),
     [activeStudyDate, activeWeekday, logs, ordinarySubjects]
   );
-
-  const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
 
   const rawDueReviewGroups = useMemo(
     () => buildDueReviewGroups(logs, subjects, nowMs),
@@ -865,104 +943,33 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     );
   }, [handledReviewLogIds, logs, nowMs, subjects]);
 
-  const selectedReviewGroup = selectedReviewSubjectId
-    ? dueReviewGroups.find(group => group.id === selectedReviewSubjectId)
-    : undefined;
-
-  const todayStudyRankMap = useMemo(() => (
-    new Map(todayStudyOrder.map((item, index) => [item.subject.id, index]))
-  ), [todayStudyOrder]);
-
   const todayStudyPlanMap = useMemo(() => (
     new Map(todayStudyOrder.map(item => [item.subject.id, item]))
   ), [todayStudyOrder]);
 
-  const runQueueItems = useMemo<StudyRunQueueItem[]>(() => {
-    const reviewItems: StudyRunQueueItem[] = dueReviewGroups.map(group => ({
-      kind: 'review',
-      key: `review-${group.id}`,
-      reviewGroup: group,
-      isRequired: Boolean(group.subject?.isRequired),
-      estimatedMinutes: group.estimatedMinutes,
-      name: group.subjectName
-    }));
-
-    const studyItems: StudyRunQueueItem[] = todayStudyOrder.map(item => ({
-      kind: 'study',
-      key: `study-${item.subject.id}`,
-      studyItem: item,
-      isRequired: Boolean(item.subject.isRequired),
-      estimatedMinutes: item.estimatedMinutes,
-      name: item.subject.name
-    }));
-
-    return [...reviewItems, ...studyItems].sort((a, b) => {
-      const reviewDiff = Number(a.kind !== 'review') - Number(b.kind !== 'review');
-      if (reviewDiff !== 0) return reviewDiff;
-
-      const requiredDiff = Number(b.isRequired) - Number(a.isRequired);
-      if (requiredDiff !== 0) return requiredDiff;
-
-      const knownTimeDiff = Number(a.estimatedMinutes <= 0) - Number(b.estimatedMinutes <= 0);
-      if (knownTimeDiff !== 0) return knownTimeDiff;
-
-      const timeDiff = a.estimatedMinutes - b.estimatedMinutes;
-      if (timeDiff !== 0) return timeDiff;
-
-      return a.name.localeCompare(b.name, 'ko');
-    });
-  }, [dueReviewGroups, todayStudyOrder]);
-
-  const runQueueTotalMinutes = useMemo(
-    () => runQueueItems.reduce((sum, item) => sum + item.estimatedMinutes, 0),
-    [runQueueItems]
+  const runQueueItems = useMemo(
+    () => buildStudyRunQueue(dueReviewGroups, todayStudyOrder),
+    [dueReviewGroups, todayStudyOrder]
   );
-
-  const runQueueReviewCount = runQueueItems.filter(item => item.kind === 'review').length;
-  const runQueueStudyCount = runQueueItems.filter(item => item.kind === 'study').length;
-
-  const orderedMeasurableSubjects = useMemo(() => {
-    const activeWeekdaySubjects = measurableSubjects.filter(subject => (
-      normalizeWeekdays(subject.scheduledWeekdays).includes(activeWeekday)
-    ));
-
-    return [...activeWeekdaySubjects].sort((a, b) => {
-      const rankA = todayStudyRankMap.get(a.id);
-      const rankB = todayStudyRankMap.get(b.id);
-      const hasRankA = rankA !== undefined;
-      const hasRankB = rankB !== undefined;
-
-      if (hasRankA && hasRankB) return rankA - rankB;
-      if (hasRankA) return -1;
-      if (hasRankB) return 1;
-
-      return a.name.localeCompare(b.name, 'ko');
-    });
-  }, [activeWeekday, measurableSubjects, todayStudyRankMap]);
-
-  const recommendedTodayStudy = runQueueItems.find(item => item.kind === 'study')?.studyItem || null;
-  const getFolderPathForSubject = (subject: Subject) => {
-    const firstTagId = subject.tagIds?.[0];
-    const path: string[] = [];
-    const visited = new Set<string>();
-    let currentFolder = firstTagId
-      ? tagDefinitions.find(folder => folder.id === firstTagId)
-      : undefined;
-
-    while (currentFolder && !visited.has(currentFolder.id)) {
-      visited.add(currentFolder.id);
-      path.unshift(currentFolder.id);
-      currentFolder = currentFolder.parentId
-        ? tagDefinitions.find(folder => folder.id === currentFolder?.parentId)
-        : undefined;
-    }
-
-    return path;
-  };
+  const selectedRunQueueItem = getSelectedRunQueueItem(runQueueItems, selectedTaskKey);
+  const idlePomodoroPlan: PomodoroPlan | null = selectedRunQueueItem ? (() => {
+    const taskSubject = selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.subject : selectedRunQueueItem.reviewGroup.subject;
+    if (!taskSubject) return null;
+    const repeatLog = selectedRunQueueItem.kind === 'review' ? selectedRunQueueItem.reviewGroup.logs.find(log => log.isRepeatReview) : undefined;
+    return { subjectId: taskSubject.id, minutes: POMODORO_MINUTES,
+      remainingTaskPages: selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.remainingDayPages
+        : selectedRunQueueItem.reviewGroup.averageTimePerPage > 0
+          ? selectedRunQueueItem.reviewGroup.estimatedMinutes / selectedRunQueueItem.reviewGroup.averageTimePerPage
+          : selectedRunQueueItem.reviewGroup.logs.reduce((sum, log) => sum + log.pagesRead, 0),
+      pages: getPomodoroPageTarget(selectedRunQueueItem.kind === 'study'
+        ? selectedRunQueueItem.studyItem.averageTimePerPage : selectedRunQueueItem.reviewGroup.averageTimePerPage,
+        repeatLog ? getRepeatedReviewRange(repeatLog, taskSubject).remainingPages : getMeasurementRemainingPages(taskSubject)) };
+  })() : null;
+  const completedStudySubjectIds = useMemo(() => buildCompletedStudySubjectIds(
+    ordinarySubjects, logs, activeWeekday, activeStudyDate
+  ), [ordinarySubjects, logs, activeWeekday, activeStudyDate]);
 
   const selectSubjectForMeasurement = (subject: Subject) => {
-    setSelectedReviewSubjectId('');
-    setFolderPathIds(getFolderPathForSubject(subject));
     setSubjectId(subject.id);
   };
 
@@ -971,9 +978,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     [logs, subjectId]
   );
 
-  const activeSubjectStage = selectedSubject ? getActiveSubjectStage(selectedSubject) : null;
+  const activeSubjectStage = selectedSubject ? (activeReviewRun?.stageId
+    ? getSubjectStages(selectedSubject).find(stage => stage.id === activeReviewRun.stageId) || getActiveSubjectStage(selectedSubject)
+    : getActiveSubjectStage(selectedSubject)) : null;
   const aggregateRemainingSubjectPages = selectedSubject ? getSubjectRemainingPageCount(selectedSubject) : 0;
-  const remainingSubjectPages = activeSubjectStage?.remainingPages || 0;
+  const reviewStartPage = activeReviewRun?.startPage ?? (selectedSubject ? getReviewStartPage(selectedSubject) || 1 : 1);
+  const remainingSubjectPages = activeReviewRun
+    ? Math.max(0, (activeSubjectStage?.endPage || selectedSubject?.totalPages || 0) - reviewStartPage + 1)
+    : activeSubjectStage?.remainingPages || 0;
   const activeDaySubjectPages = useMemo(
     () => logs
       .filter(log => log.subjectId === subjectId && getLogStudyDate(log) === activeStudyDate)
@@ -989,48 +1001,51 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     const today = new Date();
     const remainingBeforeActiveDay = aggregateRemainingSubjectPages + activeDaySubjectPages;
     const diffDays = getDiffDays(selectedSubject.targetDate, today);
-    const dayTarget = getSubjectDayTarget(selectedSubject, remainingBeforeActiveDay, diffDays, activeWeekday);
+    const dayTarget = getSubjectDayTarget(selectedSubject, remainingBeforeActiveDay, diffDays, activeWeekday, today);
     return Math.min(aggregateRemainingSubjectPages, Math.max(0, dayTarget - activeDaySubjectPages));
   }, [activeDaySubjectPages, activeWeekday, aggregateRemainingSubjectPages, selectedSubject, todayStudyPlanMap]);
 
   const overallAverage = useMemo(() => {
     const measuredAverage = calculateRecentCompletedDayAverage(
       selectedSubjectLogs,
-      recommendedDailyPages
+      recommendedDailyPages, selectedSubject?.growthPageUnit
     ).averageTimePerPage;
     return measuredAverage > 0
       ? measuredAverage
       : Math.max(0, selectedSubject?.initialAverageTimePerPage || 0);
   }, [selectedSubject, selectedSubjectLogs, recommendedDailyPages]);
 
-  const activeReviewAverage = useMemo(() => {
-    if (!activeReviewRun || !selectedSubject) return 0;
-    return resolveSubjectReviewAverageTimePerPage(
+  const activeReviewTiming = useMemo(() => {
+    if (!activeReviewRun || !selectedSubject) return null;
+    return calculateReviewSubjectTiming(
       logs,
       activeReviewRun.parentSubjectId,
       selectedSubject.id,
-      subjects
+      subjects,
+      logs.filter(log => activeReviewRun.logIds.includes(log.id)),
+      activeReviewRun.reviewSubjectIds
     );
   }, [activeReviewRun, logs, selectedSubject, subjects]);
 
-  const averageTimePerPage = activeReviewRun ? activeReviewAverage : overallAverage;
-
-  const averageSecondsPerPage = averageTimePerPage > 0 ? Math.max(1, Math.round(averageTimePerPage * 60)) : 0;
-  const plannedPages = Math.max(1, plannedPageCount);
+  const averageTimePerPage = activeReviewRun ? activeReviewTiming?.averageTimePerPage || 0 : overallAverage;
+  const activeReviewAttackTiming = useMemo(() => activeReviewRun && selectedSubject
+    ? calculateReviewSubjectTiming(logs, activeReviewRun.parentSubjectId, selectedSubject.id, subjects,
+      logs.filter(log => activeReviewRun.logIds.includes(log.id)), activeReviewRun.reviewSubjectIds, true)
+    : null, [activeReviewRun, logs, selectedSubject, subjects]);
+  const timeAttackAverage = useMemo(() => activeReviewRun ? activeReviewAttackTiming?.averageTimePerPage || 0
+    : selectedSubjectLogs.length > 0 ? calculateTimeAttackAverage(selectedSubjectLogs, selectedSubject?.growthPageUnit)
+      : Math.max(0, selectedSubject?.initialAverageTimePerPage || 0), [activeReviewRun, activeReviewAttackTiming, selectedSubjectLogs, selectedSubject]);
+  const averageSecondsPerPage = timeAttackAverage > 0 ? Math.max(1, Math.round(timeAttackAverage * 60)) : 0;
+  const pomodoroPageTarget = getPomodoroPageTarget(averageTimePerPage, remainingSubjectPages);
   const timeTargetPages = attackCompletedPages;
-  const progressBasePages = activeSubjectStage?.currentPage || 1;
+  const progressBasePages = activeReviewRun ? reviewStartPage : activeSubjectStage?.currentPage || 1;
   const progressCurrentPages = activeSubjectStage
     ? Math.min(activeSubjectStage.endPage, progressBasePages + timeTargetPages)
     : progressBasePages + timeTargetPages;
-  const progressTargetPages = activeSubjectStage
-    ? Math.min(activeSubjectStage.endPage, progressBasePages + plannedPages)
-    : progressBasePages + plannedPages;
-  const expectedReadAmount = averageTimePerPage > 0
-    ? Math.min(remainingSubjectPages, Math.max(1, timeTargetPages))
-    : Math.min(remainingSubjectPages, plannedPages);
-  const currentReadAmount = startPage && readAmount
-    ? calculateAmountFromEndPage(parseFloat(startPage), parseFloat(readAmount))
-    : 0;
+  const goalEndPage = getMeasurementGoalEndPage(progressBasePages, pomodoroPageTarget) || progressBasePages;
+  const progressTargetPages = activeSubjectStage ? Math.min(activeSubjectStage.endPage, goalEndPage) : goalEndPage;
+  const expectedReadAmount = Math.min(remainingSubjectPages, Math.max(1, timeTargetPages));
+  const currentReadAmount = Number(solvedPageCount) || 0;
   const hasPageProgress = currentReadAmount > 0;
   const hasChangedEndPage = readAmount.trim() !== ''
     && initialReadAmount.trim() !== ''
@@ -1130,11 +1145,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isTimerRunning]);
+  }, [isTimerRunning, step]);
 
   useEffect(() => {
-    setMinutes(parseFloat((seconds / 60).toFixed(2)));
-  }, [seconds]);
+    const times = step === 'organize' ? getSessionTimes(studySeconds, seconds)
+      : step === 'pages' ? getSessionTimes(studySeconds, organizationSeconds)
+      : getSessionTimes(seconds, organizationSeconds);
+    setMinutes(times.timeSpentMinutes);
+  }, [seconds, step, studySeconds, organizationSeconds]);
 
   useEffect(() => {
     if (step !== 'timer') {
@@ -1222,14 +1240,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [activePageAttackTargetSeconds, attackCompletedPages, isTimerRunning, pageAttackRemainingSeconds, step, timerMode]);
 
   useEffect(() => {
-    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0) return;
+    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0 || isGateReviewComplete) return;
 
     const interval = window.setInterval(() => {
       setPreSessionReviewSeconds(prev => prev + 1);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isPreSessionReviewRunning, preSessionReviewLogs.length]);
+  }, [isPreSessionReviewRunning, preSessionReviewLogs.length, isGateReviewComplete]);
 
   useEffect(() => {
     if (!currentGateQuestion || !gateQuestionCardRef.current) return;
@@ -1240,15 +1258,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [currentGateQuestion?.id]);
 
   useEffect(() => {
-    if (preSessionReviewLogs.length === 0 || isGateQueueInitialized) return;
-    const questionIds = gateReviewQuestions.map(question => question.id);
-    setGateQuestionQueue(questionIds);
-    setGateRoundWrongQuestionIds([]);
-    setGateRoundQuestionCount(questionIds.length);
-    setGateRoundAnsweredCount(0);
-    setGateRoundNumber(1);
-    setIsGateQueueInitialized(true);
-  }, [gateReviewQuestionSignature, gateReviewQuestions, isGateQueueInitialized, preSessionReviewLogs.length]);
+    if (preSessionReviewLogs.length === 0 || gatePractice) return;
+    const unlocked = Object.fromEntries(preSessionReviewLogs.map(log => [log.id,
+      preSessionReviewGroup?.isGateRetry
+        ? Math.max(log.reviewGateLevel || 1, ...gateReviewQuestions.filter(question => question.logId === log.id).map(question => question.level))
+        : log.reviewGateLevel || 1
+    ]));
+    setGatePractice(startReviewPractice(gateReviewQuestions, unlocked));
+  }, [gateReviewQuestionSignature, gateReviewQuestions, gatePractice, preSessionReviewLogs, preSessionReviewGroup?.isGateRetry]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -1256,11 +1273,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     const isLinkedReviewSubject = reviewSubjectIdSet.has(subjectId);
     setSkipReview(savedPreference ?? (isSubjectReviewDisabled || isLinkedReviewSubject));
   }, [subjectId, isSubjectReviewDisabled, reviewSubjectIdSet]);
-
-  useEffect(() => {
-    if (activeReviewRun) return;
-    setPlannedPageCount(Math.max(1, recommendedDailyPages));
-  }, [activeReviewRun, subjectId, recommendedDailyPages]);
 
   useEffect(() => {
     if (!subjectId) {
@@ -1275,33 +1287,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [subjectId]);
 
   useEffect(() => {
-    if (
-      subjectId
-      && !isActiveReviewRunSubject
-      && !orderedMeasurableSubjects.some(subject => subject.id === subjectId)
-    ) {
-      setSubjectId('');
-    }
-  }, [isActiveReviewRunSubject, orderedMeasurableSubjects, subjectId]);
-
-  useEffect(() => {
-    if (step !== 'idle' || !subjectId) return;
-    if (activeReviewRun || pendingImmediateStartSubjectId) return;
-
-    const stillHasScheduledWork = todayStudyOrder.some(item => item.subject.id === subjectId);
-    if (stillHasScheduledWork) return;
-
-    const nextStudy = recommendedTodayStudy;
-    if (nextStudy) {
-      selectSubjectForMeasurement(nextStudy.subject);
-      return;
-    }
-
-    setFolderPathIds([]);
-    setSubjectId('');
-  }, [activeReviewRun, pendingImmediateStartSubjectId, step, subjectId, todayStudyOrder, recommendedTodayStudy, tagDefinitions]);
-
-  useEffect(() => {
     if (step !== 'idle') return;
     setPreSessionReviewLogs([]);
     setPreSessionReviewDrafts({});
@@ -1314,101 +1299,31 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setDismissedReviewSignature('');
     setPostSaveNextSubjectId(null);
     setPendingImmediateStartSubjectId(null);
-    setSelectedReviewSubjectId('');
-    setFolderPathIds([]);
+    setSelectedTaskKey('');
+    setInspectedRecordDetailId('');
     setSubjectId('');
     setHandledReviewLogIds([]);
     setPendingAutoAdvanceLogId(null);
   }, [activeStudyDate, activeWeekday]);
 
   useEffect(() => {
-    if (step !== 'idle' || subjectId || dueReviewGroups.length > 0) return;
-
-    const isWaitingForSavedLog = pendingAutoAdvanceLogId
-      ? !logs.some(log => log.id === pendingAutoAdvanceLogId)
-      : false;
-
-    if (isWaitingForSavedLog) return;
-
-    if (!recommendedTodayStudy) {
-      if (pendingAutoAdvanceLogId) setPendingAutoAdvanceLogId(null);
-      return;
-    }
-
+    if (step !== 'idle' || pendingImmediateStartSubjectId || preSessionReviewLogs.length > 0) return;
+    if (pendingAutoAdvanceLogId && !logs.some(log => log.id === pendingAutoAdvanceLogId)) return;
     if (pendingAutoAdvanceLogId) setPendingAutoAdvanceLogId(null);
-    selectSubjectForMeasurement(recommendedTodayStudy.subject);
-  }, [dueReviewGroups.length, logs, pendingAutoAdvanceLogId, recommendedTodayStudy, step, subjectId, tagDefinitions]);
 
-  useEffect(() => {
-    if (folderPathIds.some(folderId => !tagDefinitions.some(folder => folder.id === folderId))) {
-      setFolderPathIds([]);
-      setSubjectId('');
+    const nextDetailKey = selectedRunQueueItem ? getRunQueueDetailKey(selectedRunQueueItem) : '';
+    if (selectedRunQueueItem && selectedTaskKey !== selectedRunQueueItem.key) {
+      setSelectedTaskKey(selectedRunQueueItem.key);
     }
-  }, [folderPathIds, tagDefinitions]);
-
-  const hasMeasurableSubjectInFolder = (folderId: string): boolean => {
-    const childFolderIds = tagDefinitions
-      .filter(folder => folder.parentId === folderId)
-      .map(folder => folder.id);
-
-    return orderedMeasurableSubjects.some(subject => subject.tagIds?.includes(folderId))
-      || childFolderIds.some(hasMeasurableSubjectInFolder);
-  };
-
-  const getSelectableFolders = (parentId?: string) => tagDefinitions
-    .filter(folder => folder.parentId === parentId)
-    .filter(folder => hasMeasurableSubjectInFolder(folder.id));
-
-  const getSelectableSubjects = (parentId?: string) => orderedMeasurableSubjects.filter(subject => (
-    parentId
-      ? subject.tagIds?.includes(parentId)
-      : !subject.tagIds || subject.tagIds.length === 0
-  ));
-
-  const selectionLevels = Array.from({ length: folderPathIds.length + 1 }, (_, index) => {
-    const parentId = index === 0 ? undefined : folderPathIds[index - 1];
-    return {
-      index,
-      parentId,
-      folders: getSelectableFolders(parentId),
-      subjects: getSelectableSubjects(parentId)
-    };
-  }).filter(level => level.index === 0 || level.folders.length > 0 || level.subjects.length > 0);
-
-  const handleFolderSelectionChange = (levelIndex: number, value: string) => {
-    const basePath = folderPathIds.slice(0, levelIndex);
-    setSubjectId('');
-    setSelectedReviewSubjectId('');
-
-    if (!value) {
-      setFolderPathIds(basePath);
-      return;
-    }
-
-    const [kind, ...idParts] = value.split(':');
-    const id = idParts.join(':');
-    if (kind === 'review') {
-      setFolderPathIds([]);
-      setSubjectId('');
-      setSelectedReviewSubjectId(id);
-      return;
-    }
-
-    if (kind === 'folder') {
-      setFolderPathIds([...basePath, id]);
-      return;
-    }
-
-    setFolderPathIds(basePath);
-    setSubjectId(id);
-  };
-
-  const formatTime = (totalSeconds: number) => {
-    const hrs = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    return `${hrs > 0 ? hrs + ':' : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+    const hasCompletedRecord = logs.some(log => (
+      ((completedStudySubjectIds.includes(detailSubjectId) || log.pomodoroSession) && log.subjectId === detailSubjectId && getLogStudyDate(log) === activeStudyDate && log.pagesRead > 0)
+      || (detailSubjectId === `basic-review:${log.subjectId}` && log.basicReviewTimeRecords?.some(record => getLocalDateKey(new Date(record.timestamp)) === activeStudyDate))
+      || log.reviewSubjectTimeRecords?.some(record => record.subjectId === detailSubjectId && record.completed && getLocalDateKey(new Date(record.timestamp)) === activeStudyDate)
+    ));
+    if (hasCompletedRecord && inspectedRecordDetailId === detailSubjectId) return;
+    if (detailSubjectId !== nextDetailKey) onDetailSubjectChange(nextDetailKey);
+  }, [detailSubjectId, logs, onDetailSubjectChange, pendingAutoAdvanceLogId, pendingImmediateStartSubjectId,
+      preSessionReviewLogs.length, selectedRunQueueItem, selectedTaskKey, completedStudySubjectIds, activeStudyDate, inspectedRecordDetailId, step]);
 
   const resetPageAttackTimer = (targetSeconds = 0) => {
     setPageAttackTargetSeconds(targetSeconds > 0 ? targetSeconds : 0);
@@ -1448,6 +1363,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const resetAll = () => {
     setStep('idle');
     setSeconds(0);
+    setStudySeconds(0);
+    setOrganizationSeconds(0);
     setAttackCompletedPages(0);
     setPageElapsedSeconds(0);
     setPageAttackTargetSeconds(0);
@@ -1466,8 +1383,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setIsTimerRunning(false);
     setStartPage('');
     setReadAmount('');
+    setSolvedPageCount('');
     setInitialReadAmount('');
     setReviewMemo('');
+    setReviewMemoDocument(undefined);
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
     halfwaySoundPagesRef.current.clear();
@@ -1499,6 +1418,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const handleReadAmountChange = (value: string) => {
     setReadAmount(value);
+    const amount = value.trim() && startPage.trim() ? getAutoSolvedPageCount(Number(startPage), Number(value)) : null;
+    setSolvedPageCount(amount !== null ? String(amount) : '');
   };
 
   const startMeasurementNow = () => {
@@ -1506,6 +1427,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     markerSoundPagesRef.current.clear();
     halfwaySoundPagesRef.current.clear();
     pageTurnSoundPagesRef.current.clear();
+    setStudySeconds(0);
+    setOrganizationSeconds(0);
     setAttackCompletedPages(0);
     setPageAttackTargetSeconds(averageSecondsPerPage);
     setPageElapsedSeconds(0);
@@ -1526,13 +1449,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const clearPreSessionReview = () => {
-    setGateWrongQuestionIds({});
-    setGateQuestionQueue([]);
-    setGateRoundWrongQuestionIds([]);
-    setGateRoundQuestionCount(0);
-    setGateRoundAnsweredCount(0);
-    setGateRoundNumber(1);
-    setIsGateQueueInitialized(false);
+    setGatePractice(null);
     setPreSessionReviewLogs([]);
     setPreSessionReviewDrafts({});
     setPreSessionReviewSeconds(0);
@@ -1547,13 +1464,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const openPreSessionReview = (group: ReviewQueueGroup, mode: PreSessionReviewMode) => {
     gateStartedAtRef.current = Date.now();
-    setGateWrongQuestionIds({});
-    setGateQuestionQueue([]);
-    setGateRoundWrongQuestionIds([]);
-    setGateRoundQuestionCount(0);
-    setGateRoundAnsweredCount(0);
-    setGateRoundNumber(1);
-    setIsGateQueueInitialized(false);
+    setGatePractice(null);
     setPreSessionReviewDrafts(
       group.logs.reduce<Record<string, string>>((drafts, log) => {
         drafts[log.id] = log.reviewMemo || '';
@@ -1577,8 +1488,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
   const startStudyOrderItem = (item: StudyOrderItem) => {
     selectSubjectForMeasurement(item.subject);
-    const activeStage = getActiveSubjectStage(item.subject);
-    setPlannedPageCount(Math.max(1, Math.min(activeStage?.remainingPages || 1, item.remainingDayPages || 1)));
     setPostSaveNextSubjectId(null);
     setPendingImmediateStartSubjectId(item.subject.id);
   };
@@ -1586,7 +1495,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const startReviewSubjectMeasurementRun = (group: ReviewQueueGroup) => {
     const parentSubjectId = group.parentSubjectId || group.logs[0]?.subjectId || group.subjectId;
     const parentSubject = subjects.find(subject => subject.id === parentSubjectId);
-    const reviewSubjectIds = getAvailableReviewSubjectIds(group.reviewSubjectIds, parentSubject, subjects);
+    const repeatedLog = group.logs.find(log => log.isRepeatReview);
+    const reviewSubjectIds = repeatedLog ? [repeatedLog.subjectId] : getAvailableReviewSubjectIds(group.reviewSubjectIds, parentSubject, subjects);
 
     if (reviewSubjectIds.length === 0) {
       return;
@@ -1603,10 +1513,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       parentSubjectId,
       reviewSubjectIds,
       currentIndex,
-      sourceName: parentSubject?.name || group.subjectName
+      sourceName: parentSubject?.name || group.subjectName,
+      startPage: repeatedLog ? getRepeatedReviewRange(repeatedLog, currentReviewSubject).startPage : undefined,
+      stageId: repeatedLog ? getRepeatedReviewRange(repeatedLog, currentReviewSubject).stageId : undefined
     });
     selectSubjectForMeasurement(currentReviewSubject);
-    setPlannedPageCount(Math.max(1, group.logs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0)));
     setPostSaveNextSubjectId(null);
     setPendingImmediateStartSubjectId(currentReviewSubject.id);
   };
@@ -1615,7 +1526,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (!group.isGateRetry && group.reviewType === 'subject' && group.logs.every(log => (
       log.reviewGatePendingSteps !== undefined || log.reviewGatePendingResult !== undefined || Boolean(log.reviewSubjectId)
     ))) {
-      setSelectedReviewSubjectId('');
       startReviewSubjectMeasurementRun(group);
       return;
     }
@@ -1623,9 +1533,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   };
 
   const startReviewGroup = (group: ReviewQueueGroup) => {
-    setSelectedReviewSubjectId(group.id);
     setSubjectId('');
-    setFolderPathIds([]);
     setPostSaveNextSubjectId(null);
     startReviewMeasurementRun(group);
   };
@@ -1647,79 +1555,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     onUpdateSubjects(updatedSubjects);
   };
 
-  const handleStartMeasurement = () => {
-    if (selectedReviewGroup) {
-      startReviewMeasurementRun(selectedReviewGroup);
-      return;
-    }
-
-    if (!subjectId) {
-      alert('과목을 먼저 선택해주세요.');
-      return;
-    }
-
-    startMeasurementNow();
-  };
-
   const handleGateReviewResult = (result: GateReviewResult) => {
     if (!currentGateQuestion || !isGateAnswerRevealed) return;
-    const currentQuestionId = currentGateQuestion.id;
-    const remainingQuestionIds = gateQuestionQueue.slice(1);
-    const nextWrongQuestionIds = result === 'wrong'
-      ? [...gateRoundWrongQuestionIds, currentQuestionId]
-      : gateRoundWrongQuestionIds;
-
-    if (result === 'wrong') {
-      setGateWrongQuestionIds(prev => ({ ...prev, [currentQuestionId]: true }));
-    }
-
-    if (remainingQuestionIds.length > 0) {
-      setGateQuestionQueue(remainingQuestionIds);
-      setGateRoundWrongQuestionIds(nextWrongQuestionIds);
-      setGateRoundAnsweredCount(prev => prev + 1);
-    } else if (nextWrongQuestionIds.length > 0) {
-      setGateQuestionQueue(nextWrongQuestionIds);
-      setGateRoundWrongQuestionIds([]);
-      setGateRoundQuestionCount(nextWrongQuestionIds.length);
-      setGateRoundAnsweredCount(0);
-      setGateRoundNumber(prev => prev + 1);
-    } else {
-      setGateQuestionQueue([]);
-      setGateRoundWrongQuestionIds([]);
-      setGateRoundAnsweredCount(gateRoundQuestionCount);
-    }
+    setGatePractice(previous => previous ? gradeReviewPractice(previous, gateReviewQuestions, result === 'correct') : previous);
     setIsGateAnswerRevealed(false);
   };
 
   const renderCurrentGatePrompt = () => {
     if (!currentGateQuestion || !currentGateMemoItem) return null;
 
-    if (currentGateQuestion.questionKey === 'note') {
-      if (isGateAnswerRevealed) return currentGateMemoItem.memo;
-      return (
-        <div className="flex min-h-20 flex-wrap items-center justify-center gap-2">
-          {currentGateMemoItem.parsed.topics.map((topic, index) => (
-            <mark key={`${currentGateMemoItem.log.id}-topic-${index}`} className="rounded-xl bg-amber-300 px-4 py-2 text-xl font-black text-slate-950">
-              [{topic}]
-            </mark>
-          ))}
-        </div>
-      );
-    }
-
-    const answerIndex = currentGateQuestion.answerIndex ?? 0;
-    const prompt = currentGateMemoItem.parsed.prompts[answerIndex] || '';
-    const answer = currentGateMemoItem.parsed.answers[answerIndex] || '';
-    return (
-      <div className="flex flex-col items-center gap-5">
-        <span className="text-3xl font-black text-slate-900 md:text-5xl">{prompt}</span>
-        {isGateAnswerRevealed && (
-          <span className="rounded-2xl bg-amber-300 px-5 py-3 text-2xl font-black text-slate-950 md:text-4xl">
-            {answer}
-          </span>
-        )}
-      </div>
-    );
+    const question = currentGateMemoItem.parsed.questions.find(item => item.key === currentGateQuestion.questionKey);
+    return question ? <ReviewQuestionContent question={question} criterion={currentGateMemoItem.criterion}
+      revealed={isGateAnswerRevealed} memo={currentGateMemoItem.memo} /> : null;
   };
 
   const handleCondenseActiveReviewLog = (logId: string) => {
@@ -1731,7 +1578,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     if (nextLogIds.length === 0) {
       resetAll();
-      setFolderPathIds([]);
       setSubjectId('');
       setPostSaveNextSubjectId(null);
       return;
@@ -1745,23 +1591,29 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     if (!isGateReviewComplete) return;
 
     const outcomes: ReviewGateOutcome[] = preSessionGateMemoItems.flatMap(item => {
-      const itemQuestions = gateReviewQuestions.filter(question => question.logId === item.log.id);
+      const itemQuestions = gateReviewQuestions.filter(question => question.logId === item.log.id && gatePractice?.completed.includes(question.id));
       if (itemQuestions.length === 0) return [];
       const wrongQuestionKeys = itemQuestions
-        .filter(question => gateWrongQuestionIds[question.id])
+        .filter(question => (gatePractice?.wrongCounts[question.id] || 0) > 0)
         .map(question => question.questionKey);
       return [{
         logId: item.log.id,
         passed: wrongQuestionKeys.length === 0,
         wrongQuestionKeys,
-        completedQuestionKeys: itemQuestions.map(question => question.questionKey)
+        completedQuestionKeys: itemQuestions.map(question => question.questionKey),
+        questionResults: Object.fromEntries(itemQuestions.map(question => [question.questionKey, {
+          wrongCount: gatePractice?.wrongCounts[question.id] || 0,
+          attempts: gatePractice?.attempts[question.id] || 0
+        }])),
+        unlockedLevel: gatePractice?.unlocked[item.log.id] || 1
       }];
     });
     onFinishReviewGate(outcomes, Boolean(preSessionReviewGroup?.isGateRetry));
 
     if (preSessionReviewGroup?.isGateRetry) {
       clearPreSessionReview();
-      setSelectedReviewSubjectId('');
+      setSelectedTaskKey('');
+      setInspectedRecordDetailId('');
       return;
     }
 
@@ -1778,7 +1630,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     if (reviewGroup && reviewSubjectIds.length > 0) {
       clearPreSessionReview();
-      setSelectedReviewSubjectId('');
       startReviewSubjectMeasurementRun(reviewGroup);
       return;
     }
@@ -1786,20 +1637,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...finishedLogIds])));
     onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60);
     clearPreSessionReview();
+    setSelectedTaskKey('');
+    setInspectedRecordDetailId('');
 
     if (shouldStartStudyAfterReview) {
-      setSelectedReviewSubjectId('');
       startMeasurementNow();
       return;
     }
 
-    setSelectedReviewSubjectId('');
     if (shouldResumeTimer) {
       setIsTimerRunning(true);
       return;
     }
 
-    setFolderPathIds([]);
     setSubjectId('');
   };
 
@@ -1817,15 +1667,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
       ...prev,
       logs: prev.logs.filter(log => log.id !== firstLog.id)
     } : prev);
-    setGateWrongQuestionIds(prev => Object.fromEntries(
-      Object.entries(prev).filter(([id]) => !id.startsWith(`${firstLog.id}:`))
-    ));
-    setGateQuestionQueue([]);
-    setGateRoundWrongQuestionIds([]);
-    setGateRoundQuestionCount(0);
-    setGateRoundAnsweredCount(0);
-    setGateRoundNumber(1);
-    setIsGateQueueInitialized(false);
+    setGatePractice(null);
     setIsGateAnswerRevealed(false);
     setPreSessionReviewDrafts(prev => {
       const next = { ...prev };
@@ -1865,11 +1707,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   }, [pendingImmediateStartSubjectId, step, subjectId]);
 
   const handleTimerComplete = () => {
+    let elapsedSeconds = accumulatedSecondsRef.current;
     if (startTimeRef.current !== null) {
       const currentElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
       const nextTotalSeconds = accumulatedSecondsRef.current + currentElapsed;
       const missingTimerSeconds = Math.max(0, nextTotalSeconds - seconds);
       accumulatedSecondsRef.current = nextTotalSeconds;
+      elapsedSeconds = nextTotalSeconds;
       if (missingTimerSeconds > 0) {
         const timerId = selectedSessionTimerIdRef.current;
         activeTimerSecondsRef.current[timerId] =
@@ -1890,19 +1734,37 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     setSessionTimerCompletedSeconds(completedTimerPageSeconds);
     setSessionTimerPages(completedTimerPages);
     setSessionTimerPageSeconds({ ...activeTimerPageSecondsRef.current });
-    if (selectedSubject) {
-      const nextStartPage = activeSubjectStage?.currentPage || selectedSubject.completedPages + 1;
+    if (step === 'timer' && selectedSubject) {
+      const nextStartPage = activeReviewRun ? reviewStartPage : activeSubjectStage?.currentPage || selectedSubject.completedPages + 1;
       setStartPage(formatPageNumber(nextStartPage));
       const nextReadAmount = expectedReadAmount > 0
         ? formatPageNumber(calculateEndPageValue(nextStartPage, expectedReadAmount))
         : formatPageNumber(nextStartPage);
       setReadAmount(nextReadAmount);
       setInitialReadAmount(nextReadAmount);
+      setSolvedPageCount(formatPageNumber(expectedReadAmount > 0 ? expectedReadAmount : 1));
     }
-    setStep('pages');
+    if (step === 'timer') {
+      setStudySeconds(elapsedSeconds);
+      accumulatedSecondsRef.current = organizationSeconds;
+      setSeconds(organizationSeconds);
+      setStep('organize');
+      setIsTimerRunning(true);
+    } else {
+      setOrganizationSeconds(elapsedSeconds);
+      setMinutes(getSessionTimes(studySeconds, elapsedSeconds).timeSpentMinutes);
+      setStep('pages');
+    }
   };
 
   const handleReturnToMeasurement = () => {
+    if (Number(solvedPageCount) !== attackCompletedPages) {
+      setAttackCompletedPages(Math.max(0, Number(solvedPageCount) || 0));
+      resetPageAttackTimer(averageSecondsPerPage);
+    }
+    accumulatedSecondsRef.current = studySeconds;
+    lastAttackSecondRef.current = studySeconds;
+    setSeconds(studySeconds);
     setStep('timer');
     setIsTimerRunning(true);
   };
@@ -1910,35 +1772,41 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
   const createCurrentSessionLog = () => {
     const sPage = parseFloat(startPage);
     const endPage = parseFloat(readAmount);
-    const amount = calculateAmountFromEndPage(sPage, endPage);
+    const measurement = createPageMeasurement(sPage, endPage, Number(solvedPageCount), remainingSubjectPages);
     const shouldSkipReview = skipReview;
 
-    if (isNaN(sPage) || isNaN(endPage) || isNaN(amount) || amount <= 0) {
-      alert('완료된 끝 페이지를 정확히 입력해주세요.');
-      return null;
-    }
-
-    if (amount > remainingSubjectPages) {
-      alert(`현재 과목의 남은 학습량은 ${formatPageNumber(remainingSubjectPages)}페이지입니다.`);
+    if (measurement === null) {
+      alert('끝 페이지와 푼 장수를 확인해주세요.');
       return null;
     }
 
     return {
       id: Math.random().toString(36).substr(2, 9),
       subjectId,
-      pagesRead: amount,
-      startPage: sPage,
-      endPage,
-      timeSpentMinutes: minutes,
+      ...(activeReviewRun ? { reviewParentSubjectId: activeReviewRun.parentSubjectId, reviewPageRangeBased: true } : {}),
+      reviewBaselineTimePerPage: activeReviewTiming?.baselineTimePerPage,
+      ...measurement,
+      pomodoroSession: true,
+      ...getSessionTimes(studySeconds, organizationSeconds),
       timestamp: new Date().toISOString(),
       studyDate: activeStudyDate,
       studyWeekday: activeWeekday,
       isReviewed: false,
       isCondensed: shouldSkipReview,
-      reviewMemo: !shouldSkipReview ? reviewMemo.trim() : undefined,
+      reviewMemo: reviewMemo || undefined,
+      reviewMemoDocument,
       reviewEnabled: !shouldSkipReview
     };
   };
+
+  const getReviewMeasurement = (log: StudyLog): ReviewMeasurement => ({
+    pagesRead: log.pagesRead,
+    baselineTimePerPage: activeReviewTiming?.baselineTimePerPage || 0,
+    timeAttackMinutes: log.timeAttackMinutes,
+    baselineTimeAttackPerPage: activeReviewAttackTiming?.baselineTimePerPage || 0,
+    lastEndPage: log.endPage!,
+    measurementId: log.id
+  });
 
   const handleFinalSave = () => {
     const nextLog = createCurrentSessionLog();
@@ -1946,49 +1814,34 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
 
     setPendingAutoAdvanceLogId(null);
     onLogSession(nextLog);
+    if (activeReviewRun) onRecordReviewSubjectTime(activeReviewRun.logIds, subjectId, nextLog.timeSpentMinutes, getReviewMeasurement(nextLog));
     resetAll();
-    setFolderPathIds([]);
     setSubjectId('');
     setPostSaveNextSubjectId(null);
   };
 
-  const handleSwitchToNextReviewSubject = () => {
+  const handleSwitchToNextReviewSubject = (repeat = false) => {
     if (!activeReviewRun || !selectedSubject) return;
 
     const completedReviewSubjectId = selectedSubject.id;
     const nextLog = createCurrentSessionLog();
     if (!nextLog) return;
 
-    onLogSession(nextLog);
+    const savedLog = repeat ? createRepeatedSubjectReview(nextLog, activeReviewRun.parentSubjectId,
+      Math.max(0, ...logs.filter(log => activeReviewRun.logIds.includes(log.id)).map(log => log.reviewStep || 0))) : nextLog;
+    onLogSession(savedLog);
 
-    if (!nextReviewRunSubject || nextReviewRunSubjectId === null) {
-      onRecordReviewSubjectTime(activeReviewRun.logIds, completedReviewSubjectId, minutes);
-      onReviewAction(activeReviewRun.logIds, 'complete');
+    const nextId = nextReviewRunSubject ? nextReviewRunSubjectId : null;
+    onAdvanceReviewSubject(activeReviewRun.logIds, completedReviewSubjectId, nextId, nextLog.timeSpentMinutes, getReviewMeasurement(nextLog));
+    if (nextId === null) {
       setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...activeReviewRun.logIds])));
-      resetAll();
-      setFolderPathIds([]);
-      setSubjectId('');
-      setPostSaveNextSubjectId(null);
-      return;
     }
-
-    onAdvanceReviewSubject(
-      activeReviewRun.logIds,
-      completedReviewSubjectId,
-      nextReviewRunSubjectId,
-      minutes
-    );
-
-    const nextRun = {
-      ...activeReviewRun,
-      currentIndex: activeReviewRun.currentIndex + 1
-    };
     resetAll();
-    setActiveReviewRun(nextRun);
-    selectSubjectForMeasurement(nextReviewRunSubject);
-    setPlannedPageCount(Math.max(1, activeReviewRunLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0)));
+    setSelectedTaskKey('');
+    setInspectedRecordDetailId('');
+    setPendingAutoAdvanceLogId(nextLog.id);
+    setSubjectId('');
     setPostSaveNextSubjectId(null);
-    setPendingImmediateStartSubjectId(nextReviewRunSubject.id);
   };
 
   const renderPreSessionReviewOverlay = () => preSessionReviewLogs.length > 0 ? (
@@ -2006,7 +1859,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           <div className="flex items-center gap-2">
             {preSessionGateMemoItems.length > 0 && (
               <span className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600">
-                {gateReviewQuestions.length > 0
+                {isGateReviewComplete ? '모두 완료' : gateReviewQuestions.length > 0
                   ? `${gateRoundAnsweredCount} / ${gateRoundQuestionCount}`
                   : `노트 ${preSessionGateMemoItems.length}개`}
               </span>
@@ -2042,11 +1895,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
           </button>
         </div>
 
-        {gateReviewQuestions.length > 0 && (
+        {gateReviewQuestions.length > 0 && !isGateReviewComplete && (
           <div className="mb-4">
             <div className="mb-2 flex items-center justify-between text-xs font-black">
               <span className="text-rose-500">
-                {gateRoundNumber === 1 ? '전체 문제' : `오답 ${gateRoundNumber - 1}회차`}
+                {gatePractice?.level || 1}단계 · {gateRoundNumber === 1 ? '전체 문제' : `오답 ${gateRoundNumber - 1}회차`}
               </span>
               <span className="text-slate-400">남은 문제 {gateQuestionQueue.length}</span>
             </div>
@@ -2108,23 +1961,38 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               <p className="text-lg font-black text-emerald-700">기본 복습 완료</p>
               <div className="mt-2 flex justify-center gap-2 text-xs font-black">
                 <span className="rounded-full bg-white px-3 py-1.5 text-emerald-600">
-                  맞음 {gateReviewQuestions.length - gateWrongCount}
+                  첫 시도 정답 {(gatePractice?.completed.length || 0) - gateWrongCount}
                 </span>
                 <span className="rounded-full bg-white px-3 py-1.5 text-rose-500">오답 {gateWrongCount}</span>
               </div>
             </div>
           )}
 
+          {isGateReviewComplete && preSessionGateMemoItems.map(item => {
+            const schedules = getReviewQuestionSchedules(item.log);
+            const maskedKeys = item.parsed.questions.filter(question => {
+              const id = `${item.log.id}:${question.key}`;
+              const previous = schedules[question.key];
+              return previous?.masked || (previous?.intervalMs || 0) >= 8 * 86400000
+                || (gatePractice?.completed.includes(id) && calculateQuestionPerformance(previous,
+                  gatePractice.wrongCounts[id] || 0, gatePractice.attempts[id] || 0).masked);
+            }).map(question => question.key);
+            return <section key={item.log.id} className="space-y-2">
+              <h4 className="text-sm font-bold text-slate-500">{item.range} · 정리노트</h4>
+              <ReviewNoteSummary memo={item.memo} maskedKeys={maskedKeys} />
+            </section>;
+          })}
+
         </div>
 
         <div className="mt-5 flex gap-3">
-          <button
+          {!isGateReviewComplete && <button
             type="button"
             onClick={() => setIsPreSessionReviewRunning(prev => !prev)}
             className="flex-1 rounded-2xl bg-slate-100 py-4 text-sm font-black text-slate-500"
           >
             {isPreSessionReviewRunning ? '잠시 중단' : '계속 복습'}
-          </button>
+          </button>}
           <button
             type="button"
             onClick={closePreSessionReview}
@@ -2159,227 +2027,49 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     </div>
   ) : null;
 
-  const renderStudyRunBoard = () => (
-    <div className="rounded-[2rem] border border-indigo-100 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="mt-1 text-lg font-black text-slate-900">{activeWeekdayLabel}요일 할 일</h3>
-          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black">
-            <span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-500">복습 {runQueueReviewCount}개</span>
-            <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-indigo-500">학습 {runQueueStudyCount}개</span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-400">중요도순</span>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-stretch gap-2">
-          <div className="rounded-2xl bg-indigo-50 px-3 py-2 text-right">
-            <p className="text-[9px] font-black uppercase tracking-widest text-indigo-300">총 예상</p>
-            <p className="text-lg font-black text-indigo-600">{formatPlanMinutes(runQueueTotalMinutes)}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-4 grid grid-cols-4 gap-1.5 sm:grid-cols-7">
-        {WEEKDAYS.map(day => {
-          const isActive = activeWeekday === day.id;
-          return (
-            <button
-              key={day.id}
-              type="button"
-              onClick={() => {
-                onActiveWeekdayChange(day.id);
-                onDetailSubjectChange('');
-                setSelectedReviewSubjectId('');
-                setSubjectId('');
-                setFolderPathIds([]);
-              }}
-              className={`rounded-xl py-2 text-sm font-black transition-all ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
-              }`}
-            >
-              {day.label}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
-        {runQueueItems.map((queueItem, index) => {
-          if (queueItem.kind === 'review') {
-            const group = queueItem.reviewGroup;
-            const reviewDetailKey = getReviewDetailKey(
-              group.reviewType,
-              group.parentSubjectId,
-              group.subjectId
-            );
-            const isSelected = detailSubjectId === reviewDetailKey && selectedReviewSubjectId === group.id;
-            return (
-              <button
-                key={queueItem.key}
-                type="button"
-                onClick={() => {
-                  if (isSelected) startReviewGroup(group);
-                  else {
-                    setSelectedReviewSubjectId(group.id);
-                    onDetailSubjectChange(reviewDetailKey);
-                  }
-                }}
-                className={`w-full rounded-[1.75rem] border-2 p-5 text-left transition-all ${
-                  isSelected
-                    ? 'border-rose-500 bg-rose-100 ring-2 ring-rose-100'
-                    : 'border-rose-200 bg-rose-50/80 hover:border-rose-400 hover:bg-rose-50'
-                }`}
-              >
-                <div className="flex gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-sm font-black text-rose-500">
-                    {index + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-rose-500">
-                        {group.isGateRetry ? '기본 복습 · 오답' : group.reviewType === 'subject' ? '과목 복습' : '기본 복습'}
-                      </span>
-                      {queueItem.isRequired && (
-                        <span className="rounded-lg bg-rose-100 px-2 py-1 text-[10px] font-black text-rose-600">필수</span>
-                      )}
-                      {group.parentSubjectName && group.parentSubjectName !== group.subjectName && (
-                        <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-slate-600">
-                          {group.parentSubjectName} 복습
-                        </span>
-                      )}
-                    </div>
-                    <span className="mt-2 inline-flex rounded-xl bg-rose-600 px-3 py-2 text-xs font-black text-white">
-                      {isSelected
-                        ? '다시 눌러 시작'
-                        : '보기'}
-                    </span>
-                    <h4 className="mt-2 truncate text-lg font-black text-slate-900">{group.subjectName}</h4>
-                    <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
-                      <div className="rounded-2xl bg-white px-3 py-3">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-rose-300">범위</p>
-                        <p className="mt-0.5 truncate text-sm font-black text-rose-600">
-                          {formatMergedReviewRanges(group.logs)}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl bg-white px-3 py-3 text-right">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-rose-300">시간</p>
-                        <p className="mt-0.5 text-sm font-black text-slate-800">
-                          {group.averageTimePerPage > 0 ? formatPlanMinutes(group.estimatedMinutes) : '측정 필요'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          }
-
-          const item = queueItem.studyItem;
-          const activeStage = getActiveSubjectStage(item.subject);
-          return (
-            <button
-              key={queueItem.key}
-              type="button"
-              onClick={() => {
-                if (detailSubjectId === item.subject.id) startStudyOrderItem(item);
-                else onDetailSubjectChange(item.subject.id);
-              }}
-              className={`w-full rounded-[1.75rem] border p-5 text-left transition-all ${
-                detailSubjectId === item.subject.id
-                  ? 'border-indigo-500 bg-indigo-100 ring-2 ring-indigo-100'
-                  : 'border-slate-100 bg-slate-50 hover:border-indigo-200 hover:bg-indigo-50/70'
-              }`}
-            >
-              <div className="flex gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-sm font-black text-indigo-500">
-                  {index + 1}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="rounded-lg bg-white px-2 py-1 text-[10px] font-black text-indigo-500">학습</span>
-                        {item.subject.isRequired && (
-                          <span className="rounded-lg bg-indigo-100 px-2 py-1 text-[10px] font-black text-indigo-600">필수</span>
-                        )}
-                        {item.carryoverPages > 0 && (
-                          <span className="rounded-lg bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-600">이월 {formatPageNumber(item.carryoverPages)}P</span>
-                        )}
-                      </div>
-                      <h4 className="mt-2 truncate text-lg font-black text-slate-900">{item.subject.name}</h4>
-                      {activeStage?.isFollowUp && (
-                        <p className="mt-1 truncate text-xs font-black text-indigo-500">후행 · {activeStage.name}</p>
-                      )}
-                    </div>
-                    <span className="shrink-0 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white">
-                      {detailSubjectId === item.subject.id ? '다시 눌러 시작' : '보기'}
-                    </span>
-                  </div>
-
-                  <div className={`mt-4 grid gap-2 ${item.speedChangePercent !== null ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
-                    <div className="rounded-2xl bg-white px-3 py-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">권장</p>
-                      <p className="mt-0.5 text-xl font-black leading-none text-indigo-600">
-                        {formatPageNumber(item.remainingDayPages)}P
-                      </p>
-                    </div>
-                    <div className="rounded-2xl bg-white px-3 py-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">필요</p>
-                      <p className="mt-0.5 text-xl font-black leading-none text-slate-800">
-                        {item.averageTimePerPage > 0 ? formatPlanMinutes(item.estimatedMinutes) : '측정 필요'}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl bg-white px-3 py-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">시작</p>
-                      <p className="mt-0.5 text-xl font-black leading-none text-slate-800">
-                        p.{formatPageNumber(activeStage?.currentPage || item.subject.completedPages + 1)}
-                      </p>
-                    </div>
-                    {item.speedChangePercent !== null && (
-                      <div className={`rounded-2xl px-3 py-3 ${
-                        item.speedChangePercent >= 0 ? 'bg-emerald-50' : 'bg-rose-50'
-                      }`}>
-                        <p className={`text-[9px] font-black uppercase tracking-widest ${
-                          item.speedChangePercent >= 0 ? 'text-emerald-300' : 'text-rose-300'
-                        }`}>
-                          {item.speedChangePercent >= 0 ? '속도증가' : '속도변화'}
-                        </p>
-                        <p className={`mt-0.5 text-2xl font-black leading-none ${
-                          item.speedChangePercent >= 0 ? 'text-emerald-600' : 'text-rose-500'
-                        }`}>
-                          {formatSpeedChangePercent(item.speedChangePercent)}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] font-black">
-                    <span className="rounded-lg bg-white px-2 py-1 text-emerald-600">속도 {formatStudySpeed(item.averageTimePerPage)}</span>
-                    <span className="rounded-lg bg-white px-2 py-1 text-blue-500">효율 {formatStudyEfficiency(item.averageTimePerPage)}</span>
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-
-        {runQueueItems.length === 0 && (
-          <div className="rounded-2xl bg-slate-50 px-4 py-6 text-center text-xs font-bold text-slate-400">
-            이 요일에 바로 실행할 학습이 없습니다.
-          </div>
-        )}
-      </div>
-
-      <div className="mt-3 flex justify-end">
-        <button
-          type="button"
-          onClick={handleRefreshStudyPlans}
-          className="rounded-xl bg-slate-100 px-3 py-2 text-[10px] font-black text-slate-400 transition-all hover:bg-amber-50 hover:text-amber-600"
-        >
+  const taskSelector = (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="today-task-select" className="text-sm font-black text-slate-800">오늘 할 일</label>
+        <button type="button" onClick={handleRefreshStudyPlans}
+          className="text-[10px] font-bold text-slate-400 hover:text-amber-600">
           계획 갱신
         </button>
       </div>
+      <select
+        id="today-task-select"
+        value={selectedRunQueueItem?.key || ''}
+        disabled={runQueueItems.length === 0}
+        onChange={event => {
+          setInspectedRecordDetailId('');
+          setSelectedTaskKey(event.target.value);
+          const task = runQueueItems.find(item => item.key === event.target.value);
+          if (task) onDetailSubjectChange(getRunQueueDetailKey(task));
+        }}
+        className={`w-full rounded-2xl border bg-slate-100 px-4 py-3 text-base font-black text-slate-800 outline-none transition-all focus:bg-white focus:ring-4 disabled:text-slate-400 ${selectedRunQueueItem?.kind === 'review' ? 'border-rose-200 focus:border-rose-400 focus:ring-rose-500/10' : 'border-slate-200 focus:border-indigo-400 focus:ring-indigo-500/10'}`}
+      >
+        {runQueueItems.length === 0 && <option value="">오늘 할 일이 없습니다.</option>}
+        {runQueueItems.map((item, index) => (
+          <option key={item.key} value={item.key}>
+            {index + 1}. {item.kind === 'review'
+              ? `${item.reviewGroup.isGateRetry ? '오답 복습' : item.reviewGroup.reviewType === 'basic' ? '기본 복습' : '과목 복습'} · ${item.name}${item.reviewGroup.parentSubjectName !== item.name ? ` · ${item.reviewGroup.parentSubjectName}` : ''} · ${formatMergedReviewRanges(item.reviewGroup.logs)}`
+              : `학습 · ${item.name}${item.isRequired ? ' · 필수' : ''}`}
+          </option>
+        ))}
+      </select>
+      {selectedRunQueueItem && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-sm font-bold text-slate-600">
+          {selectedRunQueueItem.kind === 'study' ? (
+            <>
+              <span>시작 <b className="text-slate-900">p.{formatPageNumber(getActiveSubjectStage(selectedRunQueueItem.studyItem.subject)?.currentPage || selectedRunQueueItem.studyItem.subject.completedPages + 1)}</b></span>
+              <span>권장 <b className="text-indigo-600">{formatPageNumber(selectedRunQueueItem.studyItem.remainingDayPages)}P</b></span>
+            </>
+          ) : (
+            <span>범위 <b className="text-rose-600">{formatMergedReviewRanges(selectedRunQueueItem.reviewGroup.logs)}</b></span>
+          )}
+          <span>필요 <b className="text-slate-900">{selectedRunQueueItem.estimatedMinutes > 0 ? formatPlanMinutes(selectedRunQueueItem.estimatedMinutes) : '측정 필요'}</b></span>
+        </div>
+      )}
     </div>
   );
 
@@ -2387,140 +2077,31 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
     return (
       <div className="animate-fade-in">
         {renderPreSessionReviewOverlay()}
-        <div className="mx-auto max-w-2xl space-y-4">
-          {renderStudyRunBoard()}
-          <div className="rounded-[2rem] border border-slate-100 bg-white p-3 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setIsManualPickerOpen(prev => !prev)}
-              className="flex w-full items-center justify-between rounded-[1.5rem] bg-slate-50 px-4 py-3 text-left transition-all hover:bg-indigo-50"
-            >
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">직접 선택</p>
-              </div>
-              <span className={`text-2xl font-black text-indigo-500 transition-transform ${isManualPickerOpen ? 'rotate-90' : ''}`}>›</span>
-            </button>
-
-            {isManualPickerOpen && (
-              <div className="mt-3 rounded-[1.5rem] bg-slate-50 p-4">
-                <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">측정할 과목 선택</label>
-                <div className="rounded-3xl border border-slate-200 bg-white p-3">
-                  <div className="space-y-3">
-                    {selectionLevels.map(level => {
-                      const selectedFolder = folderPathIds[level.index];
-                      const parentMatchesSelectedSubject = selectedSubject && (
-                        level.parentId
-                          ? selectedSubject.tagIds?.includes(level.parentId)
-                          : !selectedSubject.tagIds || selectedSubject.tagIds.length === 0
-                      );
-                      const value = selectedFolder
-                        ? `folder:${selectedFolder}`
-                        : level.index === 0 && selectedReviewGroup
-                          ? `review:${selectedReviewGroup.id}`
-                          : parentMatchesSelectedSubject
-                          ? `subject:${selectedSubject.id}`
-                          : '';
-
-                      return (
-                        <select
-                          key={`${level.parentId || 'root'}-${level.index}`}
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-base font-black text-slate-800 outline-none transition-all focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10"
-                          value={value}
-                          onChange={e => handleFolderSelectionChange(level.index, e.target.value)}
-                        >
-                          <option value="">{level.index === 0 ? '최상위 선택' : '하위 항목 선택'}</option>
-                          {level.index === 0 && dueReviewGroups.map(group => (
-                            <option key={`review:${group.id}`} value={`review:${group.id}`}>
-                              복습 · {group.subjectName}{group.parentSubjectName && group.parentSubjectName !== group.subjectName ? ` · ${group.parentSubjectName}` : ''} · {formatMergedReviewRanges(group.logs)}
-                            </option>
-                          ))}
-                          {level.index === 0 && dueReviewGroups.length > 0 && (level.folders.length > 0 || level.subjects.length > 0) && (
-                            <option disabled value="review-divider">──────── 학습 과목 ────────</option>
-                          )}
-                          {level.folders.map(folder => (
-                            <option key={folder.id} value={`folder:${folder.id}`}>폴더 {folder.name}</option>
-                          ))}
-                          {level.subjects.map(subject => (
-                            <option key={subject.id} value={`subject:${subject.id}`}>
-                              {subject.isRequired ? '필수 · ' : ''}{subject.name} · 권장 {formatPageNumber(todayStudyPlanMap.get(subject.id)?.remainingDayPages || 0)}P · 남은 {formatPageNumber(getSubjectRemainingPageCount(subject))}P
-                            </option>
-                          ))}
-                        </select>
-                      );
-                    })}
-                    {selectionLevels.length === 0 && (
-                      <div className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-xs font-bold text-slate-400">측정할 과목이 없어요.</div>
-                    )}
-                  </div>
-                </div>
-                <select
-                  className="hidden"
-                  value={subjectId}
-                  onChange={e => setSubjectId(e.target.value)}
-                >
-                  <option value="">과목을 선택하세요...</option>
-                  {orderedMeasurableSubjects.map(subject => (
-                    <option key={subject.id} value={subject.id}>{subject.name}</option>
-                  ))}
-                </select>
-                {!selectedReviewGroup && (
-                  <>
-                    <div className="mt-5 border-t border-slate-200 pt-5">
-                      <label className="mb-3 block px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">권장 장수</label>
-                      <input
-                        type="number"
-                        step="1"
-                        min="1"
-                        value={plannedPageCount}
-                        onChange={e => setPlannedPageCount(Math.max(1, Number(e.target.value) || 1))}
-                        className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-center text-2xl font-black text-indigo-900 outline-none transition-all focus:ring-4 focus:ring-indigo-500/10"
-                      />
-                    </div>
-                    <div className="mt-5 border-t border-slate-200 pt-5">
-                      <div className="mb-3 flex items-center justify-between">
-                        <label className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">세션 메모</label>
-                        <button
-                          type="button"
-                          onClick={toggleMemoCollapsed}
-                          className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-lg font-black text-indigo-500 shadow-sm transition-transform"
-                          title={isMemoCollapsed ? '메모 열기' : '메모 닫기'}
-                        >
-                          <span className={`transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
-                        </button>
-                      </div>
-                      {!isMemoCollapsed && (
-                        <>
-                          <textarea
-                            value={sessionMemo}
-                            onChange={e => handleMemoChange(e.target.value)}
-                            placeholder="세션 메모"
-                            className={`h-28 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-700 outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 ${getMemoTextSize(sessionMemo)}`}
-                          />
-                        </>
-                      )}
-                    </div>
-                  </>
-                )}
-                <button
-                  onClick={handleStartMeasurement}
-                  disabled={!selectedReviewGroup && !subjectId}
-                  className="mt-5 flex w-full items-center justify-center gap-3 rounded-2xl bg-indigo-600 py-5 text-lg font-black text-white shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 disabled:shadow-none disabled:hover:bg-slate-300 group"
-                >
-                  <span className="text-2xl transition-transform group-hover:rotate-12">⏱️</span>
-                  {selectedReviewGroup ? '복습 시작' : subjectId ? '측정 엔진 가동' : '과목 없음'}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        {renderSummary(taskSelector, nextSubjectId => {
+          const matchingTask = runQueueItems.find(item => getRunQueueDetailKey(item) === nextSubjectId);
+          setInspectedRecordDetailId(matchingTask ? '' : nextSubjectId);
+          if (matchingTask) setSelectedTaskKey(matchingTask.key);
+          onDetailSubjectChange(nextSubjectId);
+        }, completedStudySubjectIds, idlePomodoroPlan)}
+        {selectedRunQueueItem && (
+          <button
+            type="button"
+            onClick={() => selectedRunQueueItem.kind === 'review'
+              ? startReviewGroup(selectedRunQueueItem.reviewGroup)
+              : startStudyOrderItem(selectedRunQueueItem.studyItem)}
+            className={`mt-1 w-full rounded-2xl py-4 text-base font-black text-white transition-all ${selectedRunQueueItem.kind === 'review' ? 'bg-rose-500 hover:bg-rose-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+          >
+            {selectedRunQueueItem.kind === 'review' ? '복습 시작' : '학습 시작'}
+          </button>
+        )}
       </div>
     );
   }
 
-  const isDark = step === 'timer';
+  const isDark = step === 'timer' || step === 'organize';
 
   return (
-    <div className={`fixed inset-0 flex flex-col items-center justify-center p-4 ${isDark ? 'bg-slate-950' : 'bg-white'}`} style={{ zIndex: 9999 }}>
+    <div className={`fixed inset-0 flex flex-col items-center overflow-y-auto p-4 ${isDark ? 'bg-slate-950 pt-20 lg:p-8' : 'justify-center bg-white'}`} style={{ zIndex: 9999 }}>
       {renderPreSessionReviewOverlay()}
       <button
         onClick={() => setIsConfirmingCancel(true)}
@@ -2544,10 +2125,106 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
         </div>
       )}
 
-      <div className="w-full max-w-3xl">
-        {step === 'timer' && (
-          <div className="flex flex-col items-center">
-            <div className="mb-4 flex items-center gap-3">
+      <div className={`w-full ${isDark ? 'my-auto max-w-[1440px]' : 'max-w-3xl'}`}>
+        {(step === 'timer' || step === 'organize') && (
+          <div className="flex w-full flex-col gap-4">
+            <main className="order-2 w-full min-w-0" aria-label="학습 노트">
+              <div className="w-full space-y-4">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <button
+                    type="button"
+                    onClick={toggleMemoCollapsed}
+                    aria-expanded={!isMemoCollapsed}
+                    className="flex w-full items-center justify-between text-xs font-black text-indigo-200"
+                  >
+                    <span>세션 메모</span>
+                    <span className={`text-lg transition-transform ${isMemoCollapsed ? '' : 'rotate-90'}`}>›</span>
+                  </button>
+                  {!isMemoCollapsed && (
+                    <MemoColorTextarea
+                      colorColons={colorMemoColons}
+                      dark
+                      wrapperClassName="mt-2"
+                      value={sessionMemo}
+                      onChange={e => handleMemoChange(e.target.value)}
+                      placeholder="세션 메모"
+                      aria-label="세션 메모"
+                      className="h-16 w-full resize-none rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-base font-bold text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500"
+                    />
+                  )}
+                </div>
+                {(!skipReview || step === 'organize') && (
+                  <div className="rounded-3xl border border-rose-400/30 bg-rose-500/10 p-5">
+                    <div className="mb-4 flex items-center gap-2">
+                      <label className="text-sm font-black text-rose-200">정리노트</label>
+                      <button type="button" aria-label="정리노트 색깔 구분" aria-pressed={colorMemoColons}
+                        onClick={() => {
+                          const next = !colorMemoColons;
+                          setColorMemoColons(next);
+                          localStorage.setItem('swp_memo_colon_colors', String(next));
+                        }}
+                        className={`rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors ${colorMemoColons ? 'border-rose-300/30 bg-rose-400/15 text-rose-100' : 'border-white/10 text-slate-400 hover:text-slate-200'}`}>
+                        색 {colorMemoColons ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                    <ReviewMemoEditor
+                      value={reviewMemo}
+                      document={reviewMemoDocument}
+                      colorColons={colorMemoColons}
+                      onChange={(memo, document) => { setReviewMemo(memo); setReviewMemoDocument(document); }}
+                      minHeight={320}
+                      maxHeight={560}
+                      placeholder="정리노트"
+                      theme="dark"
+                    />
+                  </div>
+                )}
+                {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewCondensePanelOpen && timerMode !== 'sessionMemo' && (
+                  <div className="rounded-3xl border border-slate-700 bg-white/5 p-4">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-300">축약</label>
+                    <div className="mt-3 flex max-h-32 flex-wrap gap-2 overflow-y-auto pr-1">
+                      {activeReviewRunMemoItems.map(item => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleCondenseActiveReviewLog(item.id)}
+                          className="rounded-xl border border-slate-600 bg-black/20 px-3 py-2 text-xs font-black text-slate-100 transition-all hover:border-rose-300 hover:bg-rose-500 hover:text-white"
+                        >
+                          {item.range}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewNotePanelOpen && timerMode !== 'sessionMemo' && (
+                  <div className="rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 노트</label>
+                    <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-rose-300/20 bg-black/20 p-3 pr-2">
+                      <div className="space-y-3">
+                        {activeReviewRunMemoItems.map(item => (
+                          <div key={item.id}>
+                            <div className="mb-1 inline-flex rounded-lg bg-rose-400/20 px-2 py-1 text-[10px] font-black text-rose-100">
+                              {item.range}
+                            </div>
+                            <ReviewMemoEditor
+                              value={item.memo}
+                              document={item.document}
+                              colorColons={colorMemoColons}
+                              onChange={(memo, document) => onUpdateReviewMemo(item.id, memo, document)}
+                              minHeight={64}
+                              maxHeight={220}
+                              theme="dark"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </main>
+            <aside className="order-1 w-full" aria-label="학습 시간 측정">
+            <div className="mb-3 flex flex-wrap items-center gap-3">
               <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${
                 activeReviewRun ? 'bg-rose-500/10 text-rose-300' : 'bg-indigo-500/10 text-indigo-400'
               }`}>
@@ -2555,17 +2232,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               </span>
               {activeReviewRun ? (
                 <div className="min-w-0 text-xs font-black">
-                  <p className="truncate text-rose-300">{activeReviewRun.sourceName} 복습</p>
-                  <p className="truncate text-slate-500">복습 과목 · {selectedSubject?.name}</p>
+                  <p className="truncate text-sm text-rose-200">{activeReviewRun.sourceName} 복습</p>
+                  <p className="truncate text-xl text-white md:text-2xl">{selectedSubject?.name}</p>
                 </div>
               ) : (
-                <p className="text-xs font-black text-slate-500">{selectedSubject?.name}</p>
+                <p className="text-xl font-black text-white md:text-2xl">{selectedSubject?.name}</p>
               )}
-            </div>
-            <div className="mb-4 w-full max-w-lg rounded-2xl border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center justify-between gap-3">
-                {activeReviewRun ? (
-                  <div className="flex gap-2">
+                {activeReviewRun && (
+                  <div className="ml-auto flex gap-2">
                     {activeReviewRunMemoItems.length > 0 && (
                       <button
                         type="button"
@@ -2591,157 +2265,75 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                       축약
                     </button>
                   </div>
-                ) : (
-                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300">기본 타임어택</p>
                 )}
-                <span className="rounded-2xl bg-indigo-500 px-4 py-2 text-xs font-black text-white">
-                  중간 타이머
-                </span>
-              </div>
             </div>
-            <div className="mb-4 grid w-full max-w-lg grid-cols-3 gap-2 rounded-2xl bg-white/5 p-1.5">
-              <button
-                onClick={() => setTimerMode('remainingPages')}
-                className={`py-3 rounded-2xl text-xs font-black transition-all ${timerMode === 'remainingPages' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}
-              >
-                학습 진척도
-              </button>
-              <button
-                onClick={() => setTimerMode('elapsedTime')}
-                className={`py-3 rounded-2xl text-xs font-black transition-all ${timerMode === 'elapsedTime' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}
-              >
-                경과 시간
-              </button>
-              <button
-                onClick={() => setTimerMode('sessionMemo')}
-                className={`py-3 rounded-2xl text-xs font-black transition-all ${timerMode === 'sessionMemo' ? 'bg-indigo-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}
-              >
-                세션 메모
-              </button>
-            </div>
-
-            {timerMode === 'remainingPages' ? (
-              <div className="mb-8 text-center">
-                <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">학습 진척도</p>
-                {!activeReviewRun && activeSubjectStage && (
-                  <p className="mb-3 text-sm font-black text-indigo-200">
-                    {activeSubjectStage.name} · p.{formatPageNumber(activeSubjectStage.startPage)}~{formatPageNumber(activeSubjectStage.endPage)}
-                  </p>
-                )}
-                <div className="text-4xl md:text-5xl font-mono font-black text-white tabular-nums">
-                  {averageTimePerPage > 0
-                    ? activeReviewRun
-                      ? `${formatPageNumber(progressCurrentPages)}P`
-                      : `${formatPageNumber(progressCurrentPages)} / ${formatPageNumber(progressTargetPages)}P`
-                    : '-'}
-                </div>
-                <div className="mt-4 rounded-2xl bg-white/5 px-6 py-4">
-                  <div className="mb-2 flex items-center justify-center gap-2">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">타임어택</p>
-                    <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-black text-indigo-200">
-                      중간
-                    </span>
+            {step === 'organize' ? <OrganizationTimer seconds={seconds} running={isTimerRunning}
+              onToggle={() => setIsTimerRunning(current => !current)} onComplete={handleTimerComplete} /> : (
+            <div className="flex flex-wrap items-stretch gap-3 rounded-3xl border border-white/10 bg-white/5 p-3">
+                <button
+                  type="button"
+                  onClick={() => setTimerMode('remainingPages')}
+                  aria-pressed={timerMode === 'remainingPages'}
+                  className={`flex min-w-[13rem] flex-1 flex-col justify-center rounded-2xl border px-4 py-3 text-left transition-colors ${timerMode === 'remainingPages' ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-transparent bg-black/10 hover:bg-white/5'}`}
+                >
+                  <PageTimeAttack remainingSeconds={pageAttackRemainingSeconds} targetSeconds={activePageAttackTargetSeconds}
+                    remainingPages={getPomodoroRemainingPages(pomodoroPageTarget, timeTargetPages)} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimerMode('elapsedTime')}
+                  aria-pressed={timerMode === 'elapsedTime'}
+                  className={`flex min-w-[22rem] flex-1 items-center gap-4 rounded-2xl border px-4 py-3 text-left transition-colors ${timerMode === 'elapsedTime' ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-transparent bg-black/10 hover:bg-white/5'}`}
+                >
+                  <MeasurementProgress pages={timeTargetPages} target={pomodoroPageTarget} elapsed={formatTime(seconds)} />
+                </button>
+              <div className="flex min-w-[12rem] flex-1 items-center rounded-2xl bg-black/10 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="mb-2 text-xs font-black text-slate-400">학습 진척도</p>
+                  {!activeReviewRun && activeSubjectStage && (
+                    <p className="mb-2 text-xs font-black text-indigo-200">
+                      p.{formatPageNumber(activeSubjectStage.startPage)}~{formatPageNumber(activeSubjectStage.endPage)}
+                    </p>
+                  )}
+                  <div className="whitespace-nowrap font-mono text-3xl font-black text-white tabular-nums">
+                    {averageTimePerPage > 0
+                      ? activeReviewRun
+                        ? `${formatPageNumber(progressCurrentPages)}P`
+                        : `${formatPageNumber(progressCurrentPages)} / ${formatPageNumber(progressTargetPages)}P`
+                      : '-'}
                   </div>
-                  <div className="font-mono text-7xl md:text-8xl font-black text-white tabular-nums">
-                    {averageTimePerPage > 0 ? formatTime(pageAttackRemainingSeconds) : '--:--'}
-                  </div>
-                </div>
-                <p className="mt-5 text-xs font-bold text-slate-500">
-                  {averageTimePerPage > 0
-                    ? `${formatPageNumber(plannedPageCount)}장 목표 · 현재 시간 기준 ${formatPageNumber(timeTargetPages)}장 진행`
-                    : '최근 학습 시간 15시간 안에 시간과 페이지가 있는 기록이 필요합니다.'}
-                </p>
-              </div>
-            ) : timerMode === 'elapsedTime' ? (
-              <div className="text-7xl md:text-8xl font-mono font-black text-white tabular-nums mb-8">{formatTime(seconds)}</div>
-            ) : (
-              <div className="mb-8 w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-4">
-                <label className="mb-3 block text-[10px] font-black uppercase tracking-widest text-indigo-300">세션 메모</label>
-                <textarea
-                  value={sessionMemo}
-                  onChange={e => handleMemoChange(e.target.value)}
-                  placeholder="세션 메모"
-                  className={`h-56 w-full resize-none rounded-2xl border border-white/10 bg-black/10 p-4 font-bold text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500 ${getMemoTextSize(sessionMemo)}`}
-                />
-                <p className="mt-2 text-center text-[10px] font-bold text-slate-500">과목별로 자동 저장됩니다.</p>
-              </div>
-            )}
-
-            {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewCondensePanelOpen && timerMode !== 'sessionMemo' && (
-              <div className="mb-4 w-full max-w-lg rounded-3xl border border-slate-700 bg-white/5 p-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-300">축약</label>
-                <div className="mt-3 flex max-h-32 flex-wrap gap-2 overflow-y-auto pr-1">
-                  {activeReviewRunMemoItems.map(item => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleCondenseActiveReviewLog(item.id)}
-                      className="rounded-xl border border-slate-600 bg-black/20 px-3 py-2 text-xs font-black text-slate-100 transition-all hover:border-rose-300 hover:bg-rose-500 hover:text-white"
-                    >
-                      {item.range}
-                    </button>
-                  ))}
+                  <button type="button" disabled={timeTargetPages >= remainingSubjectPages} onClick={() => {
+                    lockElapsedTimeToCurrentTimer();
+                    setAttackCompletedPages(current => current + 1);
+                    resetPageAttackTimer(averageSecondsPerPage);
+                  }} className="mt-2 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-black text-indigo-200 hover:bg-white/20 disabled:opacity-40">
+                    다음 장
+                  </button>
                 </div>
               </div>
-            )}
-
-            {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewNotePanelOpen && timerMode !== 'sessionMemo' && (
-              <div className="mb-4 w-full max-w-lg rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 노트</label>
-                <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl border border-rose-300/20 bg-black/20 p-3 pr-2">
-                  <div className="space-y-3">
-                    {activeReviewRunMemoItems.map(item => (
-                      <div key={item.id}>
-                        <div className="mb-1 inline-flex rounded-lg bg-rose-400/20 px-2 py-1 text-[10px] font-black text-rose-100">
-                          {item.range}
-                        </div>
-                        <AutoResizeTextarea
-                          value={item.memo}
-                          onChange={e => onUpdateReviewMemo(item.id, e.target.value)}
-                          minHeight={64}
-                          className={`w-full rounded-xl border border-rose-300/20 bg-white/5 p-3 font-bold leading-snug text-rose-50 outline-none focus:border-rose-200 ${getMemoTextSize(item.memo)}`}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-2 w-full max-w-lg">
+            <div className="flex min-w-[18rem] flex-1 items-center gap-2">
               <button
                 onClick={() => setIsTimerRunning(!isTimerRunning)}
-                className={`flex-[2] py-4 rounded-2xl font-black text-base shadow-lg ${isTimerRunning ? 'bg-slate-800 text-white' : 'bg-indigo-600 text-white'}`}
+                className={`flex-1 rounded-2xl px-3 py-4 text-sm font-black shadow-lg ${isTimerRunning ? 'bg-slate-800 text-white' : 'bg-indigo-600 text-white'}`}
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
               </button>
               <button
                 onClick={handleToggleSkipReview}
-                className={`w-24 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex flex-col items-center justify-center gap-1 ${
+                className={`shrink-0 rounded-2xl border-2 px-3 py-4 text-xs font-black shadow-sm transition-all ${
                   skipReview
                     ? 'bg-rose-100 text-rose-500 border-2 border-rose-500'
                     : 'bg-emerald-100 text-emerald-600 border-2 border-emerald-500'
                 }`}
               >
-                <span className="text-xl">{skipReview ? '🚫' : '✅'}</span>
                 <span>{skipReview ? '복습 제외' : '복습 포함'}</span>
               </button>
-              <button onClick={handleTimerComplete} className="flex-1 py-4 bg-green-600 text-white rounded-2xl font-black text-base shadow-lg">완료</button>
+              <button onClick={handleTimerComplete} className="flex-1 rounded-2xl bg-rose-100 px-3 py-4 text-sm font-black text-rose-700 shadow-lg transition-colors hover:bg-rose-200">완료</button>
             </div>
-
-            {!skipReview && (
-              <div className="mt-4 w-full max-w-lg rounded-3xl border border-rose-400/30 bg-rose-500/10 p-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-rose-200">복습 핵심 키워드</label>
-                <AutoResizeTextarea
-                  value={reviewMemo}
-                  onChange={e => setReviewMemo(e.target.value)}
-                  minHeight={96}
-                  maxHeight={220}
-                  placeholder="복습 때 바로 떠올릴 핵심어를 적어주세요."
-                  className={`mt-3 w-full rounded-2xl border border-rose-300/30 bg-black/20 p-4 font-bold text-rose-50 outline-none placeholder:text-rose-200/40 focus:border-rose-300 ${getMemoTextSize(reviewMemo)}`}
-                />
-              </div>
+            </div>
             )}
+
+            </aside>
           </div>
         )}
 
@@ -2766,8 +2358,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
             )}
             <div className="flex flex-col gap-4 mb-4 w-full bg-slate-50 p-5 rounded-2xl border border-slate-100">
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">완료된 끝 페이지</label>
+                <label htmlFor="session-end-page" className="text-[10px] font-black text-indigo-500 uppercase ml-2 tracking-widest">완료된 끝 페이지</label>
                 <input
+                  id="session-end-page"
                   type="number"
                   step="1"
                   value={readAmount}
@@ -2780,9 +2373,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                   시작 p.{formatPageNumber(parseFloat(startPage) || 0)} · 학습량 {currentReadAmount > 0 ? formatPageNumber(currentReadAmount) : '0'}P
                 </p>
               </div>
+              <div className="space-y-2">
+                <label htmlFor="session-solved-pages" className="ml-2 text-xs font-black text-indigo-500">푼 장수</label>
+                <input id="session-solved-pages" type="number" min="1" step="1" value={solvedPageCount}
+                  onChange={e => setSolvedPageCount(e.target.value)}
+                  className="w-full rounded-2xl border-2 border-slate-200 bg-white p-4 text-center text-3xl font-black text-indigo-900 outline-none focus:border-indigo-500" />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">현재 페이지</p>
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{activeReviewRun ? '이번 학습량' : '현재 페이지'}</p>
                   <p className="mt-1 text-xl font-black text-indigo-600">
                     {currentReadAmount > 0 ? `${formatPageNumber(currentReadAmount)}P` : '0P'}
                   </p>
@@ -2790,7 +2389,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                 <div className="rounded-xl bg-white p-3 text-center border border-slate-100">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">현재 시간</p>
                   <p className="mt-1 text-xl font-black text-slate-700">
-                    {formatTime(seconds)}
+                    {formatTime(studySeconds + organizationSeconds)}
+                  </p>
+                  <p className="mt-1 text-[10px] font-bold text-slate-400">
+                    풀이 {formatTime(studySeconds)} · 정리 {formatTime(organizationSeconds)}
                   </p>
                 </div>
               </div>
@@ -2808,11 +2410,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
                 </div>
                 {!isMemoCollapsed && (
                   <>
-                    <textarea
+                    <MemoColorTextarea
+                      colorColons={colorMemoColons}
+                      wrapperClassName="mt-3"
                       value={sessionMemo}
                       onChange={e => handleMemoChange(e.target.value)}
                       placeholder="다음 세션에서 이어볼 내용..."
-                      className={`mt-3 h-28 w-full resize-none rounded-xl border border-indigo-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-indigo-500 ${getMemoTextSize(sessionMemo)}`}
+                      className={`h-28 w-full resize-none rounded-xl border border-indigo-100 bg-white p-4 font-bold text-slate-700 outline-none focus:border-indigo-500 ${getMemoTextSize(sessionMemo)}`}
                     />
                     <p className="mt-2 text-center text-[10px] font-bold text-slate-400">과목별로 자동 저장됩니다.</p>
                   </>
@@ -2820,15 +2424,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, tagDefinitions, logs,
               </div>
             </div>
 
-            <div className={activeReviewRun ? 'grid w-full grid-cols-2 gap-3' : 'w-full'}>
+            <div className={activeReviewRun ? 'grid w-full gap-3 sm:grid-cols-3' : 'w-full'}>
               <button onClick={handleFinalSave} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg shadow-lg">
                 저장 완료
               </button>
               {activeReviewRun && (
-                <button onClick={handleSwitchToNextReviewSubject} className="w-full py-4 bg-rose-600 text-white rounded-2xl font-black text-lg shadow-lg shadow-rose-100">
-                  {nextReviewRunSubject ? '복습 완료 후 다음 과목' : '복습 완료'}
+                <button onClick={() => handleSwitchToNextReviewSubject()} className="w-full py-4 bg-rose-600 text-white rounded-2xl font-black text-lg shadow-lg shadow-rose-100">
+                  복습 완료
                 </button>
               )}
+              {activeReviewRun && <button onClick={() => handleSwitchToNextReviewSubject(true)}
+                className="w-full rounded-2xl border border-indigo-200 bg-indigo-50 py-4 text-lg font-black text-indigo-700 shadow-sm">
+                완료 후 다시 예약
+              </button>}
             </div>
           </div>
         )}

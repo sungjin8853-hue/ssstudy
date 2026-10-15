@@ -1,28 +1,39 @@
-import React, { useMemo, useState } from 'react';
-import { StudyLog, Subject } from '../types';
-import { calculateStats } from '../utils/math';
+import React, { useState } from 'react';
+import { Subject } from '../types';
+import { DEFAULT_GROWTH_PAGE_UNIT, normalizeGrowthUnit } from '../utils/pageGrowth';
 import {
   calculateFreshWeekdayPagePlan,
   getDiffDays,
-  getActiveSubjectStage,
+  getLocalDateKey,
   getSubjectRemainingPageCount,
   WEEKDAYS
 } from '../utils/schedule';
 
 interface Props {
-  subjects: Subject[];
-  logs: StudyLog[];
   onAddSubject: (s: Subject) => void;
 }
 
-export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }) => {
+export const createNewStudyPlan = (name: string, startPage: number, endPage: number, targetDate: string,
+  isRequired: boolean, scheduledWeekdays: number[], growthPageUnit = DEFAULT_GROWTH_PAGE_UNIT): Subject => {
+  const normalizedStartPage = Math.max(1, Math.round(Number(startPage) || 1));
+  const now = new Date();
+  return {
+    id: Math.random().toString(36).substr(2, 9), name,
+    createdAt: now.toISOString(), planResetDate: getLocalDateKey(now),
+    startPage: normalizedStartPage,
+    totalPages: Math.max(normalizedStartPage, Math.round(Number(endPage) || normalizedStartPage)),
+    completedPages: normalizedStartPage - 1, targetDate, isRequired, scheduledWeekdays,
+    growthPageUnit: normalizeGrowthUnit(growthPageUnit)
+  };
+};
+
+export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [name, setName] = useState('');
   const [startPage, setStartPage] = useState(1);
-  const [currentPages, setCurrentPages] = useState(0);
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
   const [isRequired, setIsRequired] = useState(false);
-  const [efficiencySourceId, setEfficiencySourceId] = useState('');
+  const [growthPageUnit, setGrowthPageUnit] = useState(DEFAULT_GROWTH_PAGE_UNIT);
   const [scheduledWeekdays, setScheduledWeekdays] = useState<number[]>(WEEKDAYS.map(day => day.id));
 
   const toggleWeekday = (weekday: number) => {
@@ -36,47 +47,10 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
     });
   };
 
-  const efficiencySources = useMemo(() => (
-    subjects
-      .map(subject => {
-        const stats = calculateStats(
-          logs.filter(log => log.subjectId === subject.id),
-          getSubjectRemainingPageCount(subject),
-          0,
-          subject.initialAverageTimePerPage
-        );
-        return {
-          id: subject.id,
-          name: getActiveSubjectStage(subject)?.name || subject.name,
-          averageTimePerPage: stats.averageTimePerPage
-        };
-      })
-      .filter(subject => subject.averageTimePerPage > 0)
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  ), [logs, subjects]);
 
   const handleAdd = () => {
     if (!name || !date) return;
-    const normalizedStartPage = Math.max(1, Math.round(Number(startPage) || 1));
-    const normalizedEndPage = Math.max(normalizedStartPage, Math.round(Number(pages) || normalizedStartPage));
-    const normalizedCompletedPage = Math.min(
-      normalizedEndPage,
-      Math.max(normalizedStartPage - 1, Math.round(Number(currentPages) || 0))
-    );
-    const efficiencySource = efficiencySources.find(subject => subject.id === efficiencySourceId);
-    const nextSubject: Subject = {
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      createdAt: new Date().toISOString(),
-      planResetDate: new Date().toISOString().slice(0, 10),
-      startPage: normalizedStartPage,
-      totalPages: normalizedEndPage,
-      completedPages: normalizedCompletedPage,
-      targetDate: date,
-      initialAverageTimePerPage: efficiencySource?.averageTimePerPage,
-      isRequired,
-      scheduledWeekdays,
-    };
+    const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays, growthPageUnit);
 
     onAddSubject({
       ...nextSubject,
@@ -89,10 +63,9 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
     setName('');
     setStartPage(1);
     setPages(100);
-    setCurrentPages(0);
     setDate('');
     setIsRequired(false);
-    setEfficiencySourceId('');
+    setGrowthPageUnit(DEFAULT_GROWTH_PAGE_UNIT);
     setScheduledWeekdays(WEEKDAYS.map(day => day.id));
   };
 
@@ -114,7 +87,7 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
               className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all"
             />
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">시작 페이지</label>
               <input
@@ -122,26 +95,12 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
                 min="1"
                 step="1"
                 value={startPage}
-                onChange={e => {
-                  const nextStartPage = Number(e.target.value);
-                  setStartPage(nextStartPage);
-                  setCurrentPages(current => Math.max(nextStartPage - 1, current));
-                }}
+                onChange={e => setStartPage(Number(e.target.value))}
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">현재 완료 페이지</label>
-              <input 
-                type="number"
-                step="1"
-                value={currentPages}
-                onChange={e => setCurrentPages(Number(e.target.value))}
-                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">총 목표 페이지</label>
+              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">끝 페이지</label>
               <input 
                 type="number"
                 step="1"
@@ -159,6 +118,12 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
                 className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
               />
             </div>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="new-plan-page-unit" className="ml-1 text-[10px] font-black text-slate-400">페이지 단위</label>
+            <input id="new-plan-page-unit" type="number" min="1" step="1" value={growthPageUnit}
+              onChange={event => setGrowthPageUnit(Number(event.target.value))}
+              className="w-full rounded-2xl border border-slate-200 bg-white p-4 font-bold outline-none focus:ring-4 focus:ring-indigo-500/10" />
           </div>
           <div className="space-y-2">
             <label className="ml-1 text-[10px] font-black uppercase tracking-widest text-slate-400">학습 요일</label>
@@ -181,21 +146,6 @@ export const SubjectPlanner: React.FC<Props> = ({ subjects, logs, onAddSubject }
                 );
               })}
             </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">기존 효율 가져오기</label>
-            <select
-              value={efficiencySourceId}
-              onChange={event => setEfficiencySourceId(event.target.value)}
-              className="w-full rounded-2xl border border-slate-200 bg-white p-4 font-bold text-slate-800 outline-none focus:ring-4 focus:ring-indigo-500/10"
-            >
-              <option value="">사용 안 함</option>
-              {efficiencySources.map(subject => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.name} · {subject.averageTimePerPage.toFixed(2)}분/P
-                </option>
-              ))}
-            </select>
           </div>
           <div className="space-y-2">
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">중요도</label>

@@ -1,26 +1,30 @@
 import React, { useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { StudyLog, Subject, TagDefinition } from '../types';
-import { calculateBasicReviewEfficiencyByNumber, calculateRecentTimedPageAverage, calculateStats } from '../utils/math';
-import { BASIC_REVIEW_DETAIL_PREFIX } from '../utils/review';
+import { StudyLog, Subject, ReviewMemoDocument } from '../types';
+import { calculateBasicReviewEfficiencyByNumber, calculateRecentTimedPageAverage, calculateReviewSpeedChanges, calculateStats, calculateSubjectReviewAverageTimePerPage, calculateTimeAttackAverage, getReviewEfficiencySamples } from '../utils/math';
+import { BASIC_REVIEW_DETAIL_PREFIX, getRepeatedReviewRange, getReviewStartPage } from '../utils/review';
+import { getMeasurementRemainingPages, getPomodoroPageTarget, getRemainingPomodoroSessions, POMODORO_MINUTES, PomodoroPlan } from '../utils/measurement';
 import {
   getActiveSubjectStage,
-  calculateWeeklyRequiredPages,
-  getDiffDays,
+  getAllSubjectReviewIds,
   getLocalDateKey,
   getLogStudyDate,
   getSubjectRemainingPageCount,
   normalizeWeekdays,
-  parseStudyDate,
-  WEEKDAYS
+  parseStudyDate
 } from '../utils/schedule';
+import { ReviewMemoEditor } from './ReviewMemoEditor';
+import { EfficiencyGrowthCell, ReviewSpeedGrowthCell } from './PageGrowth';
+import { calculatePageUnitGrowth, hasMeasurementOnDate } from '../utils/pageGrowth';
 
 interface Props {
   logs: StudyLog[];
   subjects: Subject[];
-  tagDefinitions: TagDefinition[];
   detailSubjectId: string;
   onDetailSubjectChange: (subjectId: string) => void;
+  taskSelector: React.ReactNode;
+  completedStudySubjectIds?: string[];
+  pomodoroPlan?: PomodoroPlan | null;
   activeWeekday: number;
   activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
@@ -31,14 +35,22 @@ interface Props {
 type ModalMode = 'add' | 'edit';
 
 interface SubjectSummary {
+  recordKey: string;
   subjectId: string;
+  detailId: string;
+  kind: 'study' | 'review';
   name: string;
   pages: number;
   minutes: number;
+  weeklyPages: number;
+  weeklyMinutes: number;
   startPage: number;
   endPage: number;
   latestTimestamp: string;
   logs: StudyLog[];
+  reviewSpeedChangePercent: number | null;
+  reviewBaselineMinutes: number;
+  reviewHasBaseline: boolean;
 }
 
 const formatNumber = (value: number) => {
@@ -53,7 +65,132 @@ const calculateAmountFromEndPage = (start: number, end: number) => {
   return Number(amount.toFixed(2));
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, detailSubjectId, onDetailSubjectChange, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
+export const buildCompletedSubjectSummaries = (
+  logs: StudyLog[], subjects: Subject[], completedStudySubjectIds: string[], studyDate: string
+): SubjectSummary[] => {
+  const completedIds = new Set(completedStudySubjectIds);
+  const weekStart = parseStudyDate(studyDate);
+  weekStart.setDate(weekStart.getDate() - 6);
+  const weekStartKey = getLocalDateKey(weekStart);
+  const groups = new Map<string, SubjectSummary>();
+  const pomodoroLogs = new Map(logs.filter(log => log.pomodoroSession).map(log => [log.id, log]));
+  const reviewRecords = logs.flatMap(log => log.reviewSubjectTimeRecords || []);
+  const representedBySessions = (record: typeof reviewRecords[number]) => (
+    (record.includedMeasurementIds || [record.measurementId || '']).every(id => pomodoroLogs.has(id))
+  );
+  const aggregateReviewIds = new Set(reviewRecords.filter(record => !representedBySessions(record))
+    .flatMap(record => record.includedMeasurementIds || [record.measurementId || '']));
+  const add = (subjectId: string, kind: 'study' | 'review', detailId: string, name: string,
+    pages: number, minutes: number, timestamp: string, log?: StudyLog,
+    recordKey = detailId, baselineTimePerPage?: number) => {
+    const summary = groups.get(recordKey) || {
+      recordKey, subjectId, detailId, kind, name, pages: 0, minutes: 0, weeklyPages: 0, weeklyMinutes: 0,
+      startPage: 0, endPage: 0, latestTimestamp: timestamp, logs: [],
+      reviewSpeedChangePercent: null, reviewBaselineMinutes: 0, reviewHasBaseline: true
+    };
+    summary.pages += pages;
+    summary.minutes += minutes;
+    if (kind === 'review') {
+      summary.reviewBaselineMinutes += pages * (baselineTimePerPage || 0);
+      summary.reviewHasBaseline &&= (baselineTimePerPage || 0) > 0;
+      summary.reviewSpeedChangePercent = summary.reviewHasBaseline && summary.minutes > 0
+        ? (summary.reviewBaselineMinutes / summary.minutes - 1) * 100 : null;
+    }
+    if (log) {
+      summary.startPage = Math.min(summary.startPage || log.startPage || 0, log.startPage || summary.startPage);
+      summary.endPage = Math.max(summary.endPage, log.endPage || 0);
+      summary.logs.push(log);
+    }
+    if (timestamp > summary.latestTimestamp) summary.latestTimestamp = timestamp;
+    groups.set(recordKey, summary);
+  };
+  const nameOf = (id: string, log: StudyLog) => subjects.find(subject => subject.id === id)?.name
+    || log.subjectNameSnapshot || '삭제된 과목';
+
+  logs.forEach(log => {
+    if (!log.reviewParentSubjectId && (completedIds.has(log.subjectId) || log.pomodoroSession)
+      && getLogStudyDate(log) === studyDate && log.pagesRead > 0) {
+      add(log.subjectId, 'study', log.subjectId, nameOf(log.subjectId, log), log.pagesRead, log.timeSpentMinutes, log.timestamp, log,
+        log.pomodoroSession ? `${log.subjectId}:pomodoro:${log.id}` : log.subjectId);
+    }
+    if (log.pomodoroSession && log.reviewParentSubjectId && !aggregateReviewIds.has(log.id)
+      && getLogStudyDate(log) === studyDate && log.pagesRead > 0) {
+      const allocated = reviewRecords.filter(record => record.measurementId === log.id);
+      const allocatedPages = allocated.reduce((sum, record) => sum + record.pages, 0);
+      const baseline = log.reviewBaselineTimePerPage ?? (allocatedPages > 0
+        ? allocated.reduce((sum, record) => sum + record.pages * (record.baselineTimePerPage || 0), 0) / allocatedPages : 0);
+      add(log.subjectId, 'review', log.subjectId, `${nameOf(log.subjectId, log)} · 복습`, log.pagesRead,
+        log.timeSpentMinutes, log.timestamp, undefined, `${log.subjectId}:${log.id}`, baseline);
+    }
+    (log.basicReviewTimeRecords || []).forEach(record => {
+      if (getLocalDateKey(new Date(record.timestamp)) === studyDate && record.pages > 0) {
+        const detailId = `${BASIC_REVIEW_DETAIL_PREFIX}${log.subjectId}`;
+        add(log.subjectId, 'review', detailId, `${nameOf(log.subjectId, log)} · 기본 복습`, record.pages, record.minutes, record.timestamp,
+          undefined, `${detailId}:${record.timestamp}`);
+      }
+    });
+    (log.reviewSubjectTimeRecords || []).forEach(record => {
+      if (!representedBySessions(record) && (record.completed || pomodoroLogs.has(record.measurementId || ''))
+        && getLocalDateKey(new Date(record.timestamp)) === studyDate && record.pages > 0) {
+        add(record.subjectId, 'review', record.subjectId, `${nameOf(record.subjectId, log)} · 복습`, record.pages, record.minutes, record.timestamp,
+          undefined, `${record.subjectId}:${record.measurementId || record.timestamp}`, record.baselineTimePerPage);
+      }
+    });
+  });
+
+  const addWeekly = (key: string, date: string, pages: number, minutes: number, kind: 'study' | 'review' = 'review') => {
+    if (date < weekStartKey || date > studyDate) return;
+    groups.forEach(summary => {
+      if (summary.detailId !== key || summary.kind !== kind) return;
+      summary.weeklyPages += Math.max(0, pages);
+      summary.weeklyMinutes += Math.max(0, minutes);
+    });
+  };
+  logs.forEach(log => {
+    if (!log.reviewParentSubjectId) {
+      addWeekly(log.subjectId, getLogStudyDate(log), log.pagesRead, log.timeSpentMinutes, 'study');
+    } else if (log.pomodoroSession && !aggregateReviewIds.has(log.id)) {
+      addWeekly(log.subjectId, getLogStudyDate(log), log.pagesRead, log.timeSpentMinutes);
+    }
+    (log.basicReviewTimeRecords || []).forEach(record => {
+      addWeekly(`${BASIC_REVIEW_DETAIL_PREFIX}${log.subjectId}`, getLocalDateKey(new Date(record.timestamp)), record.pages, record.minutes);
+    });
+    (log.reviewSubjectTimeRecords || []).forEach(record => {
+      if (representedBySessions(record)) return;
+      addWeekly(record.subjectId, getLocalDateKey(new Date(record.timestamp)),
+        record.completed || pomodoroLogs.has(record.measurementId || '') ? record.pages : 0, record.minutes);
+    });
+  });
+  return [...groups.values()].sort((a, b) => b.latestTimestamp.localeCompare(a.latestTimestamp));
+};
+
+const EMPTY_SUBJECT_IDS: string[] = [];
+
+export const PomodoroSummary: React.FC<{ pages: number | null; efficiency?: number; attackEfficiency?: number; remainingTaskPages?: number; growth?: React.ReactNode }> = ({ pages, efficiency, attackEfficiency, remainingTaskPages, growth }) => {
+  const sessions = remainingTaskPages === undefined ? null : getRemainingPomodoroSessions(remainingTaskPages, pages);
+  return <div data-testid="pomodoro-growth-strip" className="mt-3 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 lg:flex-row lg:flex-wrap lg:items-start lg:gap-4">
+    <div className="flex max-w-full shrink-0 flex-wrap items-start gap-x-4 gap-y-2">
+      <div><p className="text-xs font-bold text-slate-500">뽀모도로</p>
+        <p className="mt-1 whitespace-nowrap text-3xl font-black leading-9 tabular-nums text-slate-900">{POMODORO_MINUTES}분</p></div>
+      {[{ label: '전체 효율', value: efficiency, testId: 'current-overall-efficiency' },
+        { label: '타임어택 효율', value: attackEfficiency, testId: 'current-attack-efficiency' }].map(item => (
+        <div key={item.testId} data-testid={item.testId} className="border-l border-slate-200 pl-4">
+          <p className="text-xs font-bold text-slate-500">{item.label}</p>
+          <p className="mt-1 whitespace-nowrap font-black leading-9 tabular-nums text-emerald-700">
+            {item.value && item.value > 0 ? <><span className="text-2xl">{item.value.toFixed(1)}</span><span className="ml-1 text-sm">분/P</span></> : <span className="text-base">측정 필요</span>}
+          </p>
+        </div>
+      ))}
+      {sessions !== null && <div className="border-l border-slate-200 pl-4">
+        <p className="text-xs font-bold text-slate-500">필요 횟수</p>
+        <p className="mt-1 whitespace-nowrap text-2xl font-black leading-9 tabular-nums text-slate-900">{sessions}회</p>
+      </div>}
+    </div>
+    {growth}
+  </div>;
+};
+
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
   const [subjectId, setSubjectId] = useState('');
@@ -62,12 +199,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   const [editStartPage, setEditStartPage] = useState(1);
   const [includeReview, setIncludeReview] = useState(true);
   const [reviewMemo, setReviewMemo] = useState('');
+  const [reviewMemoDocument, setReviewMemoDocument] = useState<ReviewMemoDocument>();
   const isBasicReviewDetail = detailSubjectId.startsWith(BASIC_REVIEW_DETAIL_PREFIX);
   const resolvedDetailSubjectId = isBasicReviewDetail
     ? detailSubjectId.slice(BASIC_REVIEW_DETAIL_PREFIX.length)
     : detailSubjectId;
 
-  const activeWeekdayLabel = WEEKDAYS.find(day => day.id === activeWeekday)?.label || '';
   const selectableSubjects = useMemo(() => (
     subjects.filter(subject => (
       getSubjectRemainingPageCount(subject) > 0
@@ -83,103 +220,46 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     return editingSubject ? [editingSubject, ...selectableSubjects] : selectableSubjects;
   }, [editingSummary, selectableSubjects, subjects]);
 
-  const scopedLogs = useMemo(() => (
-    logs.filter(log => getLogStudyDate(log) === activeStudyDate)
-  ), [activeStudyDate, logs]);
+  const subjectSummaries = useMemo(() => buildCompletedSubjectSummaries(
+    logs, subjects, completedStudySubjectIds, activeStudyDate
+  ), [logs, subjects, completedStudySubjectIds, activeStudyDate]);
 
   const totals = useMemo(() => {
-    const time = scopedLogs.reduce((acc, log) => acc + log.timeSpentMinutes, 0);
-    const pages = scopedLogs.reduce((acc, log) => acc + log.pagesRead, 0);
-    const timedPages = scopedLogs
-      .filter(log => log.timeSpentMinutes > 0)
-      .reduce((acc, log) => acc + log.pagesRead, 0);
-    const avgEfficiency = timedPages > 0 ? (time / timedPages).toFixed(1) : '-';
-    return { time, pages, avgEfficiency };
-  }, [scopedLogs]);
-
-  const subjectSummaries = useMemo(() => {
-    const groups = new Map<string, SubjectSummary>();
-
-    scopedLogs.forEach(log => {
-      const subject = subjects.find(item => item.id === log.subjectId);
-      const existing = groups.get(log.subjectId);
-      const startPage = log.startPage ?? 0;
-      const endPage = log.endPage ?? 0;
-
-      if (existing) {
-        existing.pages += log.pagesRead;
-        existing.minutes += log.timeSpentMinutes;
-        existing.startPage = Math.min(existing.startPage || startPage, startPage || existing.startPage);
-        existing.endPage = Math.max(existing.endPage || endPage, endPage || existing.endPage);
-        existing.logs.push(log);
-        if (new Date(log.timestamp).getTime() > new Date(existing.latestTimestamp).getTime()) {
-          existing.latestTimestamp = log.timestamp;
-        }
-        return;
-      }
-
-      groups.set(log.subjectId, {
-        subjectId: log.subjectId,
-        name: subject?.name || log.subjectNameSnapshot || '삭제된 과목',
-        pages: log.pagesRead,
-        minutes: log.timeSpentMinutes,
-        startPage,
-        endPage,
-        latestTimestamp: log.timestamp,
-        logs: [log]
-      });
-    });
-
-    return Array.from(groups.values()).sort(
-      (a, b) => new Date(b.latestTimestamp).getTime() - new Date(a.latestTimestamp).getTime()
-    );
-  }, [scopedLogs, subjects]);
+    const time = subjectSummaries.reduce((acc, summary) => acc + summary.minutes, 0);
+    const pages = subjectSummaries.reduce((acc, summary) => acc + summary.pages, 0);
+    return { time, pages };
+  }, [subjectSummaries]);
 
   const reviewSubjectOwnerMap = useMemo(() => {
     const owners = new Map<string, Subject>();
     subjects.forEach(subject => {
-      (subject.reviewSubjectIds || []).forEach(reviewSubjectId => {
+      getAllSubjectReviewIds(subject).forEach(reviewSubjectId => {
         if (!owners.has(reviewSubjectId)) owners.set(reviewSubjectId, subject);
       });
     });
     return owners;
   }, [subjects]);
 
-  const reviewSubjectIdSet = useMemo(
-    () => new Set(reviewSubjectOwnerMap.keys()),
-    [reviewSubjectOwnerMap]
-  );
-
-  const detailSubjects = useMemo(() => (
-    [...subjects].sort((a, b) => {
-      const reviewDifference = Number(reviewSubjectIdSet.has(a.id)) - Number(reviewSubjectIdSet.has(b.id));
-      return reviewDifference || a.name.localeCompare(b.name, 'ko');
-    })
-  ), [reviewSubjectIdSet, subjects]);
-
   const detailData = useMemo(() => {
-    const subject = subjects.find(item => item.id === resolvedDetailSubjectId);
+    const archivedLog = isBasicReviewDetail
+      ? logs.find(log => log.subjectId === resolvedDetailSubjectId)
+      : undefined;
+    const subject = subjects.find(item => item.id === resolvedDetailSubjectId) || (archivedLog ? {
+      id: resolvedDetailSubjectId,
+      name: archivedLog.subjectNameSnapshot || '삭제된 과목',
+      totalPages: 0,
+      completedPages: 0,
+      targetDate: getLocalDateKey()
+    } : undefined);
     if (!subject) return null;
 
     const owner = reviewSubjectOwnerMap.get(subject.id);
     const subjectLogs = logs.filter(log => log.subjectId === subject.id);
-    const reviewSamples = logs.flatMap(log => (log.reviewSubjectTimeRecords || [])
-      .filter(record => record.subjectId === subject.id)
-      .map(record => ({
-        pagesRead: record.pages,
-        timeSpentMinutes: record.minutes,
-        timestamp: record.timestamp,
-        studyDate: getLocalDateKey(new Date(record.timestamp))
-      })));
-    const samples = [
-      ...subjectLogs.map(log => ({
-        pagesRead: log.pagesRead,
-        timeSpentMinutes: log.timeSpentMinutes,
-        timestamp: log.timestamp,
-        studyDate: getLogStudyDate(log)
-      })),
-      ...reviewSamples
-    ];
+    const growthLogs: StudyLog[] = owner ? getReviewEfficiencySamples(logs, owner.id, subject.id)
+      .map((sample, index) => ({ ...sample, id: `growth-${index}`, subjectId: subject.id })) : subjectLogs;
+    const dueRepeat = subjectLogs.filter(log => log.isRepeatReview && log.nextReviewDate
+      && Date.parse(log.nextReviewDate) <= Date.now() && log.reviewEnabled !== false && !log.isCondensed)
+      .sort((a, b) => Date.parse(a.nextReviewDate!) - Date.parse(b.nextReviewDate!))[0];
     const activeStage = getActiveSubjectStage(subject);
     const activeStagePageCount = activeStage
       ? Math.max(0, activeStage.endPage - activeStage.startPage + 1)
@@ -194,79 +274,14 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
       : 100;
     const remainingPages = getSubjectRemainingPageCount(subject);
-    const effectiveTargetDate = owner?.targetDate || subject.targetDate;
-    const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, getDiffDays(effectiveTargetDate));
-    const dailyAveragePages = weeklyRequiredPages / 7;
-    const measuredEfficiency = calculateRecentTimedPageAverage(samples).averageTimePerPage;
-    const normalEfficiency = calculateStats(
-      subjectLogs,
-      remainingPages,
-      dailyAveragePages,
-      subject.initialAverageTimePerPage
-    ).averageTimePerPage;
-    const efficiency = measuredEfficiency || normalEfficiency;
-    const dailyAverageMinutes = dailyAveragePages * efficiency;
+    const efficiency = owner
+      ? calculateSubjectReviewAverageTimePerPage(logs, owner.id, subject.id, subject.growthPageUnit)
+      : calculateStats(subjectLogs, remainingPages, 0, subject.initialAverageTimePerPage, subject.growthPageUnit).averageTimePerPage;
 
-    const todayKey = getLocalDateKey();
-    const weekStart = parseStudyDate(todayKey);
-    weekStart.setDate(weekStart.getDate() - 6);
-    const dayKeys = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(weekStart);
-      date.setDate(date.getDate() + index);
-      return getLocalDateKey(date);
-    });
-    const weekStartKey = dayKeys[0];
-    const weeklySamples = samples.filter(sample => sample.studyDate >= weekStartKey && sample.studyDate <= todayKey);
-    const weeklyPages = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.pagesRead), 0);
-    const weeklyMinutes = weeklySamples.reduce((sum, sample) => sum + Math.max(0, sample.timeSpentMinutes), 0);
-    const monthStart = parseStudyDate(todayKey);
-    monthStart.setDate(monthStart.getDate() - 30);
-    const monthStartKey = getLocalDateKey(monthStart);
-    const monthlyStudyDates = [...new Set(samples
-      .filter(sample => (
-        sample.studyDate >= monthStartKey
-        && sample.studyDate <= todayKey
-        && sample.pagesRead > 0
-      ))
-      .map(sample => sample.studyDate))]
-      .sort();
-    const efficiencyTrend = monthlyStudyDates.map(date => {
-      const daySamples = samples.filter(sample => sample.studyDate === date && sample.pagesRead > 0);
-      const timedSamples = daySamples.filter(sample => sample.timeSpentMinutes > 0);
-      const timedPages = timedSamples.reduce((sum, sample) => sum + sample.pagesRead, 0);
-      const minutes = timedSamples.reduce((sum, sample) => sum + sample.timeSpentMinutes, 0);
-      return {
-        date,
-        label: date.slice(5).replace('-', '/'),
-        efficiency: timedPages > 0 ? minutes / timedPages : null,
-        studyMinutes: minutes
-      };
-    });
     const basicReviewTrend = isBasicReviewDetail
       ? calculateBasicReviewEfficiencyByNumber(logs, subject.id)
       : [];
 
-    const folderIds = subject.tagIds?.length ? subject.tagIds : (owner?.tagIds || []);
-    const folderId = folderIds[0];
-    const folder = tagDefinitions.find(tag => tag.id === folderId);
-    const folderSubjects = subjects.filter(candidate => {
-      if (reviewSubjectIdSet.has(candidate.id)) return false;
-      return folderId
-        ? candidate.tagIds?.includes(folderId)
-        : !candidate.tagIds || candidate.tagIds.length === 0;
-    });
-    const folderDailyMinutes = folderSubjects.reduce((sum, candidate) => {
-      const candidateLogs = logs.filter(log => log.subjectId === candidate.id);
-      const candidateRemaining = getSubjectRemainingPageCount(candidate);
-      const candidateWeeklyPages = calculateWeeklyRequiredPages(candidateRemaining, getDiffDays(candidate.targetDate));
-      const candidateEfficiency = calculateStats(
-        candidateLogs,
-        candidateRemaining,
-        candidateWeeklyPages / 7,
-        candidate.initialAverageTimePerPage
-      ).averageTimePerPage;
-      return sum + (candidateWeeklyPages / 7) * candidateEfficiency;
-    }, 0);
 
     return {
       subject,
@@ -276,17 +291,15 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       activeStagePageCount,
       activeStageCompletedPages,
       activeStageProgress,
-      dailyAveragePages,
-      dailyAverageMinutes,
       efficiency,
-      weeklyPages,
-      weeklyMinutes,
-      efficiencyTrend,
+      attackEfficiency: calculateTimeAttackAverage(growthLogs, subject.growthPageUnit),
+      reviewStartPage: owner ? dueRepeat ? getRepeatedReviewRange(dueRepeat, subject).startPage : getReviewStartPage(subject) : null,
+      pageGrowth: calculatePageUnitGrowth(growthLogs, subject.id, subject.growthPageUnit),
+      measuredToday: hasMeasurementOnDate(growthLogs, activeStudyDate),
+      reviewSpeedChanges: owner ? calculateReviewSpeedChanges(logs, owner.id, subject.id, activeStudyDate) : null,
       basicReviewTrend,
-      folderName: folder?.name || '미분류',
-      folderDailyMinutes
     };
-  }, [isBasicReviewDetail, logs, resolvedDetailSubjectId, reviewSubjectIdSet, reviewSubjectOwnerMap, subjects, tagDefinitions]);
+  }, [activeStudyDate, isBasicReviewDetail, logs, resolvedDetailSubjectId, reviewSubjectOwnerMap, subjects]);
 
   const openAddModal = () => {
     const firstSubject = selectableSubjects[0];
@@ -299,6 +312,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     setEditEndPage(start);
     setIncludeReview(firstSubject?.reviewEnabled !== false);
     setReviewMemo('');
+    setReviewMemoDocument(undefined);
   };
 
   const openEditModal = (summary: SubjectSummary) => {
@@ -313,7 +327,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
     setEditStartPage(summary.startPage || 1);
     setEditEndPage(summary.endPage || summary.startPage || 1);
     setIncludeReview(reviewLogs.length > 0);
-    setReviewMemo(savedMemos.join('\n'));
+    const singleNote = savedMemos.length === 1 ? reviewLogs.find(log => log.reviewMemo?.trim() === savedMemos[0]) : undefined;
+    setReviewMemo(singleNote?.reviewMemo ?? savedMemos.join('\n'));
+    setReviewMemoDocument(singleNote?.reviewMemoDocument);
   };
 
   const closeModal = () => {
@@ -324,23 +340,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   const saveLog = () => {
     const pages = calculateAmountFromEndPage(editStartPage, editEndPage);
     const targetSubject = subjects.find(subject => subject.id === subjectId);
-    const existingTimedSamples = [
-      ...logs
-        .filter(log => log.subjectId === subjectId)
-        .map(log => ({
-          pagesRead: log.pagesRead,
-          timeSpentMinutes: log.timeSpentMinutes,
-          timestamp: log.timestamp
-        })),
-      ...logs.flatMap(log => (log.reviewSubjectTimeRecords || [])
-        .filter(record => record.subjectId === subjectId)
-        .map(record => ({
-          pagesRead: record.pages,
-          timeSpentMinutes: record.minutes,
-          timestamp: record.timestamp
-        })))
-    ];
-    const measuredAverage = calculateRecentTimedPageAverage(existingTimedSamples).averageTimePerPage;
+    const existingTimedSamples = logs.filter(log => log.subjectId === subjectId);
+    const measuredAverage = calculateRecentTimedPageAverage(existingTimedSamples, targetSubject?.growthPageUnit).averageTimePerPage;
     const existingAverage = measuredAverage || Math.max(0, targetSubject?.initialAverageTimePerPage || 0);
     const minutes = editMinutes.trim() === ''
       ? Number((pages * existingAverage).toFixed(2))
@@ -370,7 +371,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
       isReviewed: includeReview ? retainedReviewLog?.isReviewed ?? false : false,
       isCondensed: !includeReview,
       reviewEnabled: includeReview,
-      reviewMemo: includeReview && reviewMemo.trim() ? reviewMemo.trim() : undefined,
+      reviewMemo: includeReview && reviewMemo.trim() ? reviewMemo : undefined,
+      reviewMemoDocument: includeReview && reviewMemo.trim() ? reviewMemoDocument : undefined,
       ...(includeReview && retainedReviewLog ? {
         reviewStep: retainedReviewLog.reviewStep,
         nextReviewDate: retainedReviewLog.nextReviewDate,
@@ -392,13 +394,16 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   };
 
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
+  const detailPomodoroPages = detailData ? pomodoroPlan?.subjectId === detailData.subject.id
+    ? pomodoroPlan.pages : getPomodoroPageTarget(detailData.efficiency, getMeasurementRemainingPages(detailData.subject)) : null;
   const calculatedPages = editEndPage > 0 ? calculateAmountFromEndPage(editStartPage, editEndPage) : 0;
 
   return (
     <section className="animate-fade-in">
+      <div className="mb-4">{taskSelector}</div>
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
         <h3 className="flex items-center gap-2 text-base font-black text-slate-800">
-          실시간 기록
+          완료된 기록
           <button
             onClick={openAddModal}
             disabled={selectableSubjects.length === 0}
@@ -415,30 +420,51 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
 
       {subjectSummaries.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-5 text-center text-xs font-bold text-slate-400">
-          {activeWeekdayLabel}요일 기록이 없습니다.
+          오늘 완료된 기록이 없습니다.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
           {subjectSummaries.map(summary => {
+            const summarySubject = subjects.find(subject => subject.id === summary.subjectId);
+            const showUnitGrowth = summary.kind === 'review' && summarySubject?.reviewGrowthDisplay === 'unit';
+            const summaryOwner = reviewSubjectOwnerMap.get(summary.subjectId);
+            const unitGrowthLogs = showUnitGrowth && summaryOwner
+              ? getReviewEfficiencySamples(logs, summaryOwner.id, summary.subjectId)
+                .map((sample, index) => ({ ...sample, id: `completed-growth-${index}`, subjectId: summary.subjectId }))
+              : logs;
+            const unitGrowth = showUnitGrowth ? calculatePageUnitGrowth(unitGrowthLogs.filter(log => log.timestamp <= summary.latestTimestamp),
+              summary.subjectId, summarySubject?.growthPageUnit, summarySubject?.growthComparisonUnits) : null;
+            const growthPercent = showUnitGrowth ? unitGrowth?.speedChangePercent : summary.reviewSpeedChangePercent;
             return (
               <div
-                key={summary.subjectId}
+                key={summary.recordKey}
                 role="button"
                 tabIndex={0}
-                onClick={() => onDetailSubjectChange(summary.subjectId)}
+                onClick={() => onDetailSubjectChange(summary.detailId)}
                 onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') onDetailSubjectChange(summary.subjectId);
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onDetailSubjectChange(summary.detailId);
+                  }
                 }}
                 className={`flex min-w-0 cursor-pointer items-center gap-2 rounded-xl border bg-white px-3 py-2 transition-all ${
-                  detailSubjectId === summary.subjectId
+                  detailSubjectId === summary.detailId
                     ? 'border-indigo-400 bg-indigo-50'
                     : 'border-slate-200 hover:border-indigo-300'
                 }`}
               >
-                <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-800">{summary.name}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-black text-slate-800">{summary.name}</p>
+                  <p className="mt-1 text-xs font-bold text-slate-500">최근 7일 <span className="text-slate-700">{formatNumber(summary.weeklyMinutes)}분 · {formatNumber(summary.weeklyPages)}P</span></p>
+                  {summary.kind === 'review' && <p className="mt-1 text-xs font-black text-rose-600">
+                    {showUnitGrowth ? '페이지 단위 성장' : '이번 복습 증가율'} {growthPercent !== null && growthPercent !== undefined
+                      ? `${growthPercent >= 0 ? '+' : ''}${growthPercent.toFixed(1)}%`
+                      : '측정 필요'}
+                  </p>}
+                </div>
                 <p className="shrink-0 text-sm font-black text-indigo-600">{formatNumber(summary.pages)}P</p>
                 <p className="w-20 shrink-0 text-right text-sm font-black text-slate-600">{formatNumber(summary.minutes)}분</p>
-                <div className="flex shrink-0 gap-0.5">
+                {summary.kind === 'study' && <div className="flex shrink-0 gap-0.5">
                     <button
                       onClick={event => {
                         event.stopPropagation();
@@ -459,36 +485,15 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                     >
                       ×
                     </button>
-                </div>
+                </div>}
               </div>
             );
           })}
         </div>
       )}
 
-      <div className="mt-5 mb-4">
-        <select
-          value={detailSubjectId}
-          onChange={event => onDetailSubjectChange(event.target.value)}
-          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 outline-none transition-all focus:border-indigo-400 sm:max-w-sm"
-        >
-          <option value="">과목 데이터 선택</option>
-          {isBasicReviewDetail && detailData && (
-            <option value={detailSubjectId}>{detailData.subject.name} · 기본 복습</option>
-          )}
-          {detailSubjects.map(subject => {
-            const owner = reviewSubjectOwnerMap.get(subject.id);
-            return (
-              <option key={subject.id} value={subject.id}>
-                {owner ? `${subject.name} · ${owner.name} 복습` : subject.name}
-              </option>
-            );
-          })}
-        </select>
-      </div>
-
       {detailData && (
-        <div id="subject-live-detail" className="mb-5 rounded-3xl border border-indigo-100 bg-white p-4 shadow-sm md:p-5">
+        <div id="subject-live-detail" className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
           <div className={`flex flex-wrap items-center justify-between gap-2 ${detailData.isBasicReviewDetail ? 'mb-2' : 'mb-4'}`}>
             <div className="min-w-0">
               <p className="truncate text-lg font-black text-slate-900">
@@ -498,21 +503,19 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                 <p className="mt-1 text-[10px] font-black text-rose-500">{detailData.owner.name} 복습과목</p>
               )}
             </div>
-            {!detailData.isBasicReviewDetail && (
-              <p className="text-sm font-black text-emerald-600">
-                효율 {detailData.efficiency > 0 ? `${detailData.efficiency.toFixed(1)}분/P` : '-'}
-              </p>
-            )}
           </div>
+          {detailData.owner && <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-rose-50 px-4 py-3">
+            <span className="text-sm font-bold text-slate-600">{detailData.reviewStartPage !== null ? `다음 시작 p.${detailData.reviewStartPage}` : '전체 완료'}</span>
+          </div>}
 
           {detailData.isBasicReviewDetail ? (
             <BasicReviewEfficiencyTrend points={detailData.basicReviewTrend} />
           ) : (
             <>
-              <div className="mb-2 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+              <div className="mb-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex flex-wrap items-end justify-between gap-2">
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400">학습 진척도</p>
+                    <p className="text-xs font-bold text-slate-500">학습 진척도</p>
                     <p className="mt-1 text-base font-black text-slate-900">
                       {detailData.activeStage
                         ? `${detailData.activeStage.name} · p.${formatNumber(detailData.activeStage.startPage)}~${formatNumber(detailData.activeStage.endPage)}`
@@ -525,24 +528,19 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                       : '100%'}
                   </p>
                 </div>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
                   <div
                     className="h-full rounded-full bg-indigo-500 transition-all duration-500"
                     style={{ width: `${detailData.activeStageProgress}%` }}
                   />
                 </div>
               </div>
+              <PomodoroSummary pages={detailPomodoroPages} efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency} remainingTaskPages={pomodoroPlan?.subjectId === detailData.subject.id
+                ? pomodoroPlan.remainingTaskPages : undefined}
+                growth={detailData.owner && detailData.subject.reviewGrowthDisplay !== 'unit'
+                  ? <ReviewSpeedGrowthCell changes={detailData.reviewSpeedChanges!} measuredToday={detailData.measuredToday} />
+                  : <EfficiencyGrowthCell key={detailData.subject.id} growth={detailData.pageGrowth} measuredToday={detailData.measuredToday} />} />
 
-              <div className="grid grid-cols-2 gap-2">
-                <SubjectDataBox
-                  label="하루 평균 공부량 · 시간"
-                  value={`${formatNumber(detailData.dailyAveragePages)}P · ${formatNumber(detailData.dailyAverageMinutes)}분`}
-                  color="text-indigo-600"
-                />
-                <SubjectDataBox label="최근 7일" value={`${formatNumber(detailData.weeklyMinutes)}분 · ${formatNumber(detailData.weeklyPages)}P`} color="text-slate-900" />
-              </div>
-
-              <SubjectEfficiencyTrend points={detailData.efficiencyTrend} />
             </>
           )}
         </div>
@@ -566,6 +564,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                       setEditEndPage(start);
                       setIncludeReview(nextSubject.reviewEnabled !== false);
                       setReviewMemo('');
+                      setReviewMemoDocument(undefined);
                     }
                   }}
                   className="w-full p-4 bg-slate-50 rounded-2xl font-black text-center text-lg outline-none"
@@ -617,11 +616,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
                   </button>
                 </div>
                 {includeReview && (
-                  <textarea
+                  <ReviewMemoEditor
                     value={reviewMemo}
-                    onChange={event => setReviewMemo(event.target.value)}
+                    document={reviewMemoDocument}
+                    onChange={(memo, document) => { setReviewMemo(memo); setReviewMemoDocument(document); }}
                     placeholder="복습 노트"
-                    className="h-28 w-full resize-none overflow-y-auto rounded-2xl border border-rose-100 bg-rose-50/70 p-4 text-base font-bold text-slate-700 outline-none focus:border-rose-400"
+                    minHeight={112}
+                    maxHeight={260}
                   />
                 )}
               </div>
@@ -639,90 +640,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, tagDefinitions, 
   );
 };
 
-const SubjectDataBox = ({ label, value, color }: { label: string; value: string; color: string }) => (
-  <div className="min-w-0 rounded-2xl bg-slate-50 px-3 py-3">
-    <p className="truncate text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p>
-    <p className={`mt-1 truncate text-lg font-black ${color}`}>{value}</p>
-  </div>
-);
-
-const SubjectEfficiencyTrend = ({ points }: {
-  points: { date: string; label: string; efficiency: number | null; studyMinutes: number }[];
-}) => {
-  const measuredValues = points.flatMap(point => point.efficiency === null ? [] : [point.efficiency]);
-  const baselineEfficiency = measuredValues[0] || 0;
-  const chartData = points.map(point => ({
-    date: point.label,
-    speedIncrease: point.efficiency === null || baselineEfficiency <= 0
-      ? undefined
-      : Number((((baselineEfficiency / point.efficiency) - 1) * 100).toFixed(1)),
-    studyMinutes: Number(point.studyMinutes.toFixed(2))
-  }));
-
-  return (
-    <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">최근 한 달 속도 · 공부시간</p>
-        <div className="flex items-center gap-3 text-[9px] font-black">
-          <span className="flex items-center gap-1 text-blue-600"><i className="h-2 w-2 rounded-full bg-blue-500" />속도 상승</span>
-          <span className="flex items-center gap-1 text-red-600"><i className="h-2 w-2 rounded-full bg-red-500" />공부시간</span>
-        </div>
-      </div>
-      {measuredValues.length === 0 ? (
-        <div className="flex h-48 items-center justify-center text-sm font-black text-slate-300">기록 없음</div>
-      ) : (
-        <div className="h-56 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 8, right: 2, left: -18, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis dataKey="date" fontSize={9} tickLine={false} axisLine={false} />
-              <YAxis yAxisId="speed" fontSize={9} tickLine={false} axisLine={false} tickFormatter={value => `${value}%`} />
-              <YAxis
-                yAxisId="minutes"
-                orientation="right"
-                width={38}
-                fontSize={9}
-                tickLine={false}
-                axisLine={false}
-                tick={{ fill: '#dc2626' }}
-                tickFormatter={value => `${value}분`}
-              />
-              <Tooltip
-                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(15,23,42,0.12)' }}
-                formatter={(value: number, name: string) => (
-                  name === 'studyMinutes'
-                    ? [`${formatNumber(Number(value))}분`, '공부시간']
-                    : [`${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(1)}%`, '속도 상승']
-                )}
-              />
-              <Line
-                name="속도 상승"
-                type="monotone"
-                dataKey="speedIncrease"
-                yAxisId="speed"
-                stroke="#3b82f6"
-                strokeWidth={3}
-                dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
-                activeDot={{ r: 6 }}
-                connectNulls
-              />
-              <Line
-                name="공부시간"
-                type="monotone"
-                dataKey="studyMinutes"
-                yAxisId="minutes"
-                stroke="#dc2626"
-                strokeWidth={3}
-                dot={{ r: 4, fill: '#dc2626', strokeWidth: 0 }}
-                activeDot={{ r: 6 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </div>
-  );
-};
 
 const BasicReviewEfficiencyTrend = ({ points }: {
   points: Array<{
