@@ -208,7 +208,9 @@ export const completeRegularReviewSchedule = inLogSubject((log: StudyLog, nowMs:
     reviewGatePendingSchedules: undefined,
     reviewGatePendingSteps: undefined,
     reviewGatePendingResult: undefined,
-    reviewSubjectId: undefined
+    reviewSubjectId: undefined,
+    // 복습을 마치면 고친 것도 그 복습에 들어간 것이다(더는 되돌리지 않는다)
+    reviewEditIntake: undefined
   };
 });
 
@@ -226,6 +228,26 @@ export const previewReviewCompletionIntervals = (log: StudyLog | null, nowMs: nu
     return [grade, Number.isFinite(at) ? Math.max(0, at - nowMs) : subjectOnly[grade]];
   })) as Record<SubjectGrade, number>;
 };
+
+/** 고친 노트에서 지금 복습에 들어가 있는 문제 수(아직 노트에 있는 것만) */
+export const editIntakeCount = inLogSubject((log: StudyLog): number => {
+  if (!log.reviewEditIntake) return 0;
+  const valid = new Set(getReviewGateQuestionKeys(log.reviewMemo || ''));
+  return log.reviewEditIntake.keys.filter(key => valid.has(key) && !isReviewQuestionRemoved(log, key)).length;
+});
+
+/**
+ * "복습에 넣지 않기": 고쳐서 복습에 들어간 문제를 빼고, 고친 것을 오류를 바로잡은 것으로 다시 본다
+ * (‘고친 부분을 복습에 넣기’를 끄고 고친 것과 같게: 처음 고치기 전 일정에서, 바뀐 문제가 가장 닮은 옛 문제의 일정을 이어받는다).
+ */
+export const skipEditIntake = inLogSubject((log: StudyLog): StudyLog => {
+  const record = log.reviewEditIntake;
+  if (!record) return log;
+  const memo = log.reviewMemo || '';
+  const schedules = record.base.memo.trim() && record.base.memo !== memo
+    ? inheritEditedSchedules(record.base.memo, memo, record.base.schedules) : record.base.schedules;
+  return { ...log, reviewQuestionSchedules: schedules, nextReviewDate: record.base.nextReviewDate, reviewEditIntake: undefined };
+});
 
 export interface ReviewMemoEditOptions {
   /** 노트를 고쳐 새로 생긴 문제를 바로 복습으로 들인다(끌 수 있다). 주지 않으면 들이지 않는다. */
@@ -312,6 +334,7 @@ export const updateReviewGateMemo = inLogSubject((log: StudyLog, memo: string, d
   const pendingQuestionKeys = log.reviewGateRetry?.questionKeys?.filter(key => validKeys.has(key)) || [];
   let schedules = log.reviewQuestionSchedules;
   let nextReviewDate = log.nextReviewDate;
+  let intakeRecord = log.reviewEditIntake;
   // ‘고친 부분을 복습에 넣기’를 끈 채 고친 것은 오류를 바로잡은 것으로 본다: 바뀐 문제는 가장 닮은 옛 문제의 일정을 이어받는다
   if (options.intake === false && before.trim() && before !== nextMemo) schedules = inheritEditedSchedules(before, nextMemo, schedules);
   if (options.intake && before.trim() && log.reviewEnabled !== false && !log.isCondensed && nextReviewDate && Number.isFinite(Date.parse(nextReviewDate))) {
@@ -329,6 +352,12 @@ export const updateReviewGateMemo = inLogSubject((log: StudyLog, memo: string, d
       }
       fresh.forEach(key => { written[key] = { reviewStep: 0, nextReviewDate: nowIso }; });
       schedules = written;
+      // "복습에 넣지 않기"로 되돌릴 수 있게 처음 고치기 전의 글과 일정을 남긴다(이어서 또 고치면 base는 그대로, 문제만 더한다)
+      intakeRecord = {
+        base: log.reviewEditIntake?.base ?? { memo: before, schedules: log.reviewQuestionSchedules, nextReviewDate: log.nextReviewDate },
+        keys: [...new Set([...(log.reviewEditIntake?.keys ?? []), ...fresh])],
+        at: nowIso
+      };
     }
   }
   return {
@@ -341,7 +370,8 @@ export const updateReviewGateMemo = inLogSubject((log: StudyLog, memo: string, d
     ...(schedules !== log.reviewQuestionSchedules ? { reviewQuestionSchedules: schedules } : {}),
     ...(nextReviewDate !== log.nextReviewDate ? { nextReviewDate } : {}),
     reviewRemoved: pruneReleasedRemovals(log.reviewRemoved, nextMemo),
-    reviewMemoOldLines: stackOldLines(log.reviewMemoOldLines, effects.oldLines, nowIso)
+    reviewMemoOldLines: stackOldLines(log.reviewMemoOldLines, effects.oldLines, nowIso),
+    ...(intakeRecord !== log.reviewEditIntake ? { reviewEditIntake: intakeRecord } : {})
   };
 });
 
@@ -394,7 +424,7 @@ export const applyReviewGateOutcomes = (
       if (isRetry) return { ...log, reviewGateRetry: undefined };
       return { ...log, reviewQuestionFormat: 2, reviewQuestionSchedules: previous,
         reviewGatePendingSchedules: pending, reviewGatePendingResult: outcome.passed ? 'correct' : 'wrong',
-        reviewGateLevel: Math.min(3, Math.max(1, outcome.unlockedLevel ?? log.reviewGateLevel ?? 1)), reviewGateRetry: undefined };
+        reviewGateLevel: Math.min(3, Math.max(1, outcome.unlockedLevel ?? log.reviewGateLevel ?? 1)), reviewGateRetry: undefined, reviewEditIntake: undefined };
     }
 
     if (!isRetry) {

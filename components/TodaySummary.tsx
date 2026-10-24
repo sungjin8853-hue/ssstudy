@@ -48,6 +48,7 @@ interface Props {
   /** 주면 학습 실행 첫 화면 위쪽에 "정리노트" 버튼이 생기고, 누르면 정리노트 시트가 열린다 */
   onUpdateReviewMemo?: (logId: string, memo: string, document?: ReviewMemoDocument) => void;
   onRestoreReviewQuestion?: (logId: string, questionKey: string) => void;
+  onSkipEditIntake?: (logIds: string[]) => void;
   /** 주면 복습을 기다리는 기록이 있는 학습과목 위쪽에 "복습에 넣기" 버튼이 생긴다. 누르면 난도를 고르는 창이 뜨고, 난도를 고르면 그 과목의 대기 기록이 모두 그 난도로 복습에 들어간다 */
   onRegisterReview?: (subjectId: string, grade: SubjectGrade) => void;
   activeWeekday: number;
@@ -498,7 +499,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onRegisterReview, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -1024,7 +1025,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       {showFlowTutorial && <MeasurementTutorial onClose={() => setShowFlowTutorial(false)} />}
       {showNotes && onUpdateReviewMemo && (
         <NoteSheet logs={logs} subjects={subjects} subjectId={noteSubjectId} subjectName={noteSubjectName}
-          onUpdateReviewMemo={onUpdateReviewMemo} onRestoreReviewQuestion={onRestoreReviewQuestion} onClose={() => setShowNotes(false)} />
+          onUpdateReviewMemo={onUpdateReviewMemo} onRestoreReviewQuestion={onRestoreReviewQuestion} onSkipEditIntake={onSkipEditIntake} onClose={() => setShowNotes(false)} />
       )}
 
       {modalMode && (

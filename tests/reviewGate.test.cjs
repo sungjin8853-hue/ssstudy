@@ -8838,7 +8838,10 @@ test('the review screen holds the removal tools and the undo strip; the note scr
     k2: { reason: 'low', at: '2026-10-21T00:00:00.000Z', prompt: '원', answer: '둥글다' }
   } }];
   const closed = renderToStaticMarkup(React.createElement(ReviewRemovedList, { logs, onRestore() {} }));
-  assert.match(closed, /role="switch"[^>]*aria-checked="true"/);
+  // 스위치는 노트 위의 띠(EditIntakeBar)로 옮겼다
+  const { EditIntakeBar } = loadSource('components/ReviewRemovedList.tsx');
+  assert.match(renderToStaticMarkup(React.createElement(EditIntakeBar, { logs })), /role="switch"[^>]*aria-checked="true"/);
+  assert.ok(!closed.includes('role="switch"'));
   assert.ok(closed.includes('복습에서 뺀 문제') && closed.includes('>2<'));
   assert.ok(!closed.includes('논리적 관계에 안 맞아요'), 'the list is folded until opened');
   assert.ok(!renderToStaticMarkup(React.createElement(ReviewRemovedList, { logs: [{ id: 'a', subjectId: 's', timestamp: 't' }] })).includes('복습에서 뺀 문제'));
@@ -10470,4 +10473,35 @@ test('note practice leaves out the questions removed from review', () => {
   const { entries } = buildNotePracticeCatalog([log]);
   assert.ok(entries.length > 0 && !entries.some(entry => entry.question.key === key));
   assert.equal(buildNotePracticeCatalog([{ ...log, reviewRemoved: undefined }]).entries.length, entries.length + 1);
+});
+
+test('an edit taken into review can be skipped from the note screen: the review date and schedules come back as if the edit were a fix', () => {
+  const { updateReviewGateMemo, editIntakeCount, skipEditIntake, completeRegularReviewSchedule } = loadSource('utils/reviewGate.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const now = Date.parse('2026-10-25T00:00:00Z');
+  const later = new Date(now + 5 * 864e5).toISOString();
+  const memo = '광합성:빛 에너지';
+  const schedules = Object.fromEntries(buildReviewQuestions(memo).questions.map(q => [q.key, { reviewStep: 2, nextReviewDate: later, intervalMs: 5 * 864e5 }]));
+  const log = { id: 'a', subjectId: 'S', timestamp: '2026-10-20T00:00:00Z', pagesRead: 5, timeSpentMinutes: 10, reviewEnabled: true, reviewMemo: memo,
+    reviewStep: 2, nextReviewDate: later, reviewQuestionSchedules: schedules, reviewQuestionFormat: 2 };
+  const edited = updateReviewGateMemo(log, '광합성:빛 에너지\n호흡:열', undefined, { intake: true, nowMs: now });
+  assert.equal(edited.nextReviewDate, new Date(now).toISOString(), 'the new questions open the review now');
+  assert.equal(editIntakeCount(edited), 2);
+  const again = updateReviewGateMemo(edited, '광합성:빛 에너지\n호흡:열\n증산:물', undefined, { intake: true, nowMs: now + 1000 });
+  assert.equal(editIntakeCount(again), 4, 'later edits add to the same record');
+  assert.equal(again.reviewEditIntake.base.nextReviewDate, later, 'the base stays the first one');
+  const skipped = skipEditIntake(again);
+  assert.equal(skipped.nextReviewDate, later);
+  assert.deepEqual(skipped.reviewQuestionSchedules, schedules);
+  assert.equal(skipped.reviewEditIntake, undefined);
+  assert.equal(editIntakeCount(skipped), 0);
+  // 고친 줄은 오류를 고친 것처럼 옛 일정을 이어받는다
+  const fixed = skipEditIntake(updateReviewGateMemo(log, '광합성:빛 에너지들', undefined, { intake: true, nowMs: now }));
+  assert.equal(fixed.nextReviewDate, later);
+  assert.ok(Object.values(fixed.reviewQuestionSchedules).some(item => item.nextReviewDate === later && item.reviewStep === 2));
+  assert.equal(Object.keys(fixed.reviewQuestionSchedules).filter(key => !(key in schedules)).length > 0, true);
+  // 복습을 마치면 되돌릴 기록은 사라진다
+  assert.equal('reviewEditIntake' in completeRegularReviewSchedule(edited, now) && completeRegularReviewSchedule(edited, now).reviewEditIntake, undefined);
+  // 스위치를 끄고 고치면 기록이 생기지 않는다
+  assert.equal(updateReviewGateMemo(log, '광합성:빛 에너지\n호흡:열', undefined, { intake: false, nowMs: now }).reviewEditIntake, undefined);
 });

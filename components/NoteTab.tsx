@@ -16,7 +16,7 @@ import { createSessionMemoRecord, readSessionMemos } from '../utils/sessionMemo'
 import { NotePracticeDialog } from './NotePractice';
 import { generatedLinesOf } from '../utils/reviewQuestions';
 import { NoteMergeHistory } from './NoteMergeHistory';
-import { ReviewRemovedList } from './ReviewRemovedList';
+import { EditIntakeBar, ReviewRemovedList } from './ReviewRemovedList';
 import { abilitiesFor, buildNoteSetIndex, evaluateSetExpression, headCellOf, toggleName } from '../utils/noteSets';
 import type { NoteSetIndex } from '../utils/noteSets';
 import type { NoteSetLine } from '../utils/noteDiagram';
@@ -426,6 +426,17 @@ const DiagramLegend: React.FC = () => (
 
 /* ───────── 한 쪽씩 넘겨 보는 종이 ───────── */
 
+/** 창 너비(px). 크게 보기에서 한 번에 펼칠 쪽 수를 정한다 */
+const useWindowWidth = () => {
+  const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1024 : window.innerWidth));
+  useEffect(() => {
+    const update = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  return width;
+};
+
 /** 지금 화면 높이에 맞는 줄 수. 한 쪽 높이는 항상 격자 한 칸(28px)의 배수다. */
 const useSheetRows = (reserved: number) => {
   const [rows, setRows] = useState(DEFAULT_ROWS);
@@ -451,11 +462,11 @@ export const sheetPageAt = (scrollTop: number, pageHeight: number, total: number
 const PAGER_BUTTON = 'flex h-12 min-w-[132px] items-center justify-center gap-1.5 rounded-xl border-2 px-4 text-[15px] font-black transition-colors disabled:cursor-not-allowed disabled:opacity-40';
 
 /** ◀ 이전 쪽 / n / 전체 쪽 / 다음 쪽 ▶ (노트 종이와 관계도가 함께 쓴다) */
-const SheetPager: React.FC<{ page: number; total: number; onPage: (page: number) => void }> = ({ page, total, onPage }) => (
+const SheetPager: React.FC<{ page: number; total: number; onPage: (page: number) => void; from?: number }> = ({ page, total, onPage, from }) => (
   <div data-testid="note-pager" className="flex items-center justify-between gap-3">
     <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1}
       className={`${PAGER_BUTTON} border-slate-300 bg-white text-slate-800 hover:bg-slate-50`}>◀ 이전 쪽</button>
-    <span className="font-mono text-base font-black tabular-nums text-slate-900" aria-live="polite">{page} / {total} 쪽</span>
+    <span className="font-mono text-base font-black tabular-nums text-slate-900" aria-live="polite">{from && from < page ? `${from}~${page}` : page} / {total} 쪽</span>
     <button type="button" onClick={() => onPage(page + 1)} disabled={page >= total}
       className={`${PAGER_BUTTON} border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-700`}>다음 쪽 ▶</button>
   </div>
@@ -656,7 +667,11 @@ export const NoteTab: React.FC<{
   lockSubject?: boolean;
   /** 노트 종이 높이를 계산할 때 화면 위·아래에서 이미 쓰이고 있는 높이(px)를 기본값보다 줄이거나 늘린다. */
   reservedOffset?: number;
-}> = ({ logs, subjects, onUpdateReviewMemo, onRestoreReviewQuestion, initialSubjectId = '', lockSubject = false, reservedOffset = 0 }) => {
+  /** 크게 보기: 화면 너비만큼 여러 쪽을 나란히 보인다 */
+  wide?: boolean;
+  /** "복습에 넣지 않기": 고쳐서 복습에 들어간 문제를 뺀다(주지 않으면 버튼이 없다) */
+  onSkipEditIntake?: (logIds: string[]) => void;
+}> = ({ logs, subjects, onUpdateReviewMemo, onRestoreReviewQuestion, initialSubjectId = '', lockSubject = false, reservedOffset = 0, wide = false, onSkipEditIntake }) => {
   const [subjectId, setSubjectId] = useState(initialSubjectId);
   const [view, setView] = useState<NoteView>('note');
   const [showTutorial, setShowTutorial] = useState(false);
@@ -714,6 +729,13 @@ export const NoteTab: React.FC<{
   const pageHint = useRef(0);
   const pageIndex = foundPage >= 0 ? foundPage : pageKey === null ? lastPageIndex(pages) : Math.min(pageHint.current, lastPageIndex(pages));
   const page = pages[pageIndex];
+  // 크게 보기(wide)면 화면 너비에 맞춰 여러 쪽을 한 번에 보인다(쪽 하나에 520px쯤, 최대 4쪽). 지금 쪽이 끝에 오도록 앞쪽부터 채운다.
+  const spreadWidth = useWindowWidth();
+  const spread = wide && view === 'note' ? Math.max(1, Math.min(4, Math.floor((spreadWidth - 80) / 520))) : 1;
+  const spreadStart = Math.max(0, Math.min(pageIndex - spread + 1, pages.length - spread));
+  const spreadPages = spread > 1
+    ? pages.slice(spreadStart, spreadStart + spread).map((item, offset) => ({ page: item as typeof page | undefined, index: spreadStart + offset }))
+    : [{ page, index: pageIndex }];
   const goPage = (target: number) => {
     const next = pages[Math.min(Math.max(0, target), pages.length - 1)];
     if (!next) return;
@@ -742,7 +764,7 @@ export const NoteTab: React.FC<{
   }
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-3.5">
+    <div className={`mx-auto flex flex-col gap-3.5 ${wide ? 'max-w-none' : 'max-w-5xl'}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           {lockSubject ? (
@@ -774,6 +796,7 @@ export const NoteTab: React.FC<{
 
       {view === 'note' ? (
         <section aria-label="노트 편집기" className="flex flex-col gap-3">
+          <EditIntakeBar logs={current.logs} onSkip={onSkipEditIntake} />
           <SymbolTargetContext.Provider value={symbolTarget}>
            <NoteSetSourceContext.Provider value={subjectMemos}>
             <NoteSetEditContext.Provider value={rewriteSubjectNotes}>
@@ -787,8 +810,13 @@ export const NoteTab: React.FC<{
                 </p>
               )}
               <div className="p-2.5 pb-0">
+                {/* 크게 보기에서는 여러 쪽을 나란히 펼쳐 본다(왼쪽이 앞 쪽) */}
+                <div className={spread > 1 ? 'grid gap-2.5' : ''} style={spread > 1 ? { gridTemplateColumns: `repeat(${spreadPages.length}, minmax(0, 1fr))` } : undefined}>
+                {spreadPages.map(({ page: shownPage, index: shownIndex }) => (
+                <div key={shownPage?.key ?? shownIndex} data-note-page={shownIndex + 1} className="min-w-0">
+                {spread > 1 && <p className="mb-1 text-center font-mono text-xs font-black text-slate-500">{shownIndex + 1}쪽</p>}
                 <NotePaper rows={Math.min(NOTE_PAGE_ROWS, rows)}>
-                  {(page?.sections ?? []).map((section, sectionIndex) => (
+                  {(shownPage?.sections ?? []).map((section, sectionIndex) => (
                     <section key={`${section.key}:${sectionIndex}`} data-note-section={section.key}>
                       {sectionIndex > 0 && <div aria-hidden="true" className="h-7" />}
                       <SectionHeading section={section} />
@@ -812,9 +840,12 @@ export const NoteTab: React.FC<{
                     </section>
                   ))}
                 </NotePaper>
+                </div>
+                ))}
+                </div>
               </div>
               <div className="px-2.5 pb-2.5 pt-2.5">
-                <SheetPager page={pageIndex + 1} total={Math.max(1, pages.length)} onPage={target => goPage(target - 1)} />
+                <SheetPager page={pageIndex + 1} from={spread > 1 ? spreadStart + 1 : undefined} total={Math.max(1, pages.length)} onPage={target => goPage(target - 1)} />
               </div>
             </div>
             </NoteSetEditContext.Provider>

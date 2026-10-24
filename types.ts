@@ -191,6 +191,11 @@ export interface StudyLog {
   reviewRemoved?: Record<string, ReviewRemovedQuestion>;
   /** 노트에서 고치기 전의 줄들(최근 것부터 위). 충돌한 값을 모을 때 "이전 값"으로 쓴다. */
   reviewMemoOldLines?: ReviewMemoOldLine[];
+  /**
+   * 노트를 고쳐 새 문제가 복습에 들어간 것(‘고친 부분을 복습에 넣기’ 켜짐). base는 처음 고치기 전의 글과 일정이고 keys는 들어간 문제들이다.
+   * 정리노트의 "복습에 넣지 않기"를 누르면 base로 되돌려 오류를 고친 것처럼(바뀐 문제가 이전 일정을 이어받게) 다시 계산한다. 그 기록을 복습하면 지운다.
+   */
+  reviewEditIntake?: { base: { memo: string; schedules?: Record<string, ReviewQuestionSchedule>; nextReviewDate?: string }; keys: string[]; at: string };
   reviewQuestionFormat?: 2;
   reviewGateLevel?: number;
   reviewGatePendingSchedules?: Record<string, ReviewQuestionSchedule>;

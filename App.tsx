@@ -16,7 +16,7 @@ import { getLogProgressPages } from './utils/measurement';
 import { fsrsIntervalMs } from './utils/fsrs';
 import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
 import type { SubjectGrade } from './utils/subjectFeedback';
-import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
+import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, skipEditIntake, updateReviewGateMemo } from './utils/reviewGate';
 import { readEditIntake } from './utils/reviewEditIntake';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -759,6 +759,12 @@ const App: React.FC = () => {
     }));
   };
 
+  // 노트 화면의 "복습에 넣지 않기": 고쳐서 복습에 들어간 문제를 빼고, 오류를 고친 것처럼 다시 계산한다
+  const handleSkipEditIntake = (logIds: string[]) => {
+    const ids = new Set(logIds);
+    setLogs(prev => prev.map(log => (ids.has(log.id) ? skipEditIntake(log) : log)));
+  };
+
   const handleRestoreReviewQuestion = (logId: string, key: string) => {
     setLogs(prev => prev.map(log => (log.id === logId ? restoreReviewRemoval(log, key) : log)));
   };
@@ -930,6 +936,7 @@ const App: React.FC = () => {
                         idle={idle}
                         onUpdateReviewMemo={handleUpdateReviewMemo}
                         onRestoreReviewQuestion={handleRestoreReviewQuestion}
+                        onSkipEditIntake={handleSkipEditIntake}
                         onRegisterReview={handleRegisterReview}
                         activeWeekday={dashboardWeekday}
                         activeStudyDate={dashboardDate}
