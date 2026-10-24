@@ -10460,3 +10460,14 @@ test('a toggle named like the answer is left out of the question, and a basic re
   assert.ok(logger.includes('const stopsAtGateCompletion = isGateReviewComplete && gateReviewQuestions.length > 0;'));
   assert.ok(logger.includes('feedback={basicFeedback && isGateReviewComplete ?'));
 });
+
+test('note practice leaves out the questions removed from review', () => {
+  const { buildNotePracticeCatalog } = loadSource('utils/notePractice.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const memo = '광합성:빛 에너지\n호흡:열';
+  const key = buildReviewQuestions(memo).questions.find(q => q.answer === '빛 에너지').key;
+  const log = { id: 'n1', subjectId: 'S', reviewMemo: memo, reviewRemoved: { [key]: { reason: 'low', at: '2026-10-01T00:00:00Z' } } };
+  const { entries } = buildNotePracticeCatalog([log]);
+  assert.ok(entries.length > 0 && !entries.some(entry => entry.question.key === key));
+  assert.equal(buildNotePracticeCatalog([{ ...log, reviewRemoved: undefined }]).entries.length, entries.length + 1);
+});

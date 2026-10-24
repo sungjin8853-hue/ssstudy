@@ -1,6 +1,7 @@
 import type { StudyLog } from '../types';
 import type { NoteUnitPage } from './noteUnits';
 import { buildReviewQuestions } from './reviewQuestions';
+import { isReviewQuestionRemoved } from './reviewGate';
 import { withLogShorthand } from './noteShorthand';
 import type { NoteQuestion } from './reviewQuestions';
 import { REVIEW_GRADE_FSRS } from './reviewPractice';
@@ -62,6 +63,8 @@ export const buildNotePracticeCatalog = (logs: StudyLog[]) => {
   for (const log of logs) {
     // 기록마다 그 과목의 `=`·`-` 단축어 설정으로 읽는다
     for (const question of withLogShorthand(log, () => buildReviewQuestions(log.reviewMemo ?? '').questions)) {
+      // 복습에서 뺀 문제(중요도가 떨어짐 · 같은 문제가 있음 · 논리적 관계에 안 맞음)는 여기서도 내지 않는다(복습 화면과 같게)
+      if (isReviewQuestionRemoved(log, question.key)) continue;
       const id = `${log.id}:${question.key}`;
       entries.push({ id, log, question });
       catalog.push({ id, logId: log.id, level: question.level, priority: question.priority, difficulty: question.difficulty,
