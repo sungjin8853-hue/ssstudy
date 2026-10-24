@@ -910,9 +910,11 @@ export const mergeQueueReviewGroups = (groups: ReviewQueueGroup[], sourceLogs: S
 
 const formatPlanMinutes = (minutes: number) => {
   if (!Number.isFinite(minutes) || minutes <= 0) return '0분';
-  if (minutes < 60) return `${Math.ceil(minutes)}분`;
-  const hours = Math.floor(minutes / 60);
-  const rest = Math.ceil(minutes % 60);
+  // 올림을 먼저 해야 119.5분이 "1시간 60분"이 아니라 "2시간"이 된다
+  const total = Math.ceil(minutes);
+  if (total < 60) return `${total}분`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
   return rest > 0 ? `${hours}시간 ${rest}분` : `${hours}시간`;
 };
 
@@ -934,7 +936,7 @@ export const buildStudyRunQueue = (reviewGroups: ReviewQueueGroup[], studyOrder:
   ));
 };
 
-export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday, activeStudyDate, detailSubjectId, onDetailSubjectChange, renderSummary, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo, onRemoveReviewQuestions, onRestoreReviewQuestion, onFinishReviewGate, onClearReviewGateRetries, sessionMemoOverrides }) => {
+export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: liveWeekday, activeStudyDate: liveStudyDate, detailSubjectId, onDetailSubjectChange, renderSummary, onLogSession, onUpdateSubjects, onReviewAction, onAdvanceReviewSubject, onRecordReviewSubjectTime, onUpdateReviewMemo, onRemoveReviewQuestions, onRestoreReviewQuestion, onFinishReviewGate, onClearReviewGateRetries, sessionMemoOverrides }) => {
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(getAllSubjectReviewIds))
   ), [subjects]);
@@ -950,6 +952,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday, 
     [followUpSourceSubjectIdSet, reviewSubjectIdSet, subjects]
   );
   const [step, setStep] = useState<Step>('idle');
+  // 공부를 시작한 날: 측정 중에 자정이 지나도 이번 기록은 시작한 날의 공부로 남긴다(끝나고 홈으로 돌아오면 새 날로 바뀐다)
+  const sessionDayRef = useRef<{ date: string; weekday: number } | null>(null);
+  if (step === 'idle') sessionDayRef.current = null;
+  else if (!sessionDayRef.current) sessionDayRef.current = { date: liveStudyDate, weekday: liveWeekday };
+  const activeStudyDate = sessionDayRef.current?.date ?? liveStudyDate;
+  const activeWeekday = sessionDayRef.current?.weekday ?? liveWeekday;
   const [subjectId, setSubjectId] = useState('');
   const [activeReviewRun, setActiveReviewRun] = useState<ActiveReviewRun | null>(null);
   const selectedSubject = subjects.find(subject => subject.id === subjectId);

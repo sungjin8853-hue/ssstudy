@@ -47,6 +47,8 @@ export const recommendReviewGrade = ({ elapsedMs, history, textLength }: GradeRe
 
 export const formatResponseSeconds = (ms: number) => {
   const seconds = Math.max(0, ms) / 1000;
-  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}초`;
-  return `${Math.floor(seconds / 60)}분 ${Math.round(seconds % 60)}초`;
+  if (seconds < 9.95) return `${seconds.toFixed(1)}초`;
+  const total = Math.round(seconds);
+  if (total < 60) return `${total}초`;
+  return `${Math.floor(total / 60)}분 ${total % 60}초`;
 };

@@ -12,6 +12,8 @@ import {
   getLocalDateKey,
   getLogStudyDate,
   getRecommendedEndPage,
+  getStageChapters,
+  getSubjectStages,
   getSubjectRemainingPageCount,
   normalizeWeekdays,
   parseStudyDate
@@ -84,9 +86,18 @@ const formatNumber = (value: number) => {
 };
 
 /** 단원이 있는 과목의 본 과목 범위 기록은 단원 사이를 건너뛴 만큼 뺀 장수로 센다 */
-const chaptersForRange = (subject: Subject | undefined, end: number) => {
-  const chapters = subject ? getSubjectChapters(subject) : [];
-  return subject && chapters.length > 0 && end <= subject.totalPages ? chapters : [];
+/**
+ * 학습량 추가·고치기 창의 끝 페이지가 들어갈 단계와 그 단계의 단원. 고치는 기록은 그 기록의 단계, 새 기록은 지금 단계를 쓴다.
+ * 측정해서 저장할 때와 같이 끝 페이지는 그 단계의 마지막 페이지를 넘을 수 없고, 단원이 있으면 단원 안 페이지여야 한다.
+ */
+export const editRangeOf = (subject: Subject | undefined, stageId: string | undefined, end: number) => {
+  if (!subject) return { chapters: [] as ReturnType<typeof getSubjectChapters>, valid: false };
+  const stages = getSubjectStages(subject);
+  const stage = stages.find(item => item.id === stageId) || getActiveSubjectStage(subject) || stages[stages.length - 1];
+  const chapters = getStageChapters(subject, stage);
+  const lastPage = stage?.endPage ?? subject.totalPages;
+  const valid = end <= lastPage && (chapters.length === 0 || chapters.some(item => end >= item.startPage && end <= item.endPage));
+  return { chapters, valid };
 };
 
 const calculateAmountFromEndPage = (start: number, end: number) => {
@@ -607,7 +618,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     setModalMode('edit');
     setEditingSummary(summary);
     setSubjectId(summary.subjectId);
-    setEditMinutes(summary.minutes > 0 ? String(summary.minutes) : '');
+    setEditMinutes(summary.minutes > 0 ? String(Number(summary.minutes.toFixed(2))) : '');
     setEditStartPage(summary.startPage || 1);
     setEditEndPage(summary.endPage || summary.startPage || 1);
     setIncludeReview(reviewLogs.length > 0);
@@ -621,10 +632,14 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     setEditingSummary(null);
   };
 
+  // 고치는 기록의 단계(같은 과목일 때만). 새 기록이나 다른 과목으로 바꾸면 그 과목의 지금 단계
+  const editRangeStageId = editingSummary?.subjectId === subjectId ? editingSummary?.logs[0]?.subjectStageId : undefined;
+
   const saveLog = () => {
     const targetSubject = subjects.find(subject => subject.id === subjectId);
-    const rangeChapters = chaptersForRange(targetSubject, editEndPage);
-    const pages = rangeChapters.length > 0 ? pagesBetween(rangeChapters, editStartPage, editEndPage) : calculateAmountFromEndPage(editStartPage, editEndPage);
+    const range = editRangeOf(targetSubject, editRangeStageId, editEndPage);
+    const rangeChapters = range.chapters;
+    const pages = !range.valid ? 0 : rangeChapters.length > 0 ? pagesBetween(rangeChapters, editStartPage, editEndPage) : calculateAmountFromEndPage(editStartPage, editEndPage);
     const existingTimedSamples = logs.filter(log => log.subjectId === subjectId);
     const measuredAverage = calculateRecentTimedPageAverage(existingTimedSamples).averageTimePerPage;
     const existingAverage = measuredAverage || Math.max(0, targetSubject?.initialAverageTimePerPage || 0);
@@ -684,8 +699,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
   const detailPomodoroPages = detailData ? pomodoroPlan?.subjectId === detailData.subject.id
     ? pomodoroPlan.pages : getPomodoroPageTarget(detailData.efficiency, getMeasurementRemainingPages(detailData.subject), pomodoroMinutes) : null;
-  const calculatedRangeChapters = chaptersForRange(selectedSubject, editEndPage);
-  const calculatedPages = editEndPage > 0
+  const calculatedRange = editRangeOf(selectedSubject, editRangeStageId, editEndPage);
+  const calculatedRangeChapters = calculatedRange.chapters;
+  const calculatedPages = editEndPage > 0 && calculatedRange.valid
     ? calculatedRangeChapters.length > 0 ? pagesBetween(calculatedRangeChapters, editStartPage, editEndPage) : calculateAmountFromEndPage(editStartPage, editEndPage)
     : 0;
 

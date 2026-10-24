@@ -121,11 +121,31 @@ const shouldSkipReviewForLog = (log: StudyLog, subject?: Subject) => {
   return log.isCondensed === true || subject?.reviewEnabled === false;
 };
 
+const STORED_DATA_KEYS = ['swp_subjects', 'swp_tests_categories_v3', 'swp_logs', 'swp_tags'];
+
+const backupStoredValue = (key: string, raw: string, stamp = new Date().toISOString()) => {
+  try { localStorage.setItem(`${key}_backup_${stamp}`, raw); } catch { /* 백업할 자리가 없으면 그대로 둔다 */ }
+};
+
+/** 저장된 목록 하나를 읽는다. 깨져서 못 읽으면 원본을 백업 키로 옮겨 두고 빈 목록으로 시작한다(다른 목록은 그대로 읽는다) */
+const parseStoredList = <T,>(key: string, raw: string | null): T[] => {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    if (Array.isArray(value)) return value;
+    if (value === null) return [];
+  } catch { /* 아래에서 백업 */ }
+  console.error(`Failed to read ${key} from localStorage`);
+  backupStoredValue(key, raw);
+  return [];
+};
+
 const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
+  const [storageLoaded, setStorageLoaded] = useState(false);
   // 과목마다의 `=`·`-` 단축어 설정을 노트 읽기에 알려 둔다
   useSubjectShorthandSync(subjects);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
@@ -178,9 +198,9 @@ const App: React.FC = () => {
       const savedTags = localStorage.getItem('swp_tags');
       const loadedSubjects: Array<Subject & {
         procedures?: Array<{ totalPages: number; completedPages: number }>;
-      }> = savedSubs ? JSON.parse(savedSubs) || [] : [];
-      const loadedLogs: StudyLog[] = savedLogs ? JSON.parse(savedLogs) || [] : [];
-      const loadedTags: TagDefinition[] = savedTags ? JSON.parse(savedTags) || [] : [];
+      }> = parseStoredList('swp_subjects', savedSubs);
+      const loadedLogs: StudyLog[] = parseStoredList('swp_logs', savedLogs);
+      const loadedTags: TagDefinition[] = parseStoredList('swp_tags', savedTags);
       const shouldMigrateReviewIntervals = localStorage.getItem(REVIEW_INTERVAL_POLICY_KEY) !== REVIEW_INTERVAL_POLICY_VERSION;
       
       if (savedSubs) {
@@ -271,7 +291,7 @@ const App: React.FC = () => {
         ));
         setSubjects(inheritReviewSubjectTargetDates(subjectsWithoutNestedReviews));
       }
-      if (savedTests) setTestCategories(JSON.parse(savedTests) || []);
+      if (savedTests) setTestCategories(parseStoredList<TestCategory>('swp_tests_categories_v3', savedTests));
       if (savedLogs) {
         if (loadedLogs.some(log => log.reviewMemo !== undefined && !log.reviewMemoDocument)
           && !localStorage.getItem('swp_logs_before_note_blocks_v1')) {
@@ -324,15 +344,24 @@ const App: React.FC = () => {
       if (savedTags) setTagDefinitions(loadedTags);
     } catch (e) {
       console.error("Failed to load data from localStorage", e);
+      // 불러오다 실패하면 빈 화면이 저장된 기록을 덮어쓰지 않도록, 저장돼 있던 원본을 따로 남겨 둔다
+      const stamp = new Date().toISOString();
+      STORED_DATA_KEYS.forEach(key => {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) backupStoredValue(key, raw, stamp);
+      });
     }
+    setStorageLoaded(true);
   }, []);
 
   useEffect(() => {
+    // 불러오기가 끝나기 전의 빈 상태는 저장하지 않는다
+    if (!storageLoaded) return;
     localStorage.setItem('swp_subjects', JSON.stringify(subjects));
     localStorage.setItem('swp_tests_categories_v3', JSON.stringify(testCategories));
     localStorage.setItem('swp_logs', JSON.stringify(logs));
     localStorage.setItem('swp_tags', JSON.stringify(tagDefinitions));
-  }, [subjects, testCategories, logs, tagDefinitions]);
+  }, [storageLoaded, subjects, testCategories, logs, tagDefinitions]);
 
   // 같은 문제(글 · 정답 · 조건이 모두 같은 것)가 한 과목의 여러 노트에 생기면 복습 주기가 가장 짧은 하나만 복습에 남긴다.
   useEffect(() => {

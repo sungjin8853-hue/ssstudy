@@ -975,9 +975,10 @@ const Metric = ({ value }: { value: string }) => (
 );
 
 const formatTotalTime = (minutes: number) => {
-  if (minutes < 60) return `${minutes.toFixed(1)}분`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = Math.round(minutes % 60);
+  if (minutes < 59.95) return `${minutes.toFixed(1)}분`;
+  const total = Math.round(minutes);
+  const hours = Math.floor(total / 60);
+  const remainingMinutes = total % 60;
   return `${hours}시간 ${remainingMinutes}분`;
 };
 

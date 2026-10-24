@@ -748,8 +748,10 @@ export const Analytics: React.FC<Props> = ({
   const weekdayTotalTime = weekdaySubjects.reduce((sum, subject) => sum + getDisplayNeededMinutes(subject), 0);
 
   const formatTime = (minutes: number) => {
-    const h = Math.floor(minutes / 60);
-    const m = Math.round(minutes % 60);
+    // 반올림을 먼저 해야 119.7분이 "1h 60m"이 아니라 "2h 0m"이 된다
+    const total = Math.max(0, Math.round(minutes));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 

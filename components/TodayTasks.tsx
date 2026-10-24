@@ -118,9 +118,11 @@ export const stepRowKey = (order: string[], current: string, delta: -1 | 1): str
 
 export const formatMinutesLabel = (minutes: number) => {
   if (!Number.isFinite(minutes) || minutes <= 0) return '0분';
-  if (minutes < 60) return `${Math.ceil(minutes)}분`;
-  const hours = Math.floor(minutes / 60);
-  const rest = Math.ceil(minutes % 60);
+  // 올림을 먼저 해야 119.5분이 "1시간 60분"이 아니라 "2시간"이 된다
+  const total = Math.ceil(minutes);
+  if (total < 60) return `${total}분`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
   return rest > 0 ? `${hours}시간 ${rest}분` : `${hours}시간`;
 };
 

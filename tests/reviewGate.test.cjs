@@ -10366,3 +10366,30 @@ test('reviews of a deleted subject stay as records but are not put on today\'s l
   const live = { id: 'live', name: '물리', totalPages: 30, completedPages: 6, targetDate: '2099-01-01', reviewEnabled: true };
   assert.deepEqual(buildDueReviewGroups([log, kept], [live], now).flatMap(group => group.logs.map(item => item.id)), ['kept']);
 });
+
+test('unseen-area fixes: times carry into the next unit, record edits keep inside the plan, a late session stays on its day, a bad save is kept', () => {
+  const { formatResponseSeconds } = loadSource('utils/gradeRecommendation.ts');
+  assert.equal(formatResponseSeconds(119600), '2분 0초');
+  assert.equal(formatResponseSeconds(9970), '10초');
+  assert.equal(formatResponseSeconds(3400), '3.4초');
+  const { formatMinutesLabel } = loadSource('components/TodayTasks.tsx');
+  assert.equal(formatMinutesLabel(119.5), '2시간');
+  assert.equal(formatMinutesLabel(59.5), '1시간');
+  assert.equal(formatMinutesLabel(61.2), '1시간 2분');
+  // 학습량 고치기: 마지막 페이지를 넘거나 단원 사이 페이지에서 끝날 수 없다. 후행과목 기록에는 앞 과목의 단원을 쓰지 않는다
+  const { editRangeOf } = loadSource('components/TodaySummary.tsx');
+  const B = { id: 'B', name: '물리', startPage: 1, totalPages: 30, completedPages: 8, targetDate: '2099-01-01',
+    chapters: [{ startPage: 1, endPage: 10 }, { startPage: 21, endPage: 30 }],
+    followUpSubjects: [{ id: 'B2', name: '물리 심화', startPage: 1, endPage: 100, completedPage: 0, reviewSubjectIds: [] }] };
+  assert.equal(editRangeOf(B, 'B', 50).valid, false);
+  assert.equal(editRangeOf(B, 'B', 12).valid, false);
+  assert.equal(editRangeOf(B, 'B', 25).valid, true);
+  assert.equal(editRangeOf(B, 'B2', 12).valid, true);
+  assert.equal(editRangeOf(B, 'B2', 12).chapters.length, 0);
+  // 자정을 넘긴 측정은 시작한 날의 기록
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes("if (step === 'idle') sessionDayRef.current = null;") && logger.includes('activeStudyDate: liveStudyDate'));
+  // 불러오기가 끝나기 전에는 저장하지 않고, 깨진 목록은 백업해 둔다
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  assert.ok(app.includes('if (!storageLoaded) return;') && app.includes("parseStoredList('swp_logs', savedLogs)") && app.includes('_backup_'));
+});
