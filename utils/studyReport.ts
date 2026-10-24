@@ -30,6 +30,33 @@ const dayNumber = (key: string) => {
 const finiteMinutes = (log: StudyLog) => (Number.isFinite(log.timeSpentMinutes) && log.timeSpentMinutes > 0 ? log.timeSpentMinutes : 0);
 const finitePages = (log: StudyLog) => (Number.isFinite(log.pagesRead) && log.pagesRead > 0 ? log.pagesRead : 0);
 
+/**
+ * 시간 그래프(누적 · 주별 · 달력 · 연속 · 요일)에 쓰는 기록: 기록 자체에 더해, 기록 안에만 남는 복습 시간도 그날의 공부로 넣는다.
+ *  - 기본 복습 시간(basicReviewTimeRecords): 그 과목, 복습한 날
+ *  - 복습과목 시간 중 따로 기록(뽀모도로 세션)이 없는 것(reviewSubjectTimeRecords): 그 복습과목, 복습한 날
+ * 페이지는 넣지 않는다(다시 본 페이지라 공부한 페이지가 아니다).
+ */
+export const withReviewTimeLogs = (logs: StudyLog[]): StudyLog[] => {
+  const sessionIds = new Set(logs.filter(log => log.pomodoroSession).map(log => log.id));
+  const extra: StudyLog[] = [];
+  logs.forEach(log => {
+    (log.basicReviewTimeRecords || []).forEach((record, index) => {
+      if (!(record.minutes > 0) || !Number.isFinite(record.minutes)) return;
+      extra.push({ id: `${log.id}:basic:${index}`, subjectId: log.subjectId, subjectNameSnapshot: log.subjectNameSnapshot,
+        pagesRead: 0, timeSpentMinutes: record.minutes, timestamp: record.timestamp,
+        studyDate: getLocalDateKey(new Date(record.timestamp)), isReviewed: true } as StudyLog);
+    });
+    (log.reviewSubjectTimeRecords || []).forEach((record, index) => {
+      if (!(record.minutes > 0) || !Number.isFinite(record.minutes)) return;
+      if ((record.includedMeasurementIds || [record.measurementId || '']).every(id => sessionIds.has(id))) return;
+      extra.push({ id: `${log.id}:review:${index}`, subjectId: record.subjectId,
+        pagesRead: 0, timeSpentMinutes: record.minutes, timestamp: record.timestamp,
+        studyDate: getLocalDateKey(new Date(record.timestamp)), isReviewed: true } as StudyLog);
+    });
+  });
+  return extra.length > 0 ? [...logs, ...extra] : logs;
+};
+
 export interface DailyStudyPoint {
   key: string;
   /** 막대 아래 글자. 예: "10/16" */

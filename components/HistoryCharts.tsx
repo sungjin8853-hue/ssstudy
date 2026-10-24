@@ -13,6 +13,7 @@ import {
   buildWeekdayPattern,
   buildWeeklyStudy,
   calculateStudyStreak,
+  withReviewTimeLogs,
   CalendarDay,
   formatMinutesShort,
   PlanCheck,
@@ -101,18 +102,20 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
 
 
   const now = useMemo(() => new Date(), [logs]);
-  const streak = useMemo(() => calculateStudyStreak(logs, now), [logs, now]);
-  const split = useMemo(() => summarizeTimeSplit(logs, 30, now), [logs, now]);
+  // 시간 그래프에는 기록 안에만 남는 기본 복습 · 복습과목 시간도 그날의 공부로 넣는다(오늘 할 일의 "오늘 완료"와 같게)
+  const timeLogs = useMemo(() => withReviewTimeLogs(logs), [logs]);
+  const streak = useMemo(() => calculateStudyStreak(timeLogs, now), [timeLogs, now]);
+  const split = useMemo(() => summarizeTimeSplit(timeLogs, 30, now), [timeLogs, now]);
   const review = useMemo(() => summarizeReview(logs, 30, now), [logs, now]);
-  const cumulative = useMemo(() => buildCumulativeStudy(logs, now, 26), [logs, now]);
+  const cumulative = useMemo(() => buildCumulativeStudy(timeLogs, now, 26), [timeLogs, now]);
   // 주별 그래프는 처음 기록부터(최소 8주, 최대 26주)
-  const weekly = useMemo(() => buildWeeklyStudy(logs, Math.min(26, Math.max(8, cumulative.points.length)), now), [logs, now, cumulative.points.length]);
-  const calendar = useMemo(() => buildStudyCalendar(logs, 13, now), [logs, now]);
-  const weekdayPattern = useMemo(() => buildWeekdayPattern(logs, 12, now), [logs, now]);
+  const weekly = useMemo(() => buildWeeklyStudy(timeLogs, Math.min(26, Math.max(8, cumulative.points.length)), now), [timeLogs, now, cumulative.points.length]);
+  const calendar = useMemo(() => buildStudyCalendar(timeLogs, 13, now), [timeLogs, now]);
+  const weekdayPattern = useMemo(() => buildWeekdayPattern(timeLogs, 12, now), [timeLogs, now]);
   const reviewRounds = useMemo(() => buildReviewRoundEfficiency(logs), [logs]);
-  const subjectCumulative = useMemo(() => buildSubjectCumulative(logs,
-    (id, log) => subjects.find(item => item.id === id)?.name || log.subjectNameSnapshot || '삭제된 과목', now, 26, 5), [logs, subjects, now]);
-  const subjectWeekly = useMemo(() => buildSubjectWeeklyMinutes(logs, 12, now), [logs, now]);
+  const subjectCumulative = useMemo(() => buildSubjectCumulative(timeLogs,
+    (id, log) => subjects.find(item => item.id === id)?.name || log.subjectNameSnapshot || '삭제된 과목', now, 26, 5), [timeLogs, subjects, now]);
+  const subjectWeekly = useMemo(() => buildSubjectWeeklyMinutes(timeLogs, 12, now), [timeLogs, now]);
 
   const weeklyMax = weekly.points.reduce((max, point) => Math.max(max, point.minutes), 0);
   const weeklyTicks = minuteTicks(weeklyMax);
@@ -187,7 +190,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
     const followUpSources = new Set(subjects.flatMap(subject => (subject.followUpSubjects || [])
       .map(stage => stage.sourceSubjectId).filter((id): id is string => Boolean(id))));
     const minutesBySubject = new Map<string, number>();
-    logs.forEach(log => minutesBySubject.set(log.subjectId, (minutesBySubject.get(log.subjectId) || 0) + (Number.isFinite(log.timeSpentMinutes) ? Math.max(0, log.timeSpentMinutes) : 0)));
+    timeLogs.forEach(log => minutesBySubject.set(log.subjectId, (minutesBySubject.get(log.subjectId) || 0) + (Number.isFinite(log.timeSpentMinutes) ? Math.max(0, log.timeSpentMinutes) : 0)));
     const totalMinutes = Array.from(minutesBySubject.values()).reduce((sum, value) => sum + value, 0);
     return subjects
       .filter(subject => !reviewIds.has(subject.id) && !followUpSources.has(subject.id))
@@ -212,7 +215,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
       .filter(row => row.total > 0)
       .sort((a, b) => PLAN_ORDER[a.check.status] - PLAN_ORDER[b.check.status]
         || (b.check.gapDays ?? 0) - (a.check.gapDays ?? 0) || (a.diffDays ?? 9999) - (b.diffDays ?? 9999) || a.name.localeCompare(b.name));
-  }, [subjects, logs, now, subjectWeekly]);
+  }, [subjects, logs, timeLogs, now, subjectWeekly]);
   const planCounts = useMemo(() => {
     const counts: Record<PlanStatus, number> = { late: 0, idle: 0, ontrack: 0, ahead: 0, nodate: 0, done: 0 };
     planRows.forEach(row => { counts[row.check.status] += 1; });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord, TagDefinition, ReviewMemoDocument, ReviewMeasurement } from './types';
+import { Subject, StudyLog, TagDefinition, ReviewMemoDocument, ReviewMeasurement } from './types';
 import { dedupeIdenticalQuestions } from './utils/reviewDuplicates';
 import { withReviewMemoDocument } from './utils/reviewMemoDocument';
 import { SessionLogger } from './components/SessionLogger';
@@ -7,6 +7,7 @@ import { Analytics } from './components/Analytics';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
+import { breakFolderCycles } from './utils/listOrder';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds } from './utils/schedule';
 import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, applyUnitReviewRegistration, registerPendingReviews, completeRepeatedSubjectReview } from './utils/review';
 import { normalizePageGrowthSettings } from './utils/pageGrowth';
@@ -121,7 +122,7 @@ const shouldSkipReviewForLog = (log: StudyLog, subject?: Subject) => {
   return log.isCondensed === true || subject?.reviewEnabled === false;
 };
 
-const STORED_DATA_KEYS = ['swp_subjects', 'swp_tests_categories_v3', 'swp_logs', 'swp_tags'];
+const STORED_DATA_KEYS = ['swp_subjects', 'swp_logs', 'swp_tags'];
 
 const backupStoredValue = (key: string, raw: string, stamp = new Date().toISOString()) => {
   try { localStorage.setItem(`${key}_backup_${stamp}`, raw); } catch { /* 백업할 자리가 없으면 그대로 둔다 */ }
@@ -142,7 +143,6 @@ const parseStoredList = <T,>(key: string, raw: string | null): T[] => {
 
 const App: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
   const [storageLoaded, setStorageLoaded] = useState(false);
@@ -193,7 +193,6 @@ const App: React.FC = () => {
   useEffect(() => {
     try {
       const savedSubs = localStorage.getItem('swp_subjects');
-      const savedTests = localStorage.getItem('swp_tests_categories_v3');
       const savedLogs = localStorage.getItem('swp_logs');
       const savedTags = localStorage.getItem('swp_tags');
       const loadedSubjects: Array<Subject & {
@@ -291,7 +290,6 @@ const App: React.FC = () => {
         ));
         setSubjects(inheritReviewSubjectTargetDates(subjectsWithoutNestedReviews));
       }
-      if (savedTests) setTestCategories(parseStoredList<TestCategory>('swp_tests_categories_v3', savedTests));
       if (savedLogs) {
         if (loadedLogs.some(log => log.reviewMemo !== undefined && !log.reviewMemoDocument)
           && !localStorage.getItem('swp_logs_before_note_blocks_v1')) {
@@ -341,7 +339,7 @@ const App: React.FC = () => {
         setLogs(migratedLogs);
         localStorage.setItem(REVIEW_INTERVAL_POLICY_KEY, REVIEW_INTERVAL_POLICY_VERSION);
       }
-      if (savedTags) setTagDefinitions(loadedTags);
+      if (savedTags) setTagDefinitions(breakFolderCycles(loadedTags));
     } catch (e) {
       console.error("Failed to load data from localStorage", e);
       // 불러오다 실패하면 빈 화면이 저장된 기록을 덮어쓰지 않도록, 저장돼 있던 원본을 따로 남겨 둔다
@@ -358,10 +356,9 @@ const App: React.FC = () => {
     // 불러오기가 끝나기 전의 빈 상태는 저장하지 않는다
     if (!storageLoaded) return;
     localStorage.setItem('swp_subjects', JSON.stringify(subjects));
-    localStorage.setItem('swp_tests_categories_v3', JSON.stringify(testCategories));
     localStorage.setItem('swp_logs', JSON.stringify(logs));
     localStorage.setItem('swp_tags', JSON.stringify(tagDefinitions));
-  }, [storageLoaded, subjects, testCategories, logs, tagDefinitions]);
+  }, [storageLoaded, subjects, logs, tagDefinitions]);
 
   // 같은 문제(글 · 정답 · 조건이 모두 같은 것)가 한 과목의 여러 노트에 생기면 복습 주기가 가장 짧은 하나만 복습에 남긴다.
   useEffect(() => {
@@ -453,7 +450,6 @@ const App: React.FC = () => {
             reviewSubjectIds: (followUp.reviewSubjectIds || []).filter(reviewSubjectId => reviewSubjectId !== id)
           }))
         })));
-        setTestCategories(prev => prev.filter(c => c.subjectId !== id));
       }
     );
   };
@@ -476,9 +472,11 @@ const App: React.FC = () => {
       '폴더를 삭제하시겠습니까?',
       '폴더 안의 과목들은 삭제되지 않고 최상위 목록(Root)으로 이동합니다.',
       () => {
-        const getTargetFolderIds = (rootId: string, allTags: TagDefinition[]): string[] => {
+        const getTargetFolderIds = (rootId: string, allTags: TagDefinition[], seen = new Set<string>()): string[] => {
+            if (seen.has(rootId)) return [];
+            seen.add(rootId);
             const children = allTags.filter(t => t.parentId === rootId);
-            const childIds = children.flatMap(c => getTargetFolderIds(c.id, allTags));
+            const childIds = children.flatMap(c => getTargetFolderIds(c.id, allTags, seen));
             return [rootId, ...childIds];
         };
         const foldersToRemove = getTargetFolderIds(folderId, tagDefinitions);
@@ -492,95 +490,6 @@ const App: React.FC = () => {
     );
   };
 
-  const handleAddCategory = (name: string, subjectId?: string) => {
-    const newCat: TestCategory = {
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      subjectId,
-      difficultySpaces: []
-    };
-    setTestCategories(prev => [...prev, newCat]);
-  };
-
-  const handleDeleteCategory = (id: string) => {
-    openConfirm('시험 공간을 삭제하시겠습니까?', '내부의 모든 테스트 기록이 함께 삭제됩니다.', () => {
-      setTestCategories(prev => prev.filter(c => c.id !== id));
-    });
-  };
-
-  const handleAddDifficultySpace = (categoryId: string, name: string, subjectIds: string[]) => {
-    setTestCategories(prev => prev.map(cat => {
-      if (cat.id === categoryId) {
-        const newSpace: TestDifficultySpace = {
-          id: Math.random().toString(36).substr(2, 9),
-          name,
-          records: [],
-          subjectIds: subjectIds
-        };
-        return { ...cat, difficultySpaces: [...cat.difficultySpaces, newSpace] };
-      }
-      return cat;
-    }));
-  };
-
-  const handleDeleteDifficultySpace = (categoryId: string, spaceId: string) => {
-    openConfirm('난이도 공간을 삭제하시겠습니까?', '해당 공간의 모든 기록이 사라집니다.', () => {
-      setTestCategories(prev => prev.map(cat => {
-        if (cat.id === categoryId) {
-          return { ...cat, difficultySpaces: cat.difficultySpaces.filter(s => s.id !== spaceId) };
-        }
-        return cat;
-      }));
-    });
-  };
-
-  const handleAddRecord = (categoryId: string, spaceId: string, record: TestRecord) => {
-    setTestCategories(prev => prev.map(cat => {
-      if (cat.id === categoryId) {
-        const targetSubIds = record.subjectIds || [];
-        if (targetSubIds.length > 0) {
-          setSubjects(sPrev => sPrev.map(s => 
-            targetSubIds.includes(s.id) ? adjustSubjectProgress(s, record.b) : s
-          ));
-        }
-        
-        const newSpaces = cat.difficultySpaces.map(space => {
-          if (space.id === spaceId) {
-            return { ...space, records: [...space.records, record] };
-          }
-          return space;
-        });
-        return { ...cat, difficultySpaces: newSpaces };
-      }
-      return cat;
-    }));
-  };
-
-  const handleDeleteRecord = (categoryId: string, spaceId: string, recordId: string) => {
-    setTestCategories(prev => prev.map(cat => {
-      if (cat.id === categoryId) {
-        const space = cat.difficultySpaces.find(s => s.id === spaceId);
-        const recordToDelete = space?.records.find(r => r.id === recordId);
-        
-        const targetSubIds = recordToDelete?.subjectIds || [];
-        if (targetSubIds.length > 0 && recordToDelete) {
-          setSubjects(sPrev => sPrev.map(s => 
-            targetSubIds.includes(s.id) ? adjustSubjectProgress(s, -recordToDelete.b) : s
-          ));
-        }
-
-        const newSpaces = cat.difficultySpaces.map(s => {
-          if (s.id === spaceId) {
-            return { ...s, records: s.records.filter(r => r.id !== recordId) };
-          }
-          return s;
-        });
-        return { ...cat, difficultySpaces: newSpaces };
-      }
-      return cat;
-    }));
-  };
-  
   const handleLogSession = (log: StudyLog) => {
     const subject = subjects.find(item => item.id === log.subjectId);
     const skipReview = shouldSkipReviewForLog(log, subject);

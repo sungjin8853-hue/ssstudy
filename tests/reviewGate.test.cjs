@@ -2406,8 +2406,12 @@ test('finished records are merged into the subject status rows and the separate 
   assert.equal(rows[0].detailId, 'deadline');
   assert.equal(rows[0].kind, 'study');
   assert.equal(rows[0].summary, '10P · 20분 · 2분/P');
-  // 하루 평균은 최근 7일 20분 ÷ 7 = 2.9분. 합계 글자(최근 7일 …)는 행에 들어 있지 않다.
-  assert.equal(rows[0].dailyAverageMinutes, 2.9);
+  // 하루 평균: 오늘 처음 공부했으면 오늘 하루로 나눈다(20분 ÷ 1). 7일이 지나면 최근 7일 ÷ 7. 합계 글자(최근 7일 …)는 행에 들어 있지 않다.
+  assert.equal(rows[0].dailyAverageMinutes, 20);
+  const threeDays = [{ ...doneLogs[0], id: 'old', studyDate: '2026-10-10', timestamp: '2026-10-10T03:00:00.000Z', timeSpentMinutes: 10 }, ...doneLogs];
+  assert.equal(buildCompletedDetailRows(threeDays, subjectsForDone, ['deadline'], '2026-10-12')[0].dailyAverageMinutes, 10, '30 minutes over 3 days');
+  const longAgo = [{ ...doneLogs[0], id: 'older', studyDate: '2026-09-01', timestamp: '2026-09-01T03:00:00.000Z', timeSpentMinutes: 10 }, ...doneLogs];
+  assert.equal(buildCompletedDetailRows(longAgo, subjectsForDone, ['deadline'], '2026-10-12')[0].dailyAverageMinutes, 2.9, 'a week has passed: ÷ 7');
   assert.ok(!('weekly' in rows[0]) && !('weeklyMinutes' in rows[0]) && !('weeklyPages' in rows[0]));
   const html = renderToStaticMarkup(React.createElement(TodaySummary, {
     logs: doneLogs, subjects: subjectsForDone, completedStudySubjectIds: ['deadline'],
@@ -4545,8 +4549,8 @@ test('a finished subject: one green growth cell holding the growth content plus 
   assert.ok(right.includes('3.5') && right.includes('35') && right.includes('10'), 'pages, minutes and minutes per page of what was done');
   assert.ok(!right.includes('aria-label="합산 기록 수정"') && !right.includes('aria-label="합산 기록 삭제"') && !right.includes('data-testid="done-records"'), 'no record rows');
   assert.ok(!/속도 [+−]|공부량 [+−]/.test(right), 'no growth text line');
-  // 최근 7일 35분 → 하루 평균 5분(7일 합계 ÷ 7)
-  assert.match(right, /data-testid="daily-average"[\s\S]*?최근 하루 평균 공부 시간[\s\S]*?>5<span[^>]*>분<\/span>/);
+  // 오늘 처음 공부한 과목: 35분 ÷ 1일 = 하루 평균 35분(7일이 차지 않으면 처음 공부한 날부터의 날 수로 나눈다)
+  assert.match(right, /data-testid="daily-average"[\s\S]*?최근 하루 평균 공부 시간[\s\S]*?>35<span[^>]*>분<\/span>/);
   assert.ok(!right.includes('최근 7일') && !right.includes('7일 평균'), 'the seven-day sum is not shown, only the daily average');
   assert.ok(right.indexOf('학습량') < right.indexOf('data-testid="daily-average"') && right.indexOf('data-testid="daily-average"') < right.indexOf('data-testid="extra-study"'));
   assert.ok(right.indexOf('추가 학습하기') > right.indexOf('data-testid="daily-average"'), 'extra study is the last thing');
@@ -4905,9 +4909,9 @@ test('the daily average counts the subject being studied and its own review subj
   const mainRow = rows.find(row => row.detailId === 'main');
   assert.equal(mainRow.dailyAverageMinutes, 14);
   assert.equal(mainRow.minutes, 35, 'what was done today is still only the subject itself');
-  // 후행 단계를 공부한 날: 그 단계(Next)의 기록 10 + 42, 합쳐지기 전 원래 과목 14, 후행 복습 9 = 75분 → 10.7분. 첫 단계 기록은 세지 않는다.
+  // 후행 단계를 공부한 날: 그 단계(Next)의 기록 10 + 42, 합쳐지기 전 원래 과목 14, 후행 복습 9 = 75분. 처음 공부한 10/10부터 3일 → 25분. 첫 단계 기록은 세지 않는다.
   const nextLogs = [...logs, study('today-next', 'main', '2026-10-12', 10, { subjectStageId: 'fu1', timestamp: '2026-10-12T09:00:00Z' })];
-  assert.equal(buildCompletedDetailRows(nextLogs, family, ['main'], '2026-10-12').find(row => row.detailId === 'main').dailyAverageMinutes, 10.7);
+  assert.equal(buildCompletedDetailRows(nextLogs, family, ['main'], '2026-10-12').find(row => row.detailId === 'main').dailyAverageMinutes, 25);
   // 복습과목이나 후행과목 원본에서 보면 그것이 붙은 단계의 묶음이다
   const pick = f => [f.ownerId, f.stageId, f.sourceSubjectId, [...f.reviewIds].sort()];
   assert.deepEqual(pick(getSubjectFamily(family, 'rev1')), ['main', 'main', undefined, ['rev1']]);
@@ -10392,4 +10396,29 @@ test('unseen-area fixes: times carry into the next unit, record edits keep insid
   // 불러오기가 끝나기 전에는 저장하지 않고, 깨진 목록은 백업해 둔다
   const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
   assert.ok(app.includes('if (!storageLoaded) return;') && app.includes("parseStoredList('swp_logs', savedLogs)") && app.includes('_backup_'));
+});
+
+test('folders cannot hold each other, and report time charts count review time kept inside records', () => {
+  const { breakFolderCycles } = loadSource('utils/listOrder.ts');
+  const tags = [{ id: 'A', name: 'A', parentId: 'B' }, { id: 'B', name: 'B', parentId: 'A' }, { id: 'C', name: 'C', parentId: 'A' }, { id: 'D', name: 'D' }];
+  const fixed = breakFolderCycles(tags);
+  assert.deepEqual(fixed.map(tag => tag.parentId), [undefined, 'A', 'A', undefined], 'one folder of the loop comes back to the top');
+  assert.equal(breakFolderCycles(fixed), fixed, 'a clean list is left as it is');
+  const analytics = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
+  assert.ok(analytics.includes('tagDefinitions.filter(t => !folderSubtreeIds(folder.id).has(t.id))'));
+  const { withReviewTimeLogs, calculateStudyStreak, buildWeeklyStudy } = loadSource('utils/studyReport.ts');
+  const logs = [
+    { id: 'a', subjectId: 'S', studyDate: '2026-10-20', timestamp: '2026-10-20T03:00:00.000Z', pagesRead: 10, timeSpentMinutes: 30,
+      basicReviewTimeRecords: [{ minutes: 12, pages: 10, timestamp: '2026-10-21T03:00:00.000Z', reviewNumber: 1 }],
+      reviewSubjectTimeRecords: [{ subjectId: 'R', minutes: 20, pages: 5, timestamp: '2026-10-21T04:00:00.000Z', measurementId: 'session', completed: true },
+        { subjectId: 'R', minutes: 9, pages: 3, timestamp: '2026-10-21T05:00:00.000Z', measurementId: 'old', completed: true }] },
+    { id: 'session', subjectId: 'R', studyDate: '2026-10-21', timestamp: '2026-10-21T04:00:00.000Z', pagesRead: 5, timeSpentMinutes: 20, pomodoroSession: true, reviewParentSubjectId: 'S' }
+  ];
+  const timed = withReviewTimeLogs(logs);
+  assert.equal(timed.length, 4, 'basic review + the review record without its own session');
+  assert.equal(timed.reduce((sum, log) => sum + log.timeSpentMinutes, 0), 30 + 20 + 12 + 9);
+  assert.equal(timed.reduce((sum, log) => sum + log.pagesRead, 0), 15, 'review time adds no pages');
+  const now = new Date('2026-10-21T12:00:00');
+  assert.equal(calculateStudyStreak(timed, now).current, 2);
+  assert.equal(buildWeeklyStudy(timed, 1, now).points[0].minutes, 71);
 });

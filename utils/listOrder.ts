@@ -1,4 +1,4 @@
-import { ListOrder } from '../types';
+import { ListOrder, TagDefinition } from '../types';
 
 /**
  * "과목·폴더 관리"에서 같은 폴더(또는 맨 위) 안의 폴더와 과목을 섞어 놓는 순서.
@@ -39,3 +39,19 @@ export const andParticle = (word: string): '와' | '과' => {
 };
 
 export const joinWithAnd = (first: string, second: string): string => `${first}${andParticle(first)} ${second}`;
+
+/** 폴더가 돌고 도는 부모 관계(A 안에 B, B 안에 A)면 목록 어디에도 보이지 않으므로, 고리마다 폴더 하나를 맨 위로 꺼낸다 */
+export const breakFolderCycles = (tags: TagDefinition[]): TagDefinition[] => {
+  const byId = new Map(tags.map(tag => [tag.id, { ...tag }]));
+  let changed = false;
+  byId.forEach(tag => {
+    const path = new Set<string>();
+    let current: TagDefinition | undefined = tag;
+    while (current?.parentId && !path.has(current.id)) {
+      path.add(current.id);
+      current = byId.get(current.parentId);
+    }
+    if (current && path.has(current.id)) { current.parentId = undefined; changed = true; }
+  });
+  return changed ? tags.map(tag => byId.get(tag.id)!) : tags;
+};

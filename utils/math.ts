@@ -1,4 +1,4 @@
-import { StudyLog, PredictionInputs, Stats, Subject } from '../types';
+import { StudyLog, Stats, Subject } from '../types';
 import { getRepeatedReviewRange } from './review';
 import { calculateUnitEfficiency, getGrowthDelta, GrowthChange, GrowthDelta, pagesPerReferenceTime, roundGrowthDelta } from './pageGrowth';
 import { getLocalDateKey } from './schedule';
@@ -420,51 +420,5 @@ export const calculateStats = (
     standardDeviation: recentAverage.standardDeviation,
     totalTimeSpent: totalTime,
     estimatedRemainingTime: recentAverage.averageTimePerPage * remainingPages
-  };
-};
-
-export const calculateRequiredReviewCount = (tTest: number, tRec: number): number => {
-  if (tRec === 0) return 0;
-
-  const ratio = tTest / tRec;
-
-  if (ratio <= 1.0) return 0;
-  if (ratio <= 1.2) return 1;
-  if (ratio <= 1.5) return 2;
-  return 3;
-};
-
-export const calculateMentalBurden = (
-  h1: number,
-  h2: number,
-  b: number,
-  tStudy: number,
-  tTest: number,
-  tRec: number
-): { total: number, init: number, length: number } => {
-  const burdenFromVolume = b * 0.05;
-  const burdenFromTime = tStudy * 0.5;
-  const burdenFromIntensity = (tTest / (tRec || 1)) * 2;
-
-  const total = burdenFromVolume + burdenFromTime + burdenFromIntensity;
-
-  return {
-    total,
-    init: total * 0.3,
-    length: total * 0.7
-  };
-};
-
-export const calculateStudyBurdenV2 = (inputs: PredictionInputs): { total: number } => {
-  const efficiencyFactor = inputs.tStudy > 0 && inputs.b > 0
-    ? inputs.b / inputs.tStudy
-    : 10;
-
-  const targetBoost = inputs.h3;
-  const basePagesPerPoint = 30;
-  const predictedTotalPages = (targetBoost * basePagesPerPoint) * (10 / (efficiencyFactor || 10));
-
-  return {
-    total: parseFloat(predictedTotalPages.toFixed(1))
   };
 };

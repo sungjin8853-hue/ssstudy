@@ -65,31 +65,6 @@ export interface Subject {
   noteShorthand?: boolean;
 }
 
-export interface TestRecord {
-  id: string;
-  timestamp: string;
-  h1: number;
-  b: number;
-  tStudy: number;
-  tTest: number;
-  tRec: number;
-  subjectIds?: string[];
-}
-
-export interface TestDifficultySpace {
-  id: string;
-  name: string;
-  records: TestRecord[];
-  subjectIds?: string[];
-}
-
-export interface TestCategory {
-  id: string;
-  name: string;
-  subjectId?: string;
-  difficultySpaces: TestDifficultySpace[];
-}
-
 export interface ReviewMemoLogicalOperator {
   index: number;
   operator: 'and' | 'or' | 'sequence';
@@ -275,16 +250,6 @@ export interface ReviewMeasurement {
   measurementId: string;
   timeAttackMinutes?: number;
   baselineTimeAttackPerPage?: number;
-}
-
-export interface PredictionInputs {
-  h1: number;
-  h2: number;
-  h3: number;
-  b: number;
-  tStudy: number;
-  tTest: number;
-  tRec: number;
 }
 
 export interface Stats {

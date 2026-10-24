@@ -69,6 +69,8 @@ interface SubjectSummary {
   minutes: number;
   /** 이 과목(지금 공부 중인 단계)과 그 단계에 붙은 복습과목을 합친 최근 7일 공부 시간(분). 후행과목은 세지 않는다 */
   relatedWeeklyMinutes: number;
+  /** 하루 평균을 낼 날 수: 이 묶음을 처음 공부한 날부터 오늘까지(최대 7일) */
+  relatedDays: number;
   /** 이 기록이 속한 단계 id(기록에 남은 값). 하루 평균을 어느 단계 기준으로 낼지 정한다 */
   stageHint?: string;
   startPage: number;
@@ -126,7 +128,7 @@ export const buildCompletedSubjectSummaries = (
     pages: number, minutes: number, timestamp: string, log?: StudyLog,
     recordKey = detailId, baselineTimePerPage?: number, stageHint?: string) => {
     const summary = groups.get(recordKey) || {
-      recordKey, subjectId, detailId, kind, name, pages: 0, minutes: 0, relatedWeeklyMinutes: 0,
+      recordKey, subjectId, detailId, kind, name, pages: 0, minutes: 0, relatedWeeklyMinutes: 0, relatedDays: 7,
       startPage: 0, endPage: 0, latestTimestamp: timestamp, logs: [],
       reviewSpeedChangePercent: null, reviewBaselineMinutes: 0, reviewHasBaseline: true, stageHint
     };
@@ -195,30 +197,39 @@ export const buildCompletedSubjectSummaries = (
   // 최근 7일(오늘 포함) 공부 시간: 지금 공부 중인 단계(과목 자신)와 그 단계에 붙은 복습과목(기본 복습 포함)만 합친다.
   // 후행과목은 앞 단계를 모두 끝낸 다음날부터 시작하므로 같이 세지 않는다.
   const inWindow = (date: string) => date >= weekStartKey && date <= studyDate;
+  // 처음 공부한 날도 함께 찾는다: 7일이 차지 않았으면 그날부터 오늘까지의 날 수로 나눈다
   const relatedWeeklyMinutesOf = (family: SubjectFamily) => {
     let total = 0;
+    let firstDate = studyDate;
+    const count = (date: string, minutes: number) => {
+      if (date <= studyDate && date < firstDate) firstDate = date;
+      if (inWindow(date)) total += Math.max(0, minutes);
+    };
     logs.forEach(log => {
       if (!log.reviewParentSubjectId) {
-        if (isFamilyStudyLog(family, log) && inWindow(getLogStudyDate(log))) total += Math.max(0, log.timeSpentMinutes);
+        if (isFamilyStudyLog(family, log)) count(getLogStudyDate(log), log.timeSpentMinutes);
       } else if (log.pomodoroSession && !aggregateReviewIds.has(log.id)) {
-        if (family.reviewIds.has(log.subjectId) && inWindow(getLogStudyDate(log))) total += Math.max(0, log.timeSpentMinutes);
+        if (family.reviewIds.has(log.subjectId)) count(getLogStudyDate(log), log.timeSpentMinutes);
       }
       (log.basicReviewTimeRecords || []).forEach(record => {
-        if (isFamilyStudyLog(family, log) && inWindow(getLocalDateKey(new Date(record.timestamp)))) total += Math.max(0, record.minutes);
+        if (isFamilyStudyLog(family, log)) count(getLocalDateKey(new Date(record.timestamp)), record.minutes);
       });
       (log.reviewSubjectTimeRecords || []).forEach(record => {
         if (representedBySessions(record)) return;
-        if (family.reviewIds.has(record.subjectId) && inWindow(getLocalDateKey(new Date(record.timestamp)))) total += Math.max(0, record.minutes);
+        if (family.reviewIds.has(record.subjectId)) count(getLocalDateKey(new Date(record.timestamp)), record.minutes);
       });
     });
-    return total;
+    const days = firstDate >= weekStartKey
+      ? Math.round((parseStudyDate(studyDate).getTime() - parseStudyDate(firstDate).getTime()) / 86400000) + 1 : 7;
+    return { total, days: Math.min(7, Math.max(1, days)) };
   };
-  const familyMinutes = new Map<string, number>();
+  const familyMinutes = new Map<string, { total: number; days: number }>();
   groups.forEach(summary => {
     const family = getSubjectFamily(subjects, summary.subjectId, summary.stageHint);
     const key = `${family.ownerId}:${family.stageId}`;
     if (!familyMinutes.has(key)) familyMinutes.set(key, relatedWeeklyMinutesOf(family));
-    summary.relatedWeeklyMinutes = familyMinutes.get(key) || 0;
+    summary.relatedWeeklyMinutes = familyMinutes.get(key)?.total || 0;
+    summary.relatedDays = familyMinutes.get(key)?.days || 7;
   });
   return [...groups.values()].sort((a, b) => b.latestTimestamp.localeCompare(a.latestTimestamp));
 };
@@ -237,7 +248,7 @@ export interface CompletedDetailRow {
   short: string;
   /** 복습에서만: "이번 복습 속도 +x%" 또는 "페이지 단위 공부량 +x%" 같은 한 줄. 없으면 null */
   growth: string | null;
-  /** 이 과목(지금 공부 중인 단계)과 그 복습과목을 합친 하루 평균 공부 시간(분): 최근 7일 합계 ÷ 7. 후행과목은 뺀다 */
+  /** 이 과목(지금 공부 중인 단계)과 그 복습과목을 합친 하루 평균 공부 시간(분): 최근 7일 합계 ÷ 7(처음 공부한 지 7일이 안 됐으면 그날부터의 날 수). 후행과목은 뺀다 */
   dailyAverageMinutes: number;
   /** 이 과목이 "페이지"를 부르는 글자(기본 P) */
   pageLabel: string;
@@ -290,7 +301,9 @@ export const buildCompletedDetailRows = (
       summary: `${formatNumber(pages)}${label} · ${formatDoneMinutes(minutes)}${pages > 0 && minutes > 0 ? ` · ${formatNumber(Number((minutes / pages).toFixed(1)))}분/${label}` : ''}`,
       growth,
       // 같은 과목의 기록은 모두 같은 묶음 합계를 들고 있으므로 가장 큰 값을 쓴다. 공부하지 않은 날도 하루로 센다(÷ 7).
-      dailyAverageMinutes: Number((Math.max(...group.map(item => item.relatedWeeklyMinutes)) / 7).toFixed(1)),
+      // 처음 공부한 지 7일이 안 됐으면 그날부터 오늘까지의 날 수로 나눈다(오늘 처음이면 ÷ 1)
+      dailyAverageMinutes: Number((Math.max(...group.map(item => item.relatedWeeklyMinutes))
+        / Math.max(1, Math.min(...group.map(item => item.relatedDays)))).toFixed(1)),
       pageLabel: label
     };
   }).sort((a, b) => b.latestTimestamp.localeCompare(a.latestTimestamp));

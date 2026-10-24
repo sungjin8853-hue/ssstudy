@@ -702,6 +702,19 @@ export const Analytics: React.FC<Props> = ({
       : 0;
   };
 
+  /** 이 폴더와 그 안(아래 단계 모두)의 폴더 id */
+  const folderSubtreeIds = (rootId: string) => {
+    const ids = new Set([rootId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      tagDefinitions.forEach(tag => {
+        if (tag.parentId && ids.has(tag.parentId) && !ids.has(tag.id)) { ids.add(tag.id); grew = true; }
+      });
+    }
+    return ids;
+  };
+
   const getRecursiveData = (folderId: string) => {
     const findSubjIds = (fid: string): string[] => {
       const childFolders = tagDefinitions.filter(t => t.parentId === fid);
@@ -1015,7 +1028,8 @@ export const Analytics: React.FC<Props> = ({
                     <p className="text-xs font-black text-indigo-400 uppercase mb-2 px-1">📂 이동할 폴더</p>
                     <div className="flex flex-wrap gap-2">
                        <button onClick={(e) => { e.stopPropagation(); onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, parentId: undefined} : t)); setMovingItemId(null); }} className="px-4 py-2 bg-white text-slate-900 rounded-xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">최상위</button>
-                       {tagDefinitions.filter(t => t.id !== folder.id).map(t => (
+                       {/* 자기 자신과 그 안의 폴더로는 옮길 수 없다(옮기면 서로가 서로를 품어 둘 다 목록에서 사라진다) */}
+                       {tagDefinitions.filter(t => !folderSubtreeIds(folder.id).has(t.id)).map(t => (
                          <button key={t.id} onClick={(e) => { e.stopPropagation(); onUpdateTags?.(tagDefinitions.map(tg => tg.id === folder.id ? {...tg, parentId: t.id} : tg)); setMovingItemId(null); }} className="px-4 py-2 bg-white text-slate-900 rounded-xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">📂 {t.name}</button>
                        ))}
                     </div>
@@ -1181,7 +1195,8 @@ export const Analytics: React.FC<Props> = ({
                                       ? { ...stage, name: editForm.name.trim() || stage.name }
                                       : stage
                                   )),
-                                targetDate: editForm.targetDate,
+                                // 날짜 칸을 비우고 저장하면 마감일을 지우지 않고 원래 날짜를 둔다
+                                targetDate: editForm.targetDate || sub.targetDate,
                                 tagIds: editForm.tagIds,
                                 isRequired: editForm.isRequired,
                               };

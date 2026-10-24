@@ -213,7 +213,8 @@ export const getLogProgressPages = (log: StudyLog) => {
 export const getDiffDays =(targetDate: string, from = new Date()) => {
   const today = new Date(from);
   today.setHours(0, 0, 0, 0);
-  const target = new Date(targetDate);
+  // "2026-11-06"은 그 지역의 그날로 읽는다(new Date("2026-11-06")은 UTC 자정이라 서쪽 시간대에서는 하루 앞당겨진다)
+  const target = /^\d{4}-\d{2}-\d{2}$/.test(targetDate) ? parseStudyDate(targetDate) : new Date(targetDate);
   target.setHours(0, 0, 0, 0);
   return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 };
