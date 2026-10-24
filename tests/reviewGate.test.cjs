@@ -7484,6 +7484,9 @@ test('FSRS-6 matches the reference implementation (ts-fsrs 5.4) for first review
   close(sameDay.difficulty, 6.40211507, 'again then good on the same day D');
   assert.equal(sameDay.lapses, 1);
   assert.equal(sameDay.reps, 2);
+  // 같은 날 어려움은 안정도가 줄 수 있다(FSRS-6은 좋음·쉬움만 1배 아래로 막는다)
+  close(fsrs.fsrsReview(first(3), 2, 0).stability, 1.33337872, 'good then hard on the same day S');
+  assert.ok(fsrs.fsrsReview(first(3), 3, 0).stability >= 2.3065, 'good again on the same day never lowers S');
   close(fsrs.fsrsRetrievability(3, 10), 0.96102427, 'R(3 days, S=10)');
   close(fsrs.fsrsRetrievability(10, 10), 0.9, 'R equals the desired retention after S days');
   close(fsrs.fsrsIntervalDays(10), 10, 'at 90% retention the interval is the stability');

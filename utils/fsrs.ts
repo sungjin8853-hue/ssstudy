@@ -66,14 +66,15 @@ const forgetStability = (memory: FsrsMemory, retrievability: number, w: readonly
   const afterForget = clamp(
     w[11] * Math.pow(memory.difficulty, -w[12]) * (Math.pow(memory.stability + 1, w[13]) - 1) * Math.exp((1 - retrievability) * w[14]),
     S_MIN, S_MAX);
-  // 잊어도 같은 날 다시 본 효과(w17·w18)만큼 아래로는 내려가지 않는다
+  // FSRS-6: 잊은 뒤의 안정도는 S / e^(w17·w18)를 넘지 않는다(둘 중 작은 값)
   return clamp(memory.stability / Math.exp(w[17] * w[18]), S_MIN, afterForget);
 };
 
 /** 같은 날 다시 푼 경우(하루가 지나기 전)의 안정도 */
 const shortTermStability = (stability: number, rating: FsrsRating, w: readonly number[]) => {
   const increase = Math.pow(stability, -w[19]) * Math.exp(w[17] * (rating - 3 + w[18]));
-  return clamp(stability * (rating >= 2 ? Math.max(increase, 1) : increase), S_MIN, S_MAX);
+  // 좋음·쉬움만 안정도가 줄지 않게 막는다(FSRS-6). 어려움·다시는 같은 날에도 줄 수 있다
+  return clamp(stability * (rating >= 3 ? Math.max(increase, 1) : increase), S_MIN, S_MAX);
 };
 
 /**
