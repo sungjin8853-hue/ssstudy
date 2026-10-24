@@ -1,18 +1,25 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Subject, StudyLog, TestCategory, TestDifficultySpace, TestRecord, TagDefinition, ReviewMemoDocument, ReviewMeasurement } from './types';
+import { dedupeIdenticalQuestions } from './utils/reviewDuplicates';
 import { withReviewMemoDocument } from './utils/reviewMemoDocument';
-import { SubjectPlanner } from './components/SubjectPlanner';
 import { SessionLogger } from './components/SessionLogger';
 import { Analytics } from './components/Analytics';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds } from './utils/schedule';
-import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, completeRepeatedSubjectReview } from './utils/review';
+import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, applyUnitReviewRegistration, registerPendingReviews, completeRepeatedSubjectReview } from './utils/review';
 import { normalizePageGrowthSettings } from './utils/pageGrowth';
 import { resizeSessionTimes } from './utils/measurement';
 import { getLogProgressPages } from './utils/measurement';
-import { applyReviewGateOutcomes, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
+import { fsrsIntervalMs } from './utils/fsrs';
+import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
+import type { SubjectGrade } from './utils/subjectFeedback';
+import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, updateReviewGateMemo } from './utils/reviewGate';
+import { readEditIntake } from './utils/reviewEditIntake';
+import { useSubjectShorthandSync } from './utils/useNoteShorthand';
+import { normalizeChapters } from './utils/subjectChapters';
+import type { RemovalUpdate } from './utils/reviewRemoval';
 
 const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   const snapshots = new Map<string, { id: string; name: string; parentId?: string }>();
@@ -119,9 +126,15 @@ const App: React.FC = () => {
   const [testCategories, setTestCategories] = useState<TestCategory[]>([]);
   const [logs, setLogs] = useState<StudyLog[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
+  // 과목마다의 `=`·`-` 단축어 설정을 노트 읽기에 알려 둔다
+  useSubjectShorthandSync(subjects);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
   const [dashboardDetailSubjectId, setDashboardDetailSubjectId] = useState('');
+  /** 학습 실행의 "학습 설정 가기"로 열 때 설정 화면이 먼저 보여줄 과목(그 과목이 든 폴더를 펼치고 카드로 스크롤) */
+  const [settingsFocusSubjectId, setSettingsFocusSubjectId] = useState('');
+  const openSettingsFor = (subjectId: string) => { setSettingsFocusSubjectId(subjectId); setActiveTab('settings'); };
+  useEffect(() => { if (activeTab !== 'settings') setSettingsFocusSubjectId(''); }, [activeTab]);
   const [dashboardDate, setDashboardDate] = useState(() => getLocalDateKey());
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
@@ -172,8 +185,12 @@ const App: React.FC = () => {
       
       if (savedSubs) {
         const migratedSubjects = loadedSubjects.map(subject => {
-          const startPage = Math.max(1, Number(subject.startPage) || 1);
-          const totalPages = Math.max(startPage, subject.procedures?.[0]?.totalPages ?? subject.totalPages);
+          // 단원이 있으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다
+          const savedChapters = normalizeChapters(subject.chapters);
+          const startPage = savedChapters.length > 0 ? savedChapters[0].startPage : Math.max(1, Number(subject.startPage) || 1);
+          const totalPages = savedChapters.length > 0
+            ? savedChapters[savedChapters.length - 1].endPage
+            : Math.max(startPage, subject.procedures?.[0]?.totalPages ?? subject.totalPages);
           const rawCompletedPages = subject.procedures?.length
             ? subject.procedures.reduce((sum, procedure) => sum + procedure.completedPages, 0)
             : subject.completedPages;
@@ -200,6 +217,7 @@ const App: React.FC = () => {
             targetDate: subject.targetDate,
             initialAverageTimePerPage: subject.initialAverageTimePerPage,
             reviewStartPage: subject.reviewStartPage,
+            ...(savedChapters.length > 0 ? { chapters: savedChapters } : {}),
             tagIds: subject.tagIds,
             reviewEnabled: subject.reviewEnabled ?? true,
             reviewSubjectIds: Array.isArray(subject.reviewSubjectIds)
@@ -315,6 +333,12 @@ const App: React.FC = () => {
     localStorage.setItem('swp_logs', JSON.stringify(logs));
     localStorage.setItem('swp_tags', JSON.stringify(tagDefinitions));
   }, [subjects, testCategories, logs, tagDefinitions]);
+
+  // 같은 문제(글 · 정답 · 조건이 모두 같은 것)가 한 과목의 여러 노트에 생기면 복습 주기가 가장 짧은 하나만 복습에 남긴다.
+  useEffect(() => {
+    const next = dedupeIdenticalQuestions(logs);
+    if (next !== logs) setLogs(next);
+  }, [logs]);
 
   // AI 팁 로직
   useEffect(() => {
@@ -547,12 +571,18 @@ const App: React.FC = () => {
         studyWeekday: log.studyWeekday ?? new Date(log.timestamp).getDay(),
         reviewStep: log.isRepeatReview ? log.reviewStep || 0 : 0,
         nextReviewDate: !skipReview
-          ? log.isRepeatReview ? log.nextReviewDate : new Date(Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
+          ? log.isRepeatReview ? log.nextReviewDate
+            // 난도 피드백(FSRS-6)이 있으면 그 평가가 정한 때에, 없으면 2시간 뒤에 첫 복습이 열린다
+            : new Date(log.reviewFsrs ? log.reviewFsrs.lastReviewMs + fsrsIntervalMs(log.reviewFsrs) : Date.now() + INITIAL_REVIEW_DELAY_MS).toISOString()
           : undefined,
         isCondensed: skipReview,
         reviewEnabled: !skipReview
     };
-    setLogs(prev => [...prev, newLog]);
+    // 페이지 단위가 있는 과목은 세션마다 복습을 등록하지 않고, 단위 끝 페이지까지 풀었을 때 그 단위 범위를 등록한다.
+    setLogs(prev => {
+      const result = applyUnitReviewRegistration(subject, prev, newLog);
+      return [...result.logs, result.incoming];
+    });
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
         return log.pageCountIsExplicit ? applySessionEndPage(sub, log)
@@ -667,7 +697,14 @@ const App: React.FC = () => {
       reviewEnabled: !skipReview
     };
 
-    setLogs(prev => [...prev.filter(log => !logIds.includes(log.id)), enrichedLog]);
+    // 단위 복습 대기였던 기록을 고쳐 저장하면 대기를 그대로 유지한다(이미 복습에 등록된 기록의 일정은 건드리지 않는다)
+    const keepsUnitReviewPending = logsToReplace.some(log => log.unitReviewPending);
+    setLogs(prev => {
+      const rest = prev.filter(log => !logIds.includes(log.id));
+      if (!keepsUnitReviewPending) return [...rest, enrichedLog];
+      const result = applyUnitReviewRegistration(subject, rest, enrichedLog);
+      return [...result.logs, result.incoming];
+    });
     setSubjects(prev => prev.map(subjectItem => {
       const removedPages = logsToReplace
         .filter(log => log.subjectId === subjectItem.id && (!log.reviewParentSubjectId || log.reviewPageRangeBased))
@@ -757,11 +794,32 @@ const App: React.FC = () => {
     });
   };
 
+  // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
+  const handleRegisterReview = (subjectId: string, grade: SubjectGrade) => {
+    // 난도는 이때 고른다: 대기 기록 모두에 그 난도를 매기고(첫 복습 날짜는 FSRS-6가 정한다) 한꺼번에 복습에 넣는다
+    setLogs(prev => {
+      const now = Date.now();
+      return registerPendingReviews(subjectId, gradePendingReviews(prev, subjectId, grade, now), now).logs;
+    });
+  };
+
   const handleUpdateReviewMemo = (logId: string, memo: string, document?: ReviewMemoDocument) => {
     setLogs(prev => prev.map(log => log.id === logId
-      ? updateReviewGateMemo(log, memo, document)
+      ? updateReviewGateMemo(log, memo, document, { intake: readEditIntake() })
       : log
     ));
+  };
+
+  // 복습에서 뺀 문제: 노트 글은 그대로 두고(논리 이유는 그 줄에 [!]만 붙인다) 기록만 더한다. 되돌리면 [!]를 빼고 기록을 지운다.
+  const handleRemoveReviewQuestions = (updates: RemovalUpdate[]) => {
+    setLogs(prev => prev.map(log => {
+      const update = updates.find(item => item.logId === log.id);
+      return update ? applyReviewRemoval(log, update) : log;
+    }));
+  };
+
+  const handleRestoreReviewQuestion = (logId: string, key: string) => {
+    setLogs(prev => prev.map(log => (log.id === logId ? restoreReviewRemoval(log, key) : log)));
   };
 
   const handleFinishReviewGate = (outcomes: ReviewGateOutcome[], isRetry: boolean) => {
@@ -778,14 +836,18 @@ const App: React.FC = () => {
     completedReviewSubjectId: string,
     nextReviewSubjectId: string | null,
     reviewTimeSpentMinutes: number,
-    measurement: ReviewMeasurement
+    measurement: ReviewMeasurement,
+    feedbackGrade?: SubjectGrade
   ) => {
     const targetIds = new Set(logIds);
     setLogs(prev => {
       const completedAt = new Date().toISOString();
+      const nowMs = Date.now();
       const recorded = recordReviewMeasurement(prev, logIds, completedReviewSubjectId, reviewTimeSpentMinutes, true, completedAt, measurement);
-      return recorded.map(log => {
-        if (!targetIds.has(log.id)) return log;
+      return recorded.map(source => {
+        if (!targetIds.has(source.id)) return source;
+        // 난도 피드백이 있으면 먼저 이 기록의 과목 단위 기억(FSRS-6)을 갱신한다
+        const log: StudyLog = feedbackGrade ? { ...source, reviewFsrs: gradeSubjectCard(source, feedbackGrade, nowMs) } : source;
 
         if (nextReviewSubjectId) {
           return {
@@ -797,7 +859,7 @@ const App: React.FC = () => {
         return {
           ...log,
           isReviewed: true,
-          ...(log.isRepeatReview ? completeRepeatedSubjectReview(log) : completeRegularReviewSchedule(log, Date.now()))
+          ...(log.isRepeatReview ? completeRepeatedSubjectReview(log) : completeRegularReviewSchedule(log, nowMs))
         };
       });
     });
@@ -814,7 +876,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className={`min-h-screen pb-20 md:pb-0 bg-slate-50 transition-all ${isSidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+    <div className={`min-h-screen pb-20 md:pb-0 bg-slate-50 transition-all md:pl-24 ${isSidebarCollapsed ? 'xl:pl-20' : 'xl:pl-64'}`}>
       {/* 커스텀 확인 모달 */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
@@ -839,7 +901,27 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav className={`hidden md:flex flex-col bg-white h-screen border-r border-slate-200 fixed left-0 top-0 z-40 transition-all ${isSidebarCollapsed ? 'w-20 p-4' : 'w-64 p-6'}`}>
+      <nav aria-label="주 메뉴" className="hidden md:flex xl:hidden flex-col items-center gap-2 bg-white h-screen w-24 border-r border-slate-200 fixed left-0 top-0 z-40 px-2 py-5">
+        <div aria-hidden="true" className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-xl font-bold text-white">W</div>
+        {([
+          { tab: 'dashboard', icon: '⏱️', label: '학습 실행' },
+          { tab: 'settings', icon: '⚙️', label: '학습 설정' },
+          { tab: 'history', icon: '📈', label: '추이 분석' }
+        ] as const).map(item => (
+          <button
+            key={item.tab}
+            type="button"
+            onClick={() => setActiveTab(item.tab)}
+            aria-current={activeTab === item.tab ? 'page' : undefined}
+            className={`flex h-[76px] w-20 flex-col items-center justify-center gap-1.5 rounded-2xl text-[13px] font-bold transition-colors ${activeTab === item.tab ? 'bg-indigo-100 text-indigo-800' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <span className="text-2xl leading-none">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <nav className={`hidden xl:flex flex-col bg-white h-screen border-r border-slate-200 fixed left-0 top-0 z-40 transition-all ${isSidebarCollapsed ? 'w-20 p-4' : 'w-64 p-6'}`}>
         <div className={`mb-10 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-xl font-bold">W</div>
           {!isSidebarCollapsed && <h1 className="text-xl font-black text-slate-800 tracking-tight">StudyWise</h1>}
@@ -871,21 +953,21 @@ const App: React.FC = () => {
         <button onClick={() => setActiveTab('history')} className={`p-2 rounded-xl ${activeTab === 'history' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📈</button>
       </nav>
 
-      <main className="p-4 md:p-10 max-w-6xl mx-auto">
-        <header className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-black text-slate-900">
+      <main className="mx-auto max-w-6xl p-4 md:px-8 md:py-6 xl:p-10">
+        <header className="mb-4 flex flex-col md:flex-row md:items-end justify-between gap-4 xl:mb-8">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 xl:block">
+            <h2 className="text-2xl font-black text-slate-900 md:text-[28px] xl:text-3xl">
               {activeTab === 'dashboard' ? '학습 실행' :
                activeTab === 'settings' ? '학습 설정' : '학습 추이 및 리포트'}
             </h2>
-            <p className="mt-3 text-xl font-black tracking-wide text-indigo-500 md:text-2xl">{todayStr}</p>
+            <p className="text-sm font-bold text-slate-600 xl:mt-3 xl:text-2xl xl:font-black xl:tracking-wide xl:text-indigo-500">{todayStr}</p>
           </div>
         </header>
 
         <div className="transition-all duration-300">
           {activeTab === 'dashboard' && (
             <div className="space-y-6 animate-fade-in">
-              <div className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+              <div className="mx-auto max-w-5xl">
                 <div className="space-y-8">
                   <SessionLogger
                     subjects={subjects}
@@ -894,15 +976,20 @@ const App: React.FC = () => {
                     activeStudyDate={dashboardDate}
                     detailSubjectId={dashboardDetailSubjectId}
                     onDetailSubjectChange={setDashboardDetailSubjectId}
-                    renderSummary={(taskSelector, onSelectSubject, completedStudySubjectIds, pomodoroPlan) => (
+                    renderSummary={(taskSelector, onSelectSubject, completedStudySubjectIds, pomodoroPlan, idle) => (
                       <TodaySummary
                         logs={logs}
                         subjects={subjects}
                         detailSubjectId={dashboardDetailSubjectId}
                         onDetailSubjectChange={onSelectSubject}
                         taskSelector={taskSelector}
+                        onOpenSettings={openSettingsFor}
                         completedStudySubjectIds={completedStudySubjectIds}
                         pomodoroPlan={pomodoroPlan}
+                        idle={idle}
+                        onUpdateReviewMemo={handleUpdateReviewMemo}
+                        onRestoreReviewQuestion={handleRestoreReviewQuestion}
+                        onRegisterReview={handleRegisterReview}
                         activeWeekday={dashboardWeekday}
                         activeStudyDate={dashboardDate}
                         onAddLog={handleLogSession}
@@ -916,6 +1003,8 @@ const App: React.FC = () => {
                     onAdvanceReviewSubject={handleAdvanceReviewSubject}
                     onRecordReviewSubjectTime={handleRecordReviewSubjectTime}
                     onUpdateReviewMemo={handleUpdateReviewMemo}
+                    onRemoveReviewQuestions={handleRemoveReviewQuestions}
+                    onRestoreReviewQuestion={handleRestoreReviewQuestion}
                     onFinishReviewGate={handleFinishReviewGate}
                     onClearReviewGateRetries={handleClearReviewGateRetries}
                   />
@@ -925,6 +1014,7 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'settings' && (
+            // 학습 설정: 폴더·과목을 보고 다루는 한 화면. 새 학습 계획과 새 분석 그룹은 항목 사이(맨 앞·맨 뒤 포함)의 띠를 눌러서 그 자리에 추가한다.
             <div className="space-y-8 animate-fade-in">
               <Analytics
                 subjects={subjects}
@@ -937,12 +1027,11 @@ const App: React.FC = () => {
                 onUpdateSubjects={handleUpdateSubjects}
                 onDeleteSubject={handleDeleteSubject}
                 onUpdateTags={handleUpdateTags}
+                onAddSubject={handleAddSubject}
                 onDeleteFolder={handleDeleteFolder}
                 onOpenReview={() => setActiveTab('dashboard')}
+                focusSubjectId={settingsFocusSubjectId}
               />
-              <div className="mx-auto max-w-3xl rounded-[3rem] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
-                <SubjectPlanner onAddSubject={handleAddSubject} />
-              </div>
             </div>
           )}
 

@@ -5,7 +5,8 @@ export const getReviewMemoDoubleSpaceEdit = (text: string, start: number, end: n
   const left = text.slice(0, start);
   const line = left.slice(left.lastIndexOf('\n') + 1);
   const separators = parseReviewMemoSyntax(line).relationSeparators;
-  const relation = line.slice((separators[separators.length - 1] ?? -1) + 1);
+  const lastSeparator = separators[separators.length - 1];
+  const relation = line.slice(lastSeparator === undefined ? 0 : lastSeparator + 2); // `//` 한 쌍
   if (!relation.trim() || relation.includes(':') || relation.trim() === '>') return null;
   return { text: `${left.slice(0, -1)}:${text.slice(end)}`, caret: start };
 };

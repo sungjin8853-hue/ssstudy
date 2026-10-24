@@ -1,15 +1,19 @@
 import type { ReviewMemoChildrenRelation, ReviewMemoLogicalExpression, ReviewMemoLogicalOperator } from '../types';
-import { readReviewFieldOverride } from './reviewFieldOverride';
+import { readReviewFieldOverride, reviewGroups } from './reviewFieldOverride';
+import { isReviewSlash } from './reviewSlash';
+import { isNoteShorthandOn, isRelationMark } from './noteShorthand';
+import { reviewQuotes } from './reviewQuote';
+import { openTailOf } from './noteOpenTail';
 
 type Operator = ReviewMemoLogicalOperator['operator'];
 
 export const isReviewSequenceSeparator = (text: string, index: number, start = 0, end = text.length): boolean => {
-  if (text[index] !== '-') return false;
+  if (text[index] !== '-' || !isNoteShorthandOn()) return false;
   let left = index - 1;
   let right = index + 1;
   while (left >= start && /\s/.test(text[left])) left -= 1;
   while (right < end && /\s/.test(text[right])) right += 1;
-  if (left < start || right >= end || /[\[=:;,/\-]/.test(text[left]) || /[\]=:;,/]/.test(text[right])) return false;
+  if (left < start || right >= end || /[\[(=:;<,/\-]/.test(text[left]) || /[\])=:;<,/]/.test(text[right])) return false;
   if (/[eE]/.test(text[left]) && left > start && /\d/.test(text[left - 1]) && /\d/.test(text[right])) return false;
   return text[right] !== '-' || /^-\s*\d/.test(text.slice(right, end));
 };
@@ -20,15 +24,10 @@ export const parseReviewMemoSyntax = (text: string, newlineOperator: Operator | 
   const logicalExpressions: ReviewMemoLogicalExpression[] = [];
   const relationSeparators: number[] = [];
   let childrenRelation: ReviewMemoChildrenRelation | undefined;
-  const bracketEnds = new Map<number, number>();
-  const brackets: number[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    const override = text[index] === ':' || text[index] === ';' ? readReviewFieldOverride(text, index + 1) : undefined;
-    if (override) { index = override.end - 1; continue; }
-    if (text[index] === '\n') brackets.length = 0;
-    else if (text[index] === '[') brackets.push(index);
-    else if (text[index] === ']' && brackets.length) bracketEnds.set(brackets.pop()!, index);
-  }
+  const groups = reviewGroups(text);
+  const bracketEnds = groups.closed;
+  // 따옴표 `'…'` 안의 `;` `<`는 한 칸 안의 순서(`-`)고, `:`는 같음(`=`)이라 칸을 나누지 않는다.
+  const quoted = reviewQuotes(text).marks;
 
   const combine = (operator: Operator, operands: ReviewMemoLogicalExpression[]): ReviewMemoLogicalExpression => (
     operands.length === 1 ? operands[0] : { type: operator, operands }
@@ -44,25 +43,19 @@ export const parseReviewMemoSyntax = (text: string, newlineOperator: Operator | 
     while (lastContent >= start && /[.,\s]/.test(text[lastContent])) lastContent -= 1;
     for (let index = start; index < end; index += 1) {
       const character = text[index];
-      const override = character === ':' || character === ';' ? readReviewFieldOverride(text, index + 1, end) : undefined;
-      if (override) index = override.end - 1;
-      else if (character === '[') {
-        const close = bracketEnds.get(index);
-        const nextLine = text.indexOf('\n', index);
-        index = close ?? Math.min(end, nextLine < 0 ? end : nextLine) - 1;
-      } else if (character === ',') found.push({ index, operator: 'and' });
+      const quotedRole = quoted.get(index);
+      const override = !quotedRole && (character === ':' || character === ';' || character === '<') ? readReviewFieldOverride(text, index + 1, end) : undefined;
+      if (quotedRole) { if (quotedRole !== 'equal' && isNoteShorthandOn()) found.push({ index, operator: 'sequence' }); }
+      else if (override) index = override.end - 1;
+      else if (groups.skip.has(index)) index = Math.min(groups.skip.get(index)!, end - 1);
+      else if (character === ',') found.push({ index, operator: 'and' });
       else if (character === '-' && isReviewSequenceSeparator(text, index, start, end)) found.push({ index, operator: 'sequence' });
-      else if (character === '=') {
-        // An operator without an operand is not an empty alternative.
-        if (index <= firstContent || index >= lastContent) continue;
-        found.push({ index, operator: 'or' });
-      }
     }
     const readOperand = (from: number, to: number): ReviewMemoLogicalExpression | undefined => {
       while (from < to && /\s/.test(text[from])) from += 1;
       while (to > from && /\s/.test(text[to - 1])) to -= 1;
       if (from === to) return undefined;
-      if (text[from] === '[' && bracketEnds.get(from) === to - 1) {
+      if (bracketEnds.get(from) === to - 1) {
         const nested = parseExpression(from + 1, to - 1, true).expression;
         if (nested) return { type: 'group', startIndex: from, endIndex: to, expression: nested };
       }
@@ -107,30 +100,34 @@ export const parseReviewMemoSyntax = (text: string, newlineOperator: Operator | 
   let groupStart = 0;
   let spacedPeriods = inheritedOperator === 'or';
   const finishField = (end: number) => {
-    const override = text[fieldStart - 1] === ':' || text[fieldStart - 1] === ';' ? readReviewFieldOverride(text, fieldStart, end) : undefined;
+    const override = text[fieldStart - 1] === ':' || text[fieldStart - 1] === ';' || text[fieldStart - 1] === '<' ? readReviewFieldOverride(text, fieldStart, end) : undefined;
     const parsed = parseExpression(override?.end ?? fieldStart, end, spacedPeriods);
     operators.push(...parsed.operators);
     if (parsed.expression && parsed.expression.type !== 'text') logicalExpressions.push(parsed.expression);
   };
-  const lastIndex = text.trimEnd().length - 1;
+  const tail = openTailOf(text);
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index];
-    if (character === '[') {
-      const close = bracketEnds.get(index);
-      const nextLine = text.indexOf('\n', index);
-      index = close ?? (nextLine < 0 ? text.length : nextLine) - 1;
-    } else if (character === ':' || character === ';' || character === '/' || character === '\n') {
-      const override = character === ':' || character === ';' ? readReviewFieldOverride(text, index + 1) : undefined;
+    if (groups.skip.has(index)) {
+      index = groups.skip.get(index)!;
+    } else if (character === '/' && text[index - 1] === '/' && isReviewSlash(text, index)) {
+      // 두 번째 슬래시는 앞 슬래시와 한 쌍이라 구분 위치를 따로 만들지 않는다.
+      fieldStart = index + 1;
+      groupStart = index + 1;
+    } else if ((isRelationMark(character) && !quoted.has(index)) || isReviewSlash(text, index) || character === '\n') {
+      // 칸을 나누는 기호는 `:` `;` `<`뿐이다. `=`는 한 칸 안의 논리어(`-` `,`와 같은 무리)라 여기서 나누지 않는다.
+      const override = character === ':' || character === ';' || character === '<' ? readReviewFieldOverride(text, index + 1) : undefined;
       finishField(index);
       if (character === '/') relationSeparators.push(index);
       if (character === '\n' && inheritedOperator) operators.push({ index, operator: inheritedOperator });
-      if ((character === ':' || character === ';') && (index === lastIndex || (override && !text.slice(override.end).trim())) && text.slice(groupStart, index).trim()) {
-        childrenRelation = character === ':'
+      if (isRelationMark(character) && tail?.connector && tail.start === index && text.slice(groupStart, index).trim()) {
+        // 토글 제목 끝 연결어(`:` `;` `<`)는 아래 줄이 행 단위로 이어지는 "또는"이 기본이고, 맨 끝에 `,`를 더 붙이면(`A :,`) 각 행이 "그리고"다.
+        childrenRelation = tail.logic === ','
           ? { separatorIndex: index, operator: 'and', type: 'part' }
           : { separatorIndex: index, operator: 'or', type: 'alternative' };
       }
       fieldStart = index + 1;
-      spacedPeriods = character === ';' || inheritedOperator === 'or';
+      spacedPeriods = character === ';' || character === '<' || inheritedOperator === 'or';
       if (character === '/' || character === '\n') groupStart = index + 1;
       if (override) index = override.end - 1;
     }

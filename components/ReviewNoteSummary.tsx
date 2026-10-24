@@ -3,7 +3,7 @@ import { buildReviewQuestions } from '../utils/reviewQuestions';
 import type { NoteQuestion, AnswerSpan } from '../utils/reviewQuestions';
 
 export function getMaskedNoteSpans(questions: NoteQuestion[], maskedKeys: Set<string>): AnswerSpan[] {
-  const forward = questions.filter(question => question.direction === 'forward');
+  const forward = questions.filter(question => question.direction === 'forward' && !['blank', 'far'].includes(question.kind));
   const candidates = forward.filter(question => maskedKeys.has(question.key)).flatMap(question => question.answerSpans);
   // A piece of text that is also a question condition/prompt stays visible.
   const protectedSpans = forward.filter(question => question.kind !== 'remaining').flatMap(question => question.promptSpans);

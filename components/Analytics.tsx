@@ -1,8 +1,15 @@
-import React, { useMemo, useState } from 'react';
-import { Subject, StudyLog, TagDefinition } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ListOrder, Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../utils/math';
 import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/review';
 import { ReviewGrowthSettings } from './PageGrowth';
+import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
+import { SubjectPlanner } from './SubjectPlanner';
+import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
+import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
+import { buildReviewWeekCells, buildWeekPlan, mergeWeekCells, resolveSavedWeekdayPages, stepWeekdayPages, toggleStudyWeekday, WeekCell } from '../utils/weekPlan';
+import { getPageLabel, pagePositionLabel } from '../utils/pageLabel';
+import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatEstimatedDate, SubjectStage } from '../utils/completionEstimate';
 import {
   calculateFreshWeekdayPagePlan,
   calculateWeeklyRequiredPages,
@@ -12,6 +19,7 @@ import {
   getPlanningDayCount,
   getSubjectDayRemainingPages,
   getWeekdayPagePlan,
+  getWeekdayPageStep,
   getLogStudyDate,
   getActiveSubjectStage,
   getAllSubjectReviewIds,
@@ -24,6 +32,7 @@ import {
   parseStudyDate,
   WEEKDAYS
 } from '../utils/schedule';
+import { formatChapters, getSubjectChapters, parseChapterText } from '../utils/subjectChapters';
 
 interface Props {
   subjects: Subject[];
@@ -36,8 +45,11 @@ interface Props {
   onUpdateSubjects?: (updated: Subject[]) => void;
   onDeleteSubject?: (id: string) => void;
   onUpdateTags?: (tags: TagDefinition[]) => void;
+  onAddSubject?: (subject: Subject) => void;
   onDeleteFolder?: (folderId: string) => void;
   onOpenReview?: () => void;
+  /** 학습 실행의 "학습 설정 가기"로 열었을 때 먼저 보여줄 과목: 들어 있는 폴더를 펼치고 그 카드로 스크롤한다 */
+  focusSubjectId?: string;
 }
 
 const COLORS = [
@@ -49,143 +61,6 @@ const formatPageValue = (value: number) => (
   Number.isInteger(value) ? value.toString() : value.toFixed(1).replace(/\.0$/, '')
 );
 
-type SubjectStage = ReturnType<typeof getSubjectStages>[number];
-
-interface ProjectedStudyEvent {
-  date: Date;
-  pages: number;
-}
-
-interface StageScheduleEstimate {
-  completionDates: Map<string, Date>;
-  studyEvents: Map<string, ProjectedStudyEvent[]>;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-const formatEstimatedDate = (date?: Date | null) => {
-  if (!date || !Number.isFinite(date.getTime())) return '예측 어려움';
-  const target = new Date(date);
-  target.setHours(0, 0, 0, 0);
-  const today = parseStudyDate(getLocalDateKey());
-  const diffDays = Math.round((target.getTime() - today.getTime()) / DAY_MS);
-  if (diffDays <= 0) return '오늘';
-  if (diffDays === 1) return '내일';
-  const dateLabel = target.getFullYear() === today.getFullYear()
-    ? `${target.getMonth() + 1}/${target.getDate()}`
-    : `${String(target.getFullYear()).slice(2)}.${target.getMonth() + 1}.${target.getDate()}`;
-  return `${dateLabel} · ${diffDays}일 후`;
-};
-
-const estimateStageSchedule = (subject: Subject): StageScheduleEstimate => {
-  const completionDates = new Map<string, Date>();
-  const studyEvents = new Map<string, ProjectedStudyEvent[]>();
-  const stages = getSubjectStages(subject);
-  const totalRemainingPages = getSubjectRemainingPageCount(subject);
-  if (totalRemainingPages <= 0) return { completionDates, studyEvents };
-
-  const diffDays = getDiffDays(subject.targetDate);
-  let weekdayPlan = getWeekdayPagePlan(subject, totalRemainingPages, diffDays);
-  let weeklyCapacity = Object.values(weekdayPlan).reduce((sum, pages) => sum + pages, 0);
-
-  if (weeklyCapacity <= 0) {
-    weekdayPlan = calculateFreshWeekdayPagePlan(subject, totalRemainingPages, diffDays);
-    weeklyCapacity = Object.values(weekdayPlan).reduce((sum, pages) => sum + pages, 0);
-  }
-
-  if (weeklyCapacity <= 0) return { completionDates, studyEvents };
-
-  const remainingByStage = stages.map(stage => Math.max(0, stage.remainingPages));
-  let activeStageIndex = remainingByStage.findIndex(pages => pages > 0);
-  const cursor = parseStudyDate(getLocalDateKey());
-
-  for (let dayOffset = 0; dayOffset < 3650 && activeStageIndex >= 0; dayOffset += 1) {
-    const date = new Date(cursor);
-    date.setDate(cursor.getDate() + dayOffset);
-    let availablePages = Math.max(0, weekdayPlan[date.getDay()] || 0);
-
-    while (availablePages > 0 && activeStageIndex >= 0) {
-      const stage = stages[activeStageIndex];
-      const pages = Math.min(availablePages, remainingByStage[activeStageIndex]);
-      if (pages > 0) {
-        const events = studyEvents.get(stage.id) || [];
-        events.push({ date: new Date(date), pages });
-        studyEvents.set(stage.id, events);
-        remainingByStage[activeStageIndex] -= pages;
-        availablePages -= pages;
-      }
-
-      if (remainingByStage[activeStageIndex] <= 0) {
-        completionDates.set(stage.id, new Date(date));
-        activeStageIndex = remainingByStage.findIndex((pages, index) => index > activeStageIndex && pages > 0);
-      }
-    }
-  }
-
-  return { completionDates, studyEvents };
-};
-
-const estimateReviewSubjectCompletion = (
-  parentSubject: Subject,
-  stage: SubjectStage,
-  reviewSubject: Subject,
-  projectedStudyEvents: ProjectedStudyEvent[],
-  logs: StudyLog[]
-) => {
-  const remainingPages = getSubjectRemainingPageCount(reviewSubject);
-  if (remainingPages <= 0) return null;
-
-  const now = Date.now();
-  const latestSupportedDate = now + (10 * 365 * DAY_MS);
-  const events = logs
-    .filter(log => {
-      if (log.subjectId !== parentSubject.id || log.isCondensed || log.reviewEnabled === false) return false;
-      if ((log.subjectStageId || parentSubject.id) !== stage.id) return false;
-      const reviewSubjectIds = Array.isArray(log.reviewSubjectIdsSnapshot) && log.reviewSubjectIdsSnapshot.length > 0
-        ? log.reviewSubjectIdsSnapshot
-        : stage.reviewSubjectIds;
-      return reviewSubjectIds.includes(reviewSubject.id);
-    })
-    .flatMap(log => {
-      const pages = Math.max(0, log.pagesRead);
-      if (pages <= 0) return [];
-      const scheduledAt = log.nextReviewDate
-        ? new Date(log.nextReviewDate).getTime()
-        : new Date(log.timestamp).getTime() + INITIAL_REVIEW_DELAY_MS;
-      if (!Number.isFinite(scheduledAt)) return [];
-      return [{ at: scheduledAt, pages, step: Math.max(0, log.reviewStep || 0) }];
-    });
-
-  projectedStudyEvents.forEach(event => {
-    events.push({
-      at: event.date.getTime() + INITIAL_REVIEW_DELAY_MS,
-      pages: event.pages,
-      step: 0
-    });
-  });
-
-  if (events.length === 0) return null;
-
-  let completedPages = 0;
-  for (let count = 0; count < 5000 && events.length > 0; count += 1) {
-    events.sort((a, b) => a.at - b.at);
-    const event = events.shift();
-    if (!event) break;
-    const effectiveAt = Math.max(now, event.at);
-    if (effectiveAt > latestSupportedDate) return null;
-
-    completedPages += event.pages;
-    if (completedPages >= remainingPages) return new Date(effectiveAt);
-
-    const nextAt = event.at + getNextReviewIntervalMs(event.step);
-    if (Number.isFinite(nextAt) && nextAt <= latestSupportedDate) {
-      events.push({ ...event, at: nextAt, step: event.step + 1 });
-    }
-  }
-
-  return null;
-};
-
 export const Analytics: React.FC<Props> = ({ 
   subjects, 
   logs, 
@@ -193,16 +68,21 @@ export const Analytics: React.FC<Props> = ({
   activeWeekday,
   activeStudyDate,
   onActiveWeekdayChange,
+  focusSubjectId,
   onUpdateSubject, 
   onUpdateSubjects,
   onDeleteSubject,
   onUpdateTags,
+  onAddSubject,
   onDeleteFolder,
   onOpenReview
 }) => {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [expandedSubjectReviewIds, setExpandedSubjectReviewIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
+  // 맨 위 요약: 고른 단위(하루 · 일주일 · 전체)와, 하루 단위에서 고른 요일(없으면 하루 평균)
+  const [planUnit, setPlanUnit] = useState<PlanUnit>('day');
+  const [planWeekday, setPlanWeekday] = useState<number | null>(null);
   const [growthEditingSubjectId, setGrowthEditingSubjectId] = useState<string | null>(null);
   const [stageEditForm, setStageEditForm] = useState<{
     subjectId: string;
@@ -210,10 +90,34 @@ export const Analytics: React.FC<Props> = ({
     name: string;
     startPage: number;
     endPage: number;
+    /** 단원 범위 글(`1~10, 20~30`). 본 과목 단계에서만 쓰고 비우면 단원 없음 */
+    chapterText: string;
     reviewSubjectIds: string[];
     isNew: boolean;
   } | null>(null);
+  // 아직 ✓를 누르지 않은 새 후행과목: 화면을 떠나면(✓·× 없이) 지운다. 최신 과목 목록과 고칠 함수를 ref로 들고 있는다.
+  const pendingNewStageRef = useRef<{ subjectId: string; stageId: string } | null>(null);
+  const latestRef = useRef({ subjects, onUpdateSubject });
+  latestRef.current = { subjects, onUpdateSubject };
+  useEffect(() => () => {
+    const pending = pendingNewStageRef.current;
+    if (!pending) return;
+    const owner = latestRef.current.subjects.find(item => item.id === pending.subjectId);
+    if (!owner || !(owner.followUpSubjects || []).some(stage => stage.id === pending.stageId)) return;
+    latestRef.current.onUpdateSubject?.(withFreshPagePlan({ ...owner, followUpSubjects: (owner.followUpSubjects || []).filter(stage => stage.id !== pending.stageId) }));
+  }, []);
+  useEffect(() => { pendingNewStageRef.current = stageEditForm?.isNew ? { subjectId: stageEditForm.subjectId, stageId: stageEditForm.stageId } : null; }, [stageEditForm]);
+  // 저장된 후행과목 지우기: 한 번 누르면 "정말 삭제", 두 번째에 지운다(브라우저 확인 창은 쓰지 않는다)
+  const [confirmDeleteStageId, setConfirmDeleteStageId] = useState<string | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
+  // 항목 사이 띠: 어느 띠가 열려 있는지("폴더:자리"), 그리고 그 자리에 새 학습 계획을 쓰는 중인지
+  const [openGapKey, setOpenGapKey] = useState<string | null>(null);
+  const [gapPlan, setGapPlan] = useState<{ key: string; parentKey: string; index: number; siblings: SiblingRef[]; where: string } | null>(null);
+  const [speedOpenFolderIds, setSpeedOpenFolderIds] = useState<Set<string>>(new Set());
+  const [speedOpenSubjectIds, setSpeedOpenSubjectIds] = useState<Set<string>>(new Set());
+  /** 전체 과목 목록에서 이름 왼쪽 ›를 눌러 그 과목(현재 과목 하나 / 복습과목 하나)의 값만 펼친 줄들 */
+  const [valueOpenKeys, setValueOpenKeys] = useState<Set<string>>(new Set());
+  const toggleValueRow = (key: string) => setValueOpenKeys(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const weekdayIds = WEEKDAYS.map(day => day.id);
   const [folderEditForm, setFolderEditForm] = useState<{
     id: string;
@@ -228,7 +132,6 @@ export const Analytics: React.FC<Props> = ({
     targetDate: string;
     tagIds: string[];
     isRequired: boolean;
-    scheduledWeekdays: number[];
   } | null>(null);
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(getAllSubjectReviewIds))
@@ -272,6 +175,27 @@ export const Analytics: React.FC<Props> = ({
     setExpandedFolderIds(next);
   };
 
+  useEffect(() => {
+    if (!focusSubjectId) return undefined;
+    const target = subjects.find(subject => subject.id === focusSubjectId);
+    if (!target) return undefined;
+    const chain = new Set<string>();
+    (target.tagIds || []).forEach(tagId => {
+      let current: string | undefined = tagId;
+      while (current && !chain.has(current)) {
+        chain.add(current);
+        current = tagDefinitions.find(tag => tag.id === current)?.parentId;
+      }
+    });
+    if (chain.size > 0) setExpandedFolderIds(previous => new Set([...Array.from(previous), ...Array.from(chain)]));
+    const timer = window.setTimeout(() => {
+      const card = Array.from(document.querySelectorAll('[data-subject-id]')).find(node => node.getAttribute('data-subject-id') === focusSubjectId);
+      card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSubjectId]);
+
   const toggleSubjectReviewList = (id: string) => {
     const next = new Set(expandedSubjectReviewIds);
     if (next.has(id)) next.delete(id);
@@ -293,20 +217,6 @@ export const Analytics: React.FC<Props> = ({
         reviewSubjectIds: exists
           ? current.reviewSubjectIds.filter(id => id !== reviewSubjectId)
           : [...current.reviewSubjectIds, reviewSubjectId]
-      };
-    });
-  };
-
-  const toggleEditWeekday = (dayId: number) => {
-    setEditForm(prev => {
-      if (!prev) return prev;
-      const nextDays = prev.scheduledWeekdays.includes(dayId)
-        ? prev.scheduledWeekdays.filter(id => id !== dayId)
-        : [...prev.scheduledWeekdays, dayId];
-      if (nextDays.length === 0) return prev;
-      return {
-        ...prev,
-        scheduledWeekdays: orderWeekdays(nextDays)
       };
     });
   };
@@ -463,7 +373,7 @@ export const Analytics: React.FC<Props> = ({
         subLogs,
         remaining,
         recommendedDailyPages,
-        sub.initialAverageTimePerPage, sub.growthPageUnit
+        sub.initialAverageTimePerPage
       );
       const weeklyPages = weeklyLogs.reduce((sum, log) => sum + log.pagesRead, 0);
       const weeklyMinutes = weeklyLogs.reduce((sum, log) => sum + log.timeSpentMinutes, 0);
@@ -524,12 +434,17 @@ export const Analytics: React.FC<Props> = ({
       name: stage.name,
       targetDate: subject.targetDate,
       tagIds: subject.tagIds || [],
-      isRequired: subject.isRequired ?? false,
-      scheduledWeekdays: normalizeWeekdays(subject.scheduledWeekdays)
+      isRequired: subject.isRequired ?? false
     });
   };
 
   const openInlineStageEditor = (subject: Subject, stage: SubjectStage, isNew = false) => {
+    // 다른 단계를 열면, ✓ 없이 남은 새 후행과목은 지운다
+    if (stageEditForm?.isNew && stageEditForm.stageId !== stage.id) {
+      const owner = subjects.find(item => item.id === stageEditForm.subjectId);
+      if (owner) onUpdateSubject?.(withFreshPagePlan({ ...owner, followUpSubjects: (owner.followUpSubjects || []).filter(item => item.id !== stageEditForm.stageId) }));
+    }
+    setConfirmDeleteStageId(null);
     setEditingId(null);
     setEditForm(null);
     setFolderEditForm(null);
@@ -539,6 +454,7 @@ export const Analytics: React.FC<Props> = ({
       name: stage.name,
       startPage: stage.startPage,
       endPage: stage.endPage,
+      chapterText: stage.isFollowUp ? '' : formatChapters(getSubjectChapters(subject)),
       reviewSubjectIds: [...stage.reviewSubjectIds],
       isNew
     });
@@ -546,8 +462,12 @@ export const Analytics: React.FC<Props> = ({
 
   const saveInlineStageEditor = (subject: Subject) => {
     if (!stageEditForm || stageEditForm.subjectId !== subject.id) return;
-    const startPage = Math.max(1, Math.round(Number(stageEditForm.startPage) || 1));
-    const endPage = Math.max(startPage, Math.round(Number(stageEditForm.endPage) || startPage));
+    const chapterParse = stageEditForm.stageId === subject.id ? parseChapterText(stageEditForm.chapterText) : { chapters: [], error: null };
+    if (chapterParse.error) return;
+    const chapters = chapterParse.chapters;
+    // 단원을 정했으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다
+    const startPage = chapters.length > 0 ? chapters[0].startPage : Math.max(1, Math.round(Number(stageEditForm.startPage) || 1));
+    const endPage = chapters.length > 0 ? chapters[chapters.length - 1].endPage : Math.max(startPage, Math.round(Number(stageEditForm.endPage) || startPage));
     const reviewSubjectIds = Array.from(new Set(stageEditForm.reviewSubjectIds.filter(id => (
       id !== subject.id && subjects.some(candidate => (
         candidate.id === id && getAllSubjectReviewIds(candidate).length === 0
@@ -561,6 +481,7 @@ export const Analytics: React.FC<Props> = ({
           startPage,
           totalPages: endPage,
           completedPages: Math.min(endPage, Math.max(startPage - 1, subject.completedPages)),
+          chapters: chapters.length > 0 ? chapters : undefined,
           reviewSubjectIds
         }
       : {
@@ -593,7 +514,18 @@ export const Analytics: React.FC<Props> = ({
     setStageEditForm(null);
   };
 
+  const deleteFollowUpStage = (subject: Subject, stageId: string) => {
+    onUpdateSubject?.(withFreshPagePlan({ ...subject, followUpSubjects: (subject.followUpSubjects || []).filter(stage => stage.id !== stageId) }));
+    setConfirmDeleteStageId(null);
+    setStageEditForm(null);
+  };
+
   const addFollowUpSubject = (subject: Subject) => {
+    // ✓를 누르지 않은 새 후행과목이 이미 열려 있으면 하나 더 만들지 않는다(두 번 누르면 두 개가 생기던 일)
+    if (stageEditForm?.isNew && stageEditForm.subjectId === subject.id) {
+      setExpandedSubjectReviewIds(current => new Set(current).add(subject.id));
+      return;
+    }
     const newStage = {
       id: Math.random().toString(36).slice(2, 11),
       name: '새 후행과목',
@@ -613,6 +545,9 @@ export const Analytics: React.FC<Props> = ({
       ...newStage,
       currentPage: 1,
       remainingPages: 100,
+      pageCount: 100,
+      completedCount: 0,
+      chapter: null,
       isFollowUp: true,
       status: 'upcoming'
     }, true);
@@ -653,6 +588,105 @@ export const Analytics: React.FC<Props> = ({
     [allSubjectStats, followUpSourceOwnerMap, reviewSubjectIdSet]
   );
 
+  // 과목마다: 속도 증가(25분마다의 속도) · 가속도 · 완료 예측, 그리고 요일별 필요 시간
+  const speedBySubject = useMemo(() => {
+    const next: Record<string, ReturnType<typeof analyzeSubjectSpeed>> = {};
+    visibleSubjectStats.forEach(stat => {
+      const original = subjects.find(subject => subject.id === stat.id);
+      if (original) next[stat.id] = analyzeSubjectSpeed(subjects, logs, original);
+    });
+    return next;
+  }, [subjects, logs, visibleSubjectStats]);
+  // 요일별 필요 시간(과목 카드 · 위쪽 요약이 쓰는 값). 과목 카드는 "현재 단계 + 그 복습과목들"을 한 덩어리로 보므로
+  // combined(= weekNeedBySubject)에는 복습과목의 요일별 필요량이 더해져 있다. 복습과목은 현재 단계의 것뿐 아니라,
+  // 이미 끝난 단계(이전 과목)에서 아직 남은 것도 포함한다(현재 과목이 끝나도 그 복습은 계속된다).
+  // own은 현재 단계만, reviews는 복습과목마다 따로(전체 과목 목록의 › 로 보는 값).
+  const weekNeed = useMemo(() => {
+    const plan = buildWeekPlan(subjects, logs);
+    const todayWeekday = new Date().getDay();
+    const toDays = (cells: Record<number, WeekCell>) => WEEKDAYS.map(day => ({ weekday: day.id, label: day.label, minutes: cells[day.id]?.minutes || 0, pages: cells[day.id]?.pages || 0, isToday: day.id === todayWeekday }));
+    const combined: Record<string, ReturnType<typeof toDays>> = {};
+    const own: Record<string, ReturnType<typeof toDays>> = {};
+    const reviews: Record<string, ReturnType<typeof toDays>> = {};
+    /** 시간을 나눠 가지는 몫(카드의 "현재 과목 · 복습과목" 비율 막대): 현재 단계, 그리고 복습과목들 */
+    const parts: Record<string, Array<{ id: string; name: string; kind: 'current' | 'review'; days: ReturnType<typeof toDays> }>> = {};
+    const collectReviewCells = (subject: Subject, parentEfficiency: number) => {
+      const working: Array<{ id: string; name: string; cells: Record<number, WeekCell> }> = [];
+      const stages = getSubjectStages(subject);
+      const currentStage = stages.find(stage => stage.status === 'current');
+      // 같은 복습과목이 여러 단계(본 과목 · 후행과목)에 붙어 있어도 그 복습은 하나다: 한 번만 센다
+      const counted = new Set<string>();
+      stages.forEach(stage => stage.reviewSubjectIds.forEach(reviewId => {
+        const review = subjects.find(item => item.id === reviewId);
+        if (!review || counted.has(reviewId)) return;
+        const finished = stage.status === 'completed';
+        if (finished && getSubjectRemainingPageCount(review) <= 0) return;
+        const cells = buildReviewWeekCells(logs, subject, review, parentEfficiency);
+        reviews[`${subject.id}:${reviewId}`] = toDays(cells);
+        if (finished || stage.id === currentStage?.id) { counted.add(reviewId); working.push({ id: reviewId, name: review.name, cells }); }
+      }));
+      return working;
+    };
+    const reviewParts = (working: ReturnType<typeof collectReviewCells>) => working.map(item => ({ id: item.id, name: item.name, kind: 'review' as const, days: toDays(item.cells) }));
+    plan.rows.forEach(row => {
+      const working = collectReviewCells(row.subject, row.efficiency);
+      const currentStage = getSubjectStages(row.subject).find(stage => stage.status === 'current');
+      own[row.subject.id] = toDays(row.cells);
+      combined[row.subject.id] = toDays(mergeWeekCells([row.cells, ...working.map(item => item.cells)]));
+      parts[row.subject.id] = [{ id: currentStage?.id || row.subject.id, name: currentStage?.name || row.subject.name, kind: 'current', days: own[row.subject.id] }, ...reviewParts(working)];
+    });
+    // 모든 단계를 끝낸 과목: 남은 복습만 계속 한다
+    const planned = new Set(plan.rows.map(row => row.subject.id));
+    subjects.filter(subject => !planned.has(subject.id)).forEach(subject => {
+      const working = collectReviewCells(subject, subject.initialAverageTimePerPage || 0);
+      if (working.length === 0) return;
+      own[subject.id] = toDays(mergeWeekCells([]));
+      combined[subject.id] = toDays(mergeWeekCells(working.map(item => item.cells)));
+      parts[subject.id] = reviewParts(working);
+    });
+    return { combined, own, reviews, parts };
+  }, [subjects, logs]);
+  const weekNeedBySubject = weekNeed.combined;
+  const averageOf = (days: Array<{ minutes: number; pages: number }>, key: 'minutes' | 'pages') => days.reduce((sum, day) => sum + day[key], 0) / 7;
+  // 하루 평균 시간 = 한 주(요일별 필요 시간)를 7로 나눈 값. 오늘이 무슨 요일이어도 같아서 비율이 흔들리지 않는다.
+  const dailyAverageMinutes = (subjectId: string) => averageOf(weekNeedBySubject[subjectId] || [], 'minutes');
+  const emptyWeek = WEEKDAYS.map(day => ({ weekday: day.id, label: day.label, minutes: 0, pages: 0, isToday: false }));
+
+  /** 전체 과목 목록에서 › 로 펼치는 "그 과목 하나만의 값": 요일별 필요 시간 · 하루 평균 · 전체 효율 · 속도 증가율 · 가속도 · 그래프 (과목 카드와 같은 모양) */
+  const renderValueBlock = (key: string, pageLabel: string, days: Array<{ weekday: number; label: string; minutes: number; pages: number; isToday: boolean }>, unit: SpeedUnit | undefined, fallbackEfficiency: number, basicReview?: { subjectName: string; unit: SpeedUnit }) => {
+    const efficiency = unit?.efficiency ?? (fallbackEfficiency > 0 ? fallbackEfficiency : null);
+    const reviewEfficiency = basicReview?.unit.efficiency ?? null;
+    return (
+      <div data-testid="row-values" data-row-key={key} className="mt-3 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+        <div className={`grid gap-2 ${basicReview ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
+          <StatBox label="하루 평균 시간" value={formatTime(averageOf(days, 'minutes'))} unit="" color="text-indigo-600" />
+          <StatBox label="하루 평균 페이지" value={formatPageValue(Math.round(averageOf(days, 'pages') * 10) / 10)} unit={pageLabel} color="text-amber-500" />
+          <StatBox label={basicReview ? '해당 과목 전체 효율' : '전체 효율'} value={efficiency ? efficiency.toFixed(1) : '-'} unit={efficiency ? `m/${pagePositionLabel(pageLabel)}` : ''} color="text-emerald-500" />
+          {basicReview && (
+            <div data-testid="basic-review-efficiency" className="contents">
+              <StatBox label="기본복습 전체 효율" value={reviewEfficiency ? reviewEfficiency.toFixed(1) : '-'} unit={reviewEfficiency ? `m/${pagePositionLabel(pageLabel)}` : ''} color="text-rose-500" />
+            </div>
+          )}
+        </div>
+        {unit && <SpeedFacts series={unit.series} label={pageLabel} />}
+        {unit && basicReview ? (
+          <div data-testid="own-basic-speed" className="flex flex-col gap-2">
+            <FolderSpeedChart
+              title="속도 증가 합계 · 해당 과목 + 기본복습"
+              subjectLabel="해당 과목과 기본복습"
+              label={pageLabel}
+              total={buildGroupSpeed({ id: `${key}-total`, name: '해당 과목 + 기본복습', isFolder: false }, [unit.series, basicReview.unit.series])}
+              items={[
+                { ...buildGroupSpeed({ id: `${key}-own`, name: basicReview.subjectName, isFolder: false }, [unit.series]), colorIndex: 0 },
+                { ...buildGroupSpeed({ id: `${key}-basic`, name: '기본복습', isFolder: false }, [basicReview.unit.series]), colorIndex: 1 }
+              ]}
+            />
+          </div>
+        ) : unit && <SpeedGainChart series={unit.series} label={pageLabel} />}
+      </div>
+    );
+  };
+
   const subjectMatchesWeekdayView = (_subject?: unknown) => true;
 
   const getDisplayRecommendedPages = (subject: { recommendedDailyPages: number }) => subject.recommendedDailyPages;
@@ -664,7 +698,7 @@ export const Analytics: React.FC<Props> = ({
   const getReviewMinutesPerPage = (reviewSubjectId: string) => {
     const parentSubjectId = reviewSubjectOwnerMap.get(reviewSubjectId);
     return parentSubjectId
-      ? calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId, subjects.find(subject => subject.id === reviewSubjectId)?.growthPageUnit)
+      ? calculateSubjectReviewAverageTimePerPage(logs, parentSubjectId, reviewSubjectId)
       : 0;
   };
 
@@ -694,6 +728,7 @@ export const Analytics: React.FC<Props> = ({
 
     return {
       count,
+      subjectIds: uniqueSubjs.map(subject => subject.id),
       totalPages: uniqueSubjs.reduce((acc, cur) => acc + getSubjectTotalPageCount(cur), 0),
       completedPages: uniqueSubjs.reduce((acc, cur) => acc + getSubjectCompletedPageCount(cur), 0),
       avgEff: count > 0 ? uniqueSubjs.reduce((acc, cur) => acc + cur.stats.averageTimePerPage, 0) / count : 0,
@@ -718,6 +753,128 @@ export const Analytics: React.FC<Props> = ({
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
+  const getSubjectDisplayName = (subject: Subject) => {
+    const stages = getSubjectStages(subject);
+    return (stages.find(stage => stage.status === 'current') || stages[stages.length - 1])?.name || subject.name;
+  };
+
+  // 위쪽 요약에서 고른 단위(하루 · 일주일 · 전체, 하루에서는 요일)는 맨 위 요약과 그 아래 폴더 · 과목 카드에 모두 적용된다.
+  //  - 하루: 요일별 필요 시간을 7로 나눈 하루 평균(요일을 고르면 그 요일의 시간)
+  //  - 일주일: 요일별 필요 시간의 합
+  //  - 전체: 지금 속도와 가속도로 예측한 남은 전체 시간(현재 과목 + 후행과목 + 복습과목)
+  const summaryWeekday = planUnit === 'day' ? planWeekday : null;
+  const unitWords = describePlanUnit(planUnit, WEEKDAYS.find(day => day.id === summaryWeekday)?.label);
+  const subjectShareMinutes = (subjectId: string, weekday: number | null) => (
+    weekday === null ? dailyAverageMinutes(subjectId) : (weekNeedBySubject[subjectId] || []).find(day => day.weekday === weekday)?.minutes || 0
+  );
+  const unitMinutes = (subjectId: string, unit: PlanUnit, weekday: number | null) => {
+    if (unit === 'all') return speedBySubject[subjectId]?.totalMinutes || 0;
+    if (unit === 'week') return (weekNeedBySubject[subjectId] || []).reduce((sum, day) => sum + day.minutes, 0);
+    return subjectShareMinutes(subjectId, weekday);
+  };
+  /** 과목 하나의 요일별 칸(분 · 페이지)에서 고른 단위의 값. 전체는 예측에서 따로 받는다 */
+  const unitDaysValue = (days: Array<{ weekday: number; minutes: number; pages: number }>, key: 'minutes' | 'pages') => (
+    planUnit === 'week' ? days.reduce((sum, day) => sum + day[key], 0)
+      : summaryWeekday !== null ? days.find(day => day.weekday === summaryWeekday)?.[key] || 0
+        : days.reduce((sum, day) => sum + day[key], 0) / 7
+  );
+  /** 과목 하나의 속도 증가율(고른 단위). 속도를 아직 못 쟀으면 null */
+  const unitGrowthOfSubject = (subjectId: string) => {
+    const series = speedBySubject[subjectId]?.series;
+    return series ? unitGrowthOf(series, planUnit, summaryWeekday) : null;
+  };
+  /** 같은 단위로 본 과목 하나의 공부량 증가(분/P) */
+  const unitAmountOfSubject = (subjectId: string) => {
+    const series = speedBySubject[subjectId]?.series;
+    return series ? unitAmountGrowthOf(series, planUnit, summaryWeekday) : null;
+  };
+
+  // 폴더 안의 폴더·과목이 고른 단위의 시간에서 차지하는 몫. 순서는 화면에 나오는 순서와 같다(항목 순서는 단위와 상관없어 색이 안 바뀐다).
+  const getChildShareItems = (folderId: string, unit: PlanUnit = 'day', weekday: number | null = null) => orderSiblings([
+    ...tagDefinitions.filter(tag => tag.parentId === folderId).map(tag => ({
+      listOrder: tag.listOrder, id: tag.id, name: tag.name, minutes: getRecursiveData(tag.id).subjectIds.reduce((sum, id) => sum + unitMinutes(id, unit, weekday), 0), isFolder: true
+    })),
+    ...visibleSubjectStats.filter(stat => stat.tagIds?.includes(folderId)).map(stat => ({
+      listOrder: stat.listOrder, id: stat.id, name: getSubjectDisplayName(stat), minutes: unitMinutes(stat.id, unit, weekday), isFolder: false
+    }))
+  ], folderId);
+
+  // 폴더 안의 폴더·과목(바로 아래 것만)마다 페이지 위치에 따른 속도 증가 선 하나. 색은 시간 비율 막대와 같은 순서다.
+  // 목록에 나오는 속도 증가율(latestGrowth)은 고른 단위의 값이다: 안에 든 과목들의 단위당 증가율을 더한 것.
+  const getChildSpeedGroups = (folderId: string) => getChildShareItems(folderId).map((item, colorIndex) => {
+    const memberIds = (item.isFolder ? getRecursiveData(item.id).subjectIds : [item.id]).filter(id => speedBySubject[id]);
+    const growths = memberIds.map(unitGrowthOfSubject).filter((value): value is number => value !== null);
+    return {
+      ...buildGroupSpeed({ id: item.id, name: item.name, isFolder: !!item.isFolder }, memberIds.map(id => speedBySubject[id].series)),
+      latestGrowth: growths.length > 0 ? growths.reduce((sum, value) => sum + value, 0) : null,
+      latestAmountGrowth: sumOf(memberIds.map(unitAmountOfSubject)),
+      colorIndex
+    };
+  });
+
+  // 맨 위 요약: 고른 단위의 시간 / 속도 증가율 / 맨 위 폴더·과목의 몫
+  const topShareItems = orderSiblings([
+    ...tagDefinitions.filter(tag => tag.parentId === undefined).map(tag => ({
+      listOrder: tag.listOrder, id: tag.id, name: tag.name, isFolder: true,
+      minutes: getRecursiveData(tag.id).subjectIds.reduce((sum, id) => sum + unitMinutes(id, planUnit, summaryWeekday), 0)
+    })),
+    ...visibleSubjectStats.filter(stat => !stat.tagIds || stat.tagIds.length === 0).map(stat => ({
+      listOrder: stat.listOrder, id: stat.id, name: getSubjectDisplayName(stat), isFolder: false, minutes: unitMinutes(stat.id, planUnit, summaryWeekday)
+    }))
+  ], 'root');
+  const summaryDays = WEEKDAYS.map(day => ({
+    weekday: day.id, label: day.label, isToday: day.id === new Date().getDay(),
+    minutes: visibleSubjectStats.reduce((sum, stat) => sum + subjectShareMinutes(stat.id, day.id), 0)
+  }));
+  const summaryMinutes = visibleSubjectStats.reduce((sum, stat) => sum + unitMinutes(stat.id, planUnit, summaryWeekday), 0);
+  const summaryGrowth = summarizeUnitGrowth(
+    visibleSubjectStats.map(stat => speedBySubject[stat.id]?.series).filter((series): series is NonNullable<typeof series> => Boolean(series)),
+    planUnit, summaryWeekday
+  );
+  const summaryAmount = summarizeUnitAmount(
+    visibleSubjectStats.map(stat => speedBySubject[stat.id]?.series).filter((series): series is NonNullable<typeof series> => Boolean(series)),
+    planUnit, summaryWeekday
+  );
+
+  const applySiblingOrder = (ordered: Array<SiblingRef & { listOrder: ListOrder }>, extraTags: TagDefinition[] = []) => {
+    const orderOf = new Map(ordered.map(item => [item.id, item.listOrder]));
+    onUpdateTags?.([
+      ...tagDefinitions.map(tag => (orderOf.has(tag.id) ? { ...tag, listOrder: orderOf.get(tag.id) } : tag)),
+      ...extraTags.map(tag => ({ ...tag, listOrder: orderOf.get(tag.id) }))
+    ]);
+    const siblingSubjects = subjects
+      .filter(subject => ordered.some(item => item.kind === 'subject' && item.id === subject.id))
+      .map(subject => ({ ...subject, listOrder: orderOf.get(subject.id) }));
+    if (siblingSubjects.length > 0) {
+      if (onUpdateSubjects) onUpdateSubjects(siblingSubjects);
+      else siblingSubjects.forEach(subject => onUpdateSubject?.(subject));
+    }
+  };
+
+  // 두 항목 사이에 새 분석 그룹(폴더)을 만든다
+  const addFolderAt = (parentKey: string, siblings: SiblingRef[], index: number) => {
+    const newId = Math.random().toString(36).substr(2, 9);
+    const newFolder: TagDefinition = {
+      id: newId, name: '새 폴더', color: COLORS[tagDefinitions.length % COLORS.length], isVisible: true,
+      parentId: parentKey === 'root' ? undefined : parentKey
+    };
+    applySiblingOrder(insertSiblingOrder(siblings, index, parentKey, { kind: 'folder', id: newId }), [newFolder]);
+    setOpenGapKey(null);
+    setEditingId(newId);
+    setFolderEditForm({ id: newId, name: newFolder.name, scheduledWeekdays: weekdayIds });
+  };
+
+  // 두 항목 사이에 새 학습 계획을 만든다(그 자리의 폼에서 등록하면 들어간다)
+  const addPlanAt = (subject: Subject) => {
+    if (!gapPlan) { onAddSubject?.(subject); return; }
+    const ordered = insertSiblingOrder(gapPlan.siblings, gapPlan.index, gapPlan.parentKey, { kind: 'subject', id: subject.id });
+    const own = ordered.find(item => item.id === subject.id)!;
+    onAddSubject?.({ ...subject, tagIds: gapPlan.parentKey === 'root' ? subject.tagIds : [gapPlan.parentKey], listOrder: own.listOrder });
+    applySiblingOrder(ordered.filter(item => item.id !== subject.id));
+    setGapPlan(null);
+    setOpenGapKey(null);
+  };
+
   const RenderTree = ({ parentId, depth = 0 }: { parentId?: string, depth?: number }) => {
     const folders = tagDefinitions
       .filter(f => f.parentId === parentId);
@@ -726,9 +883,8 @@ export const Analytics: React.FC<Props> = ({
       && (parentId ? s.tagIds?.includes(parentId) : (!s.tagIds || s.tagIds.length === 0))
     );
 
-    return (
-      <div className={`space-y-4 ${depth > 0 ? 'ml-3 md:ml-6 pl-3 border-l-2 border-slate-200' : ''}`}>
-        {folders.map(folder => {
+    const parentKey = parentId || 'root';
+    const folderEntries = folders.map(folder => {
           const stats = getRecursiveData(folder.id);
           const isExpanded = expandedFolderIds.has(folder.id);
           const isMoving = movingItemId === folder.id;
@@ -738,12 +894,12 @@ export const Analytics: React.FC<Props> = ({
             ? folderEditForm
             : { id: folder.id, name: folder.name, scheduledWeekdays: folderWeekdays };
 
-          return (
+          return { kind: 'folder' as const, id: folder.id, name: folder.name, listOrder: folder.listOrder, node: (
             <div key={folder.id} className="relative group/folder">
               <div className={`flex flex-col gap-4 p-4 md:p-5 rounded-2xl transition-all border shadow-sm ${isExpanded ? 'bg-indigo-950 border-indigo-800 text-white' : 'bg-white border-slate-200 hover:border-indigo-400'}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <button onClick={() => toggleFolder(folder.id)} className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                    <button onClick={() => toggleFolder(folder.id)} className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
                       <span className={`text-sm transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
                     </button>
                     <span className="text-2xl">📂</span>
@@ -767,7 +923,7 @@ export const Analytics: React.FC<Props> = ({
                               e.stopPropagation();
                               saveFolderEdit(folder);
                             }}
-                            className={`rounded-lg px-3 py-2 text-[10px] font-black transition-all ${
+                            className={`rounded-lg px-3 py-2 text-xs font-black transition-all ${
                               isExpanded ? 'bg-white text-indigo-700' : 'bg-slate-900 text-white'
                             }`}
                           >
@@ -777,12 +933,12 @@ export const Analytics: React.FC<Props> = ({
                       ) : (
                         <h4 onClick={() => toggleFolder(folder.id)} className="truncate text-xl font-black cursor-pointer hover:underline">{folder.name}</h4>
                       )}
-                      <p className={`text-[10px] font-black uppercase mt-1 tracking-widest ${isExpanded ? 'text-indigo-300' : 'text-slate-400'}`}>{stats.count}개 과목</p>
+                      <p className={`text-sm font-bold mt-1 ${isExpanded ? 'text-indigo-300' : 'text-slate-500'}`}>{stats.count}개 과목</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 relative z-30">
-                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMovingItemId(isMoving ? null : folder.id); }} onMouseDown={e => e.stopPropagation()} className={`w-9 h-9 flex items-center justify-center rounded-xl transition-all cursor-pointer ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-300 hover:text-indigo-600'}`}>🔄</button>
-                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); startEditingFolder(folder); }} onMouseDown={e => e.stopPropagation()} className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer">✎</button>
+                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMovingItemId(isMoving ? null : folder.id); }} onMouseDown={e => e.stopPropagation()} className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all cursor-pointer ${isMoving ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:text-indigo-600'}`}>🔄</button>
+                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); startEditingFolder(folder); }} onMouseDown={e => e.stopPropagation()} className="w-11 h-11 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:text-emerald-600 transition-all cursor-pointer">✎</button>
                     <button 
                         onClick={(e) => { 
                             e.preventDefault();
@@ -790,34 +946,71 @@ export const Analytics: React.FC<Props> = ({
                             if (onDeleteFolder) onDeleteFolder(folder.id);
                         }}
                         onMouseDown={e => e.stopPropagation()}
-                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                        className="w-11 h-11 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
                     >
                         ✕
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                   <StatBox label="평균 효율" value={stats.avgEff.toFixed(1)} unit="m/p" color="text-emerald-400" isDark={isExpanded} />
-                   <StatBox label="표준편차(σ)" value={stats.avgStd.toFixed(1)} unit="" color="text-blue-400" isDark={isExpanded} />
-                   <StatBox label="잔여(P)" value={stats.remaining.toString()} unit="P" color="text-amber-400" isDark={isExpanded} />
-                   <StatBox label="권장" value={stats.dailyPages.toString()} unit="P" color="text-slate-300" isDark={isExpanded} />
-                   <StatBox label="필요 시간" value={formatTime(stats.dailyTime)} unit="" color="text-indigo-300" isDark={isExpanded} large />
+                <div className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)] md:items-center">
+                   <StatBox label={unitWords.time} value={formatTime(stats.subjectIds.reduce((sum, id) => sum + unitMinutes(id, planUnit, summaryWeekday), 0))} unit="" color="text-indigo-300" isDark={isExpanded} large />
+                   <div className="flex min-w-0 flex-col gap-2">
+                     <p className={`text-xs xl:text-[13px] font-bold ${isExpanded ? 'text-indigo-300' : 'text-slate-500'}`}>{unitWords.share}</p>
+                     <ShareBar items={getChildShareItems(folder.id, planUnit, summaryWeekday)} dark={isExpanded} title={unitWords.share} emptyNote={unitWords.emptyShare} />
+                   </div>
                 </div>
 
-                <div className="space-y-2">
+                {(() => {
+                  const groups = getChildSpeedGroups(folder.id);
+                  const total = buildGroupSpeed({ id: folder.id, name: `${folder.name} 합계`, isFolder: true }, stats.subjectIds.filter(id => speedBySubject[id]).map(id => speedBySubject[id].series));
+                  const summary = summarizeFolderSpeed(groups.map(group => group.latestGrowth));
+                  const speedOpen = speedOpenFolderIds.has(folder.id);
+                  const label = isExpanded ? 'text-indigo-300' : 'text-slate-500';
+                  return (
+                    <div data-testid="folder-speed" className={`rounded-xl border ${isExpanded ? 'border-white/15 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                      <button type="button" aria-expanded={speedOpen} aria-label={`${folder.name} 속도 증가 그래프 ${speedOpen ? '접기' : '펼치기'}`}
+                        onClick={() => setSpeedOpenFolderIds(current => { const next = new Set(current); if (next.has(folder.id)) next.delete(folder.id); else next.add(folder.id); return next; })}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left">
+                        <div className="grid min-w-0 flex-1 grid-cols-2 gap-3">
+                          <div className="min-w-0">
+                            <p className={`truncate text-xs xl:text-[13px] font-bold ${label}`}>{`속도 증가율 합계 · ${unitWords.scope}`}</p>
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <p data-testid="folder-speed-total" className={`truncate font-mono text-2xl font-black leading-tight tabular-nums ${isExpanded ? 'text-white' : 'text-indigo-700'}`}>
+                                {summary.measured > 0 ? describeSpeedGrowth(summary.total) : '측정 필요'}
+                              </p>
+                              {summary.measured > 0 && <GrowthAmount value={sumOf(groups.map(group => group.latestAmountGrowth))} testId="folder-speed-amount" className={isExpanded ? 'text-indigo-200' : 'text-slate-600'} />}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <p className={`text-xs xl:text-[13px] font-bold ${label}`}>편차 · {summary.measured}개 항목</p>
+                            <p data-testid="folder-speed-spread" className={`truncate font-mono text-2xl font-black leading-tight tabular-nums ${isExpanded ? 'text-white' : 'text-slate-800'}`}>
+                              {summary.measured > 0 ? `±${summary.spread.toFixed(1)}P/h` : '-'}
+                            </p>
+                          </div>
+                        </div>
+                        <span aria-hidden="true" className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xl font-black transition-transform ${speedOpen ? 'rotate-90' : ''} ${isExpanded ? 'bg-indigo-500 text-white' : 'bg-indigo-600 text-white'}`}>›</span>
+                      </button>
+                      {speedOpen && (
+                        <div data-testid="folder-speed-detail" className={`flex flex-col gap-3 border-t px-4 pb-4 pt-3 ${isExpanded ? 'border-white/15' : 'border-slate-200'}`}>
+                          <FolderSpeedChart total={total} items={groups} dark={isExpanded} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div data-testid="folder-progress" className="space-y-2">
                    <div className="flex justify-between items-end">
-                      <p className={`text-[10px] font-black uppercase tracking-widest ${isExpanded ? 'text-indigo-300' : 'text-slate-400'}`}>전체 진행률 ({progressPercent}%)</p>
-                      <p className={`text-xs font-bold ${isExpanded ? 'text-white/40' : 'text-slate-300'}`}>{stats.completedPages} / {stats.totalPages} P</p>
+                      <p className={`text-sm font-bold ${isExpanded ? 'text-indigo-200' : 'text-slate-500'}`}>전체 진행률</p>
+                      <p className={`text-sm font-bold ${isExpanded ? 'text-white/60' : 'text-slate-400'}`}>{stats.completedPages} / {stats.totalPages} P</p>
                    </div>
-                   <div className={`w-full h-2 rounded-full overflow-hidden ${isExpanded ? 'bg-white/10' : 'bg-slate-100'}`}>
-                      <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-xl" style={{ width: `${progressPercent}%` }}></div>
-                   </div>
+                   <ProgressBar percent={progressPercent} dark={isExpanded} label={`${folder.name} 전체 진행률`} />
                 </div>
 
                 {isMoving && (
                   <div className="mt-2 bg-white/5 p-3 rounded-2xl border border-white/10 animate-fade-in relative z-30">
-                    <p className="text-[10px] font-black text-indigo-400 uppercase mb-2 px-1">📂 이동할 폴더</p>
+                    <p className="text-xs font-black text-indigo-400 uppercase mb-2 px-1">📂 이동할 폴더</p>
                     <div className="flex flex-wrap gap-2">
                        <button onClick={(e) => { e.stopPropagation(); onUpdateTags?.(tagDefinitions.map(t => t.id === folder.id ? {...t, parentId: undefined} : t)); setMovingItemId(null); }} className="px-4 py-2 bg-white text-slate-900 rounded-xl font-black text-xs shadow-sm hover:bg-indigo-600 hover:text-white transition-all">최상위</button>
                        {tagDefinitions.filter(t => t.id !== folder.id).map(t => (
@@ -829,10 +1022,10 @@ export const Analytics: React.FC<Props> = ({
               </div>
               {isExpanded && RenderTree({ parentId: folder.id, depth: depth + 1 })}
             </div>
-          );
-        })}
+          ) };
+        });
 
-        {subjs.map(sub => {
+    const subjectEntries = subjs.map(sub => {
           const isEditing = editingId === sub.id;
           const combinedTotalPages = getSubjectTotalPageCount(sub);
           const combinedCompletedPages = getSubjectCompletedPageCount(sub);
@@ -840,10 +1033,16 @@ export const Analytics: React.FC<Props> = ({
           const remainingStages = subjectStages.filter(stage => stage.status !== 'completed');
           const activeStage = getActiveSubjectStage(sub);
           const displayStage = activeStage || subjectStages[subjectStages.length - 1];
-          const activeStagePageCount = activeStage
+          // 단원이 있으면 진척도는 지금 단원 기준이다(단원을 끝내고 다음 단원으로 넘어가면 값이 바뀐다)
+          const activeChapter = activeStage?.chapter ?? null;
+          const activeStagePageCount = activeChapter
+            ? activeChapter.pageCount
+            : activeStage
             ? Math.max(0, activeStage.endPage - activeStage.startPage + 1)
             : combinedTotalPages;
-          const activeStageCompletedPages = activeStage
+          const activeStageCompletedPages = activeChapter
+            ? activeChapter.completedCount
+            : activeStage
             ? Math.min(
                 activeStagePageCount,
                 Math.max(0, activeStage.completedPage - activeStage.startPage + 1)
@@ -853,9 +1052,14 @@ export const Analytics: React.FC<Props> = ({
             ? Math.round((activeStageCompletedPages / activeStagePageCount) * 100)
             : 0;
           const isReviewListExpanded = expandedSubjectReviewIds.has(sub.id);
+          const speedOfSubject = speedBySubject[sub.id];
+          // 현재 풀고 있는 단계에 붙은 복습과목 이름들(카드 제목에 [+ ...]로 붙는다)
+          const titleReviewNames = (activeStage?.reviewSubjectIds || [])
+            .map(id => subjects.find(item => item.id === id)?.name)
+            .filter((name): name is string => Boolean(name));
           const stageSchedule = estimateStageSchedule(sub);
-          return (
-            <div key={sub.id} className="flex flex-col gap-3 p-4 bg-white border border-slate-200 rounded-2xl hover:border-indigo-300 transition-all group/subj relative overflow-hidden">
+          return { kind: 'subject' as const, id: sub.id, name: displayStage?.name || sub.name, listOrder: sub.listOrder, node: (
+            <div key={sub.id} data-subject-id={sub.id} className="flex flex-col gap-3 p-4 bg-white border border-slate-200 rounded-2xl hover:border-indigo-300 transition-all group/subj relative overflow-hidden">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-3 flex-grow">
                   {!isEditing && (
@@ -867,7 +1071,7 @@ export const Analytics: React.FC<Props> = ({
                         e.stopPropagation();
                         toggleSubjectReviewList(sub.id);
                       }}
-                      className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl transition-all ${
+                      className={`mt-0.5 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl transition-all ${
                         isReviewListExpanded
                           ? 'bg-indigo-600 text-white'
                           : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600'
@@ -876,7 +1080,7 @@ export const Analytics: React.FC<Props> = ({
                       <span className={`text-sm transition-transform ${isReviewListExpanded ? 'rotate-90' : ''}`}>▶</span>
                     </button>
                   )}
-                  <div className="w-9 h-9 bg-slate-50 rounded-xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all flex-shrink-0">
+                  <div className="w-11 h-11 bg-slate-50 rounded-xl flex items-center justify-center group-hover/subj:bg-indigo-600 group-hover/subj:text-white transition-all flex-shrink-0">
                     <span className="text-xl">📄</span>
                   </div>
                   <div className="w-full min-w-0">
@@ -890,8 +1094,13 @@ export const Analytics: React.FC<Props> = ({
                        />
                     ) : (
                        <div className="flex min-w-0 flex-wrap items-center gap-2">
-                         <h4 className="truncate text-lg md:text-xl font-black text-slate-900">{displayStage?.name || sub.name}</h4>
-                         <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black ${
+                         <h4 data-testid="subject-title" className={`min-w-0 text-lg md:text-xl font-black text-slate-900 ${titleReviewNames.length > 0 ? 'break-keep' : 'truncate'}`}>
+                           {displayStage?.name || sub.name}
+                           {titleReviewNames.length > 0 && (
+                             <span data-testid="subject-title-reviews" className="ml-2 text-base font-black text-rose-500">[+{titleReviewNames.join(', ')}]</span>
+                           )}
+                         </h4>
+                         <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-black ${
                            activeStage ? 'bg-indigo-100 text-indigo-600' : 'bg-emerald-100 text-emerald-600'
                          }`}>
                            {activeStage ? '현재 과목' : '전체 완료'}
@@ -916,7 +1125,7 @@ export const Analytics: React.FC<Props> = ({
                                  e.stopPropagation();
                                  setEditForm(prev => prev ? { ...prev, isRequired: true } : null);
                                }}
-                               className={`rounded-lg px-2.5 py-1 text-[10px] font-black transition-all ${
+                               className={`rounded-lg px-3 py-1 text-xs font-black transition-all ${
                                  editForm?.isRequired ? 'bg-rose-600 text-white' : 'text-slate-400'
                                }`}
                              >
@@ -929,7 +1138,7 @@ export const Analytics: React.FC<Props> = ({
                                  e.stopPropagation();
                                  setEditForm(prev => prev ? { ...prev, isRequired: false } : null);
                                }}
-                               className={`rounded-lg px-2.5 py-1 text-[10px] font-black transition-all ${
+                               className={`rounded-lg px-3 py-1 text-xs font-black transition-all ${
                                  !editForm?.isRequired ? 'bg-indigo-600 text-white' : 'text-slate-400'
                                }`}
                              >
@@ -941,13 +1150,13 @@ export const Analytics: React.FC<Props> = ({
                      ) : !isEditing ? (
                          <div className="flex flex-wrap items-center gap-2 mt-1.5">
                           {sub.isRequired && (
-                            <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
+                            <span className="text-xs font-black px-3 py-1 rounded-full bg-rose-100 text-rose-600">필수</span>
                           )}
-                          <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>D-{sub.diffDays > 0 ? sub.diffDays : '0'}</span>
+                          <span className={`text-xs font-black px-3 py-1 rounded-full ${sub.diffDays > 0 ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'}`}>{/* 마감 전 D-n · 마감일 D-day · 지난 마감 D+n(예전에는 지난 뒤에도 D-0) */}{sub.diffDays > 0 ? `D-${sub.diffDays}` : sub.diffDays === 0 ? 'D-day' : `D+${-sub.diffDays}`}</span>
                           {sub.carryoverPages > 0 && (
-                            <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-100 text-amber-600">이월 {sub.carryoverPages}P</span>
+                            <span className="text-xs font-black px-3 py-1 rounded-full bg-amber-100 text-amber-600">이월 {sub.carryoverPages}{getPageLabel(sub)}</span>
                           )}
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">실시간 학습 데이터</span>
+                          
                         </div>
                     ) : null}
                   </div>
@@ -973,17 +1182,17 @@ export const Analytics: React.FC<Props> = ({
                                 targetDate: editForm.targetDate,
                                 tagIds: editForm.tagIds,
                                 isRequired: editForm.isRequired,
-                                scheduledWeekdays: normalizeWeekdays(editForm.scheduledWeekdays),
-                                scheduledWeekdayWeights: undefined,
-                                scheduledWeekdayRemainderDay: undefined,
-                                scheduledWeekdayPages: undefined
                               };
-                              onUpdateSubject?.(withFreshPagePlan(updatedSubject));
+                              // 학습 요일 · 요일별 페이지는 수정 중에 한 주 필요 시간 밑에 나오는 칸에서 바로 고치므로 여기서는 그대로 둔다(마감일이 바뀌면 그 비율대로 페이지만 다시 나눈다)
+                              onUpdateSubject?.({
+                                ...updatedSubject,
+                                scheduledWeekdayPages: resolveSavedWeekdayPages(sub, updatedSubject, null)
+                              });
                             }
                             setEditingId(null);
                             setEditForm(null);
                         }} 
-                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all cursor-pointer active:scale-95"
+                        className="w-11 h-11 flex items-center justify-center rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all cursor-pointer active:scale-95"
                      >
                         ✓
                      </button>
@@ -999,7 +1208,7 @@ export const Analytics: React.FC<Props> = ({
                             addFollowUpSubject(sub);
                           }}
                           onMouseDown={e => e.stopPropagation()}
-                          className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 transition-all cursor-pointer"
+                          className="w-11 h-11 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 transition-all cursor-pointer"
                       >
                           ＋
                       </button>
@@ -1010,7 +1219,7 @@ export const Analytics: React.FC<Props> = ({
                              openSubjectSummaryEditor(sub, displayStage?.id);
                            }}
                           onMouseDown={e => e.stopPropagation()}
-                          className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:text-emerald-600 transition-all cursor-pointer"
+                          className="w-11 h-11 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:text-emerald-600 transition-all cursor-pointer"
                       >
                           ✎
                       </button>
@@ -1021,7 +1230,7 @@ export const Analytics: React.FC<Props> = ({
                             if (onDeleteSubject) onDeleteSubject(sub.id); 
                           }} 
                           onMouseDown={e => e.stopPropagation()}
-                          className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-50 text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                          className="w-11 h-11 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
                       >
                           ✕
                       </button>
@@ -1030,54 +1239,112 @@ export const Analytics: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-100 sm:grid-cols-4">
-                 <StatBox label="누적 시간" value={formatTime(sub.totalTimeSpent)} unit="" color="text-slate-900" />
-                 <StatBox label="하루 평균 시간" value={formatTime(getDisplayNeededMinutes(sub))} unit="" color="text-indigo-600" />
-                 <StatBox label="하루 평균 페이지" value={formatPageValue(getDisplayRecommendedPages(sub))} unit="P" color="text-amber-500" />
-                 <StatBox label="효율" value={sub.stats.averageTimePerPage > 0 ? sub.stats.averageTimePerPage.toFixed(1) : '-'} unit={sub.stats.averageTimePerPage > 0 ? 'm/p' : ''} color="text-emerald-500" />
+              <div data-testid="subject-need" className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                 {(() => {
+                   // 하루 평균 시간에서 현재 과목과 복습과목들이 각각 차지하는 비율(복습과목이 없으면 100%라 그리지 않는다)
+                   // 고른 단위(하루 평균 · 요일 · 일주일 · 전체 예상)의 시간으로 나눈다
+                   const parts = (weekNeed.parts[sub.id] || []).map(part => ({
+                     id: part.id, name: part.name,
+                     minutes: planUnit === 'all' ? speedOfSubject?.forecast.find(item => item.id === part.id)?.minutes || 0 : unitDaysValue(part.days, 'minutes')
+                   }));
+                   if (parts.length < 2) return null;
+                   return (
+                     <div data-testid="subject-share" className="flex flex-col gap-2">
+                       <p className="px-1 text-[13px] font-bold text-slate-500">{`현재 과목 · 복습과목 시간 비율 · ${unitWords.scope}`}</p>
+                       <ShareBar items={parts} title={`현재 과목과 복습과목 ${unitWords.share}`} emptyNote={unitWords.emptyShare || '공부할 요일이 정해진 과목이 없어 비율이 없어요'} />
+                     </div>
+                   );
+                 })()}
+                 <WeekdayNeedBar days={weekNeedBySubject[sub.id] || emptyWeek} scheduledDays={(sub.scheduledWeekdays ?? []).length} />
+                 {(() => {
+                   // 과목 카드의 "수정"을 눌렀을 때만: 학습 요일을 켜고 끄고, 요일별 페이지를 페이지 값 옆의 작은 ▲▼로 1쪽씩 고친다(누르면 바로 적용)
+                   const original = subjects.find(subject => subject.id === sub.id);
+                   if (!isEditing || !original || !onUpdateSubject) return null;
+                   return (
+                     <WeekdayPagesEditor
+                       days={WEEKDAYS} selected={normalizeWeekdays(original.scheduledWeekdays)}
+                       pages={getWeekdayPagePlan(original, getSubjectRemainingPageCount(original), getDiffDays(original.targetDate))}
+                       pageLabel={getPageLabel(sub)} step={getWeekdayPageStep(original)}
+                       onToggle={dayId => onUpdateSubject(toggleStudyWeekday(original, dayId))}
+                       onStep={(dayId, direction) => onUpdateSubject(stepWeekdayPages(original, dayId, direction, 1))}
+                     />
+                   );
+                 })()}
+                 <div className="grid grid-cols-3 gap-2 border-t border-slate-200 pt-2">
+                    <StatBox label={unitWords.time} value={formatTime(planUnit === 'all' ? speedOfSubject?.totalMinutes || 0 : unitDaysValue(weekNeedBySubject[sub.id] || emptyWeek, 'minutes'))} unit="" color="text-indigo-600" />
+                    <StatBox label={unitWords.pages} value={formatPageValue(Math.round((planUnit === 'all' ? (speedOfSubject?.forecast || []).reduce((sum, item) => sum + Math.max(0, item.remainingPages), 0) : unitDaysValue(weekNeedBySubject[sub.id] || emptyWeek, 'pages')) * 10) / 10)} unit={getPageLabel(sub)} color="text-amber-500" />
+                    {(() => {
+                      // 현재 단계와 복습과목들을 합친 최근 25분의 장당 타임어택 시간. 재 본 기록이 없으면 예전 값(처음 장당 시간)
+                      const efficiency = speedOfSubject?.efficiency ?? (sub.stats.averageTimePerPage > 0 ? sub.stats.averageTimePerPage : null);
+                      return <StatBox label="전체 효율" value={efficiency ? efficiency.toFixed(1) : '-'} unit={efficiency ? `m/${pagePositionLabel(getPageLabel(sub))}` : ''} color="text-emerald-500" />;
+                    })()}
+                 </div>
               </div>
 
-              <div className="space-y-1 px-1">
-                 <div className="flex justify-between items-end">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              {!isEditing && speedBySubject[sub.id] && (() => {
+                const speed = speedBySubject[sub.id];
+                const pageLabel = getPageLabel(sub);
+                const speedOpen = speedOpenSubjectIds.has(sub.id);
+                return (
+                  <div data-testid="subject-speed" className="rounded-2xl border border-slate-200 bg-slate-50">
+                    <button type="button" aria-expanded={speedOpen} aria-label={`${displayStage?.name || sub.name} 속도 그래프와 예측 ${speedOpen ? '접기' : '펼치기'}`}
+                      onClick={() => setSpeedOpenSubjectIds(current => { const next = new Set(current); if (next.has(sub.id)) next.delete(sub.id); else next.add(sub.id); return next; })}
+                      className="flex w-full items-stretch gap-2 p-3 text-left">
+                      <div className="min-w-0 flex-1"><SpeedFacts series={speed.series} label={pageLabel} growth={unitGrowthOfSubject(sub.id)} amount={unitAmountOfSubject(sub.id)} growthName={`속도 증가율 · ${unitWords.scope}`} /></div>
+                      <span aria-hidden="true" className={`flex w-10 shrink-0 items-center justify-center self-stretch rounded-xl bg-indigo-600 text-xl font-black text-white transition-transform`}>
+                        <span className={`transition-transform ${speedOpen ? 'rotate-90' : ''}`}>›</span>
+                      </span>
+                    </button>
+                    {speedOpen && (
+                      <div data-testid="subject-speed-detail" className="flex flex-col gap-4 border-t border-slate-200 p-3">
+                        <SpeedGainChart series={speed.series} label={pageLabel} />
+                        {(() => {
+                          // 폴더처럼 항목마다 따로: 현재 과목과, 지금 하고 있는 복습과목 하나하나의 속도 증가율(최근 값)
+                          const rows = (weekNeed.parts[sub.id] || []).map(part => ({
+                            id: part.id, name: part.name, kind: part.kind,
+                            growth: (() => { const series = (part.kind === 'current' ? speed.own : speed.reviews[part.id])?.series; return series ? unitGrowthOf(series, planUnit, summaryWeekday) : null; })(),
+                            amount: (() => { const series = (part.kind === 'current' ? speed.own : speed.reviews[part.id])?.series; return series ? unitAmountGrowthOf(series, planUnit, summaryWeekday) : null; })()
+                          }));
+                          if (rows.length === 0) return null;
+                          return (
+                            <ul data-testid="subject-growth-list" className="grid gap-1 sm:grid-cols-2">
+                              {rows.map(row => (
+                                <li key={row.id} data-testid="subject-growth-row" data-kind={row.kind} className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-[13px] font-bold text-slate-700">
+                                  <span className={`shrink-0 text-[11px] font-black ${row.kind === 'current' ? 'text-indigo-600' : 'text-rose-500'}`}>{row.kind === 'current' ? '현재' : '복습'}</span>
+                                  <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                                  <span className={`shrink-0 font-mono tabular-nums ${row.growth === null ? 'opacity-60' : ''}`}>{describeSpeedGrowth(row.growth, pageLabel)}</span>
+                                  <GrowthAmount value={row.amount} label={pageLabel} testId="subject-growth-amount" />
+                                </li>
+                              ))}
+                            </ul>
+                          );
+                        })()}
+                        <ForecastList items={speed.forecast} totalMinutes={speed.totalMinutes} label={pageLabel} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div data-testid="subject-progress" className="space-y-1.5 px-1">
+                 <div className="flex justify-between items-end gap-3">
+                    <p className="text-[13px] font-bold text-slate-500">
                       {activeStage
-                        ? `학습 진척도 · ${activeStage.name} (p.${activeStage.startPage}~${activeStage.endPage}) · ${progressPercent}%`
-                        : `학습 진척도 · 전체 완료 · ${progressPercent}%`}
+                        ? activeChapter
+                          ? `학습 진척도 · ${activeStage.name} 단원 ${activeChapter.number}/${activeChapter.total} (${pagePositionLabel(getPageLabel(sub))}.${activeChapter.startPage}~${activeChapter.endPage})`
+                          : `학습 진척도 · ${activeStage.name} (${pagePositionLabel(getPageLabel(sub))}.${activeStage.startPage}~${activeStage.endPage})`
+                        : '학습 진척도 · 전체 완료'}
                     </p>
-                    <p className="text-base font-black text-slate-900">{activeStageCompletedPages} / {activeStagePageCount} <span className="text-xs text-slate-400 font-bold ml-1">P</span></p>
+                    <p className="shrink-0 text-xl font-black text-slate-900">{activeStageCompletedPages} / {activeStagePageCount} <span className="text-sm text-slate-400 font-bold ml-0.5">{getPageLabel(sub)}</span></p>
                  </div>
-                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-500 transition-all duration-1000" style={{ width: `${progressPercent}%` }}></div>
-                 </div>
+                 <ProgressBar percent={progressPercent} label={`${displayStage?.name || sub.name} 학습 진척도`} />
               </div>
 
               {isEditing && (
                 <div className="mt-2 bg-slate-900 p-4 rounded-2xl border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
                   <div>
-                  <p className="mb-3 px-1 text-[10px] font-black uppercase text-slate-500">학습 요일</p>
-                    <div className="grid grid-cols-7 gap-1.5">
-                      {WEEKDAYS.map(day => {
-                        const selected = editForm?.scheduledWeekdays.includes(day.id) ?? false;
-                        return (
-                          <button
-                            key={day.id}
-                            type="button"
-                            onClick={e => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              toggleEditWeekday(day.id);
-                            }}
-                            className={`rounded-lg py-2 text-xs font-black transition-all ${
-                              selected ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-500'
-                            }`}
-                          >
-                            {day.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  <div className="mt-4 border-t border-slate-800 pt-4">
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-3 px-1">폴더 이동</p>
+                  <div>
+                    <p className="text-xs font-black text-slate-500 uppercase mb-3 px-1">폴더 이동</p>
                     <div className="flex flex-wrap gap-2">
                        <button
                          type="button"
@@ -1113,8 +1380,8 @@ export const Analytics: React.FC<Props> = ({
               {isReviewListExpanded && !isEditing && (
                 <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 md:ml-12">
                   <div className="flex items-center justify-between px-1">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">전체 과목</p>
-                    <span className="rounded-lg bg-white px-2.5 py-1 text-[10px] font-black text-slate-500">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500">전체 과목</p>
+                    <span className="rounded-lg bg-white px-3 py-1 text-xs font-black text-slate-500">
                       남은 순서 {remainingStages.length}개
                     </span>
                   </div>
@@ -1136,14 +1403,19 @@ export const Analytics: React.FC<Props> = ({
                     const canMoveDown = remainingOrderIndex >= 0
                       && remainingOrderIndex < remainingStages.length - 1
                       && (remainingOrderIndex > 0 || canReplaceCurrentStage);
-                    const stagePageCount = Math.max(0, stage.endPage - stage.startPage + 1);
-                    const stageCompletedPages = Math.min(
+                    // 단원이 있는 단계는 단원 사이 빈 페이지를 세지 않는다
+                    const stageHasChapters = !stage.isFollowUp && getSubjectChapters(sub).length > 0;
+                    const stagePageCount = stageHasChapters ? stage.pageCount : Math.max(0, stage.endPage - stage.startPage + 1);
+                    const stageCompletedPages = stageHasChapters ? stage.completedCount : Math.min(
                       stagePageCount,
                       Math.max(0, stage.completedPage - stage.startPage + 1)
                     );
                     const stageProgress = stagePageCount > 0
                       ? Math.round((stageCompletedPages / stagePageCount) * 100)
                       : 0;
+                    const editChapterParse = isInlineEditing && stageEditForm && !stage.isFollowUp
+                      ? parseChapterText(stageEditForm.chapterText) : null;
+                    const editHasChapters = Boolean(editChapterParse && editChapterParse.chapters.length > 0);
                     const linkedReviewSubjects = stage.reviewSubjectIds
                       .map(id => allSubjectStats.find(subject => subject.id === id))
                       .filter((subject): subject is typeof allSubjectStats[number] => Boolean(subject));
@@ -1153,6 +1425,10 @@ export const Analytics: React.FC<Props> = ({
                         ? '현재 과목'
                         : '후행과목';
                     const estimatedCompletionDate = stageSchedule.completionDates.get(stage.id);
+                    const stageForecast = speedOfSubject?.forecast.find(item => item.kind !== 'review' && item.id === stage.id);
+                    const stageBasisNote = stageForecast && stageForecast.remainingPages > 0 ? describeForecastBasis(stageForecast.basis) : null;
+                    const ownValueKey = `${sub.id}:stage:${stage.id}`;
+                    const ownValueOpen = valueOpenKeys.has(ownValueKey);
 
                     return (
                       <div
@@ -1172,6 +1448,14 @@ export const Analytics: React.FC<Props> = ({
                             }`}>
                               {stage.status === 'completed' ? '완료' : remainingOrderIndex + 1}
                             </span>
+                            {isCurrentStage && !isInlineEditing && (
+                              <button type="button" data-testid="row-values-toggle" aria-expanded={ownValueOpen}
+                                aria-label={`${stage.name} 현재 과목 값만 ${ownValueOpen ? '접기' : '보기'}`}
+                                onClick={event => { event.preventDefault(); event.stopPropagation(); toggleValueRow(ownValueKey); }}
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-base font-black text-white">
+                                <span className={`transition-transform ${ownValueOpen ? 'rotate-90' : ''}`}>›</span>
+                              </button>
+                            )}
                             <div className="min-w-0 flex-1">
                               {isInlineEditing && stageEditForm ? (
                                 <div className="space-y-3">
@@ -1186,7 +1470,7 @@ export const Analytics: React.FC<Props> = ({
                                       className="min-w-0 flex-1 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-base font-black text-slate-900 outline-none focus:border-indigo-500"
                                       autoFocus
                                     />
-                                    <span className={`rounded-full px-2 py-1 text-[9px] font-black ${
+                                    <span className={`rounded-full px-2 py-1 text-xs font-black ${
                                       isCurrentStage
                                         ? 'bg-indigo-100 text-indigo-600'
                                         : stage.status === 'completed'
@@ -1198,12 +1482,13 @@ export const Analytics: React.FC<Props> = ({
                                   </div>
                                   <div className="grid grid-cols-2 gap-2">
                                     <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                      <span className="block text-[9px] font-black text-slate-400">시작 페이지</span>
+                                      <span className="block text-xs font-black text-slate-400">시작 페이지</span>
                                       <input
                                         type="number"
                                         min="1"
                                         step="1"
-                                        value={stageEditForm.startPage}
+                                        value={editHasChapters ? editChapterParse!.chapters[0].startPage : stageEditForm.startPage}
+                                        disabled={editHasChapters}
                                         onClick={event => event.stopPropagation()}
                                         onChange={event => setStageEditForm(current => current ? {
                                           ...current,
@@ -1213,12 +1498,13 @@ export const Analytics: React.FC<Props> = ({
                                       />
                                     </label>
                                     <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                      <span className="block text-[9px] font-black text-slate-400">끝 페이지</span>
+                                      <span className="block text-xs font-black text-slate-400">끝 페이지</span>
                                       <input
                                         type="number"
                                         min={stageEditForm.startPage || 1}
                                         step="1"
-                                        value={stageEditForm.endPage}
+                                        value={editHasChapters ? editChapterParse!.chapters[editChapterParse!.chapters.length - 1].endPage : stageEditForm.endPage}
+                                        disabled={editHasChapters}
                                         onClick={event => event.stopPropagation()}
                                         onChange={event => setStageEditForm(current => current ? {
                                           ...current,
@@ -1228,9 +1514,26 @@ export const Analytics: React.FC<Props> = ({
                                       />
                                     </label>
                                   </div>
+                                  {editChapterParse && (
+                                    <label className="block rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                      <span className="block text-xs font-black text-slate-400">단원 범위</span>
+                                      <input
+                                        data-testid="stage-chapters-input"
+                                        value={stageEditForm.chapterText}
+                                        placeholder="1~10, 20~30"
+                                        onClick={event => event.stopPropagation()}
+                                        onChange={event => setStageEditForm(current => current ? {
+                                          ...current,
+                                          chapterText: event.target.value
+                                        } : current)}
+                                        className="mt-1 w-full bg-transparent text-base font-black text-slate-900 outline-none"
+                                      />
+                                      {editChapterParse.error && <span data-testid="stage-chapters-error" className="mt-1 block text-xs font-bold text-rose-600">{editChapterParse.error}</span>}
+                                    </label>
+                                  )}
                                   {stage.status !== 'completed' && (
                                     <div className="flex items-center gap-2">
-                                      <span className="mr-auto text-[10px] font-black text-slate-400">
+                                      <span className="mr-auto text-xs font-black text-slate-400">
                                         남은 순서 {remainingOrderIndex + 1}
                                       </span>
                                       <button
@@ -1266,7 +1569,7 @@ export const Analytics: React.FC<Props> = ({
                                 <>
                                   <div className="flex flex-wrap items-center gap-2">
                                     <h5 className="truncate text-base font-black text-slate-900">{stage.name}</h5>
-                                    <span className={`rounded-full px-2 py-1 text-[9px] font-black ${
+                                    <span className={`rounded-full px-2 py-1 text-xs font-black ${
                                       isCurrentStage
                                         ? 'bg-indigo-100 text-indigo-600'
                                         : stage.status === 'completed'
@@ -1276,13 +1579,14 @@ export const Analytics: React.FC<Props> = ({
                                       {statusLabel}
                                     </span>
                                     {stage.status !== 'completed' && (
-                                      <span className="rounded-full bg-indigo-50 px-2 py-1 text-[9px] font-black text-indigo-600">
-                                        완료 예상 {formatEstimatedDate(estimatedCompletionDate)}
+                                      <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs font-black text-indigo-600">
+                                        {stageForecast?.basis === 'none' ? '계획대로면' : '완료 예상'} {formatEstimatedDate(estimatedCompletionDate)}
                                       </span>
                                     )}
+                                    {stageBasisNote && <span data-testid="stage-basis" className="text-xs font-black text-amber-700">{stageBasisNote}</span>}
                                   </div>
                                   <p className="mt-1 text-xs font-bold text-slate-400">
-                                    p.{formatPageValue(stage.startPage)}~{formatPageValue(stage.endPage)} · {stageProgress}%
+                                    p.{formatPageValue(stage.startPage)}~{formatPageValue(stage.endPage)}{stageHasChapters ? ` · 단원 ${getSubjectChapters(sub).length}개` : ''} · {stageProgress}%
                                   </p>
                                 </>
                               )}
@@ -1315,6 +1619,24 @@ export const Analytics: React.FC<Props> = ({
                                 >
                                   ×
                                 </button>
+                                {/* 아직 시작하지 않은 후행과목(다른 과목을 합쳐 만든 것은 빼고)은 지울 수 있다. 공부한 기록이 없어 잃는 것이 없다. */}
+                                {stage.isFollowUp && stage.status === 'upcoming' && !stageEditForm?.isNew
+                                  && !(sub.followUpSubjects || []).find(item => item.id === stage.id)?.sourceSubjectId && (
+                                  <button
+                                    type="button"
+                                    data-testid="delete-follow-up"
+                                    aria-label={confirmDeleteStageId === stage.id ? `${stage.name} 정말 삭제` : `${stage.name} 삭제`}
+                                    onClick={event => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      if (confirmDeleteStageId === stage.id) deleteFollowUpStage(sub, stage.id);
+                                      else setConfirmDeleteStageId(stage.id);
+                                    }}
+                                    className={`flex h-8 items-center justify-center rounded-lg px-2 text-xs font-black ${confirmDeleteStageId === stage.id ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-600'}`}
+                                  >
+                                    {confirmDeleteStageId === stage.id ? '정말 삭제' : '삭제'}
+                                  </button>
+                                )}
                               </>
                             ) : (
                               <button
@@ -1342,28 +1664,50 @@ export const Analytics: React.FC<Props> = ({
                           </div>
                         )}
 
+                        {isCurrentStage && !isInlineEditing && ownValueOpen && renderValueBlock(
+                          ownValueKey, getPageLabel(sub), weekNeed.own[sub.id] || emptyWeek, speedOfSubject?.own, sub.stats.averageTimePerPage,
+                          speedOfSubject ? { subjectName: stage.name || sub.name, unit: speedOfSubject.basicReview } : undefined
+                        )}
+
                         {linkedReviewSubjects.length > 0 && !isInlineEditing && (
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
                             {linkedReviewSubjects.map(reviewSubject => {
                               const reviewActiveStage = getActiveSubjectStage(reviewSubject);
                               const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id);
+                              // 같은 복습과목을 붙인 단계가 여럿이면(본 과목 · 후행과목) 모두의 기록으로 한 완료일을 낸다
+                              const linkedStages = subjectStages.filter(item => item.reviewSubjectIds.includes(reviewSubject.id));
                               const reviewCompletionDate = estimateReviewSubjectCompletion(
                                 sub,
-                                stage,
+                                linkedStages.length ? linkedStages : stage,
                                 reviewSubject,
-                                stageSchedule.studyEvents.get(stage.id) || [],
+                                (linkedStages.length ? linkedStages : [stage]).flatMap(item => stageSchedule.studyEvents.get(item.id) || []),
                                 logs
                               );
+                              const reviewForecast = speedOfSubject?.forecast.find(item => item.kind === 'review' && item.id === reviewSubject.id);
+                              const reviewBasisNote = reviewForecast && getSubjectRemainingPageCount(reviewSubject) > 0 ? describeForecastBasis(reviewForecast.basis) : null;
+                              const reviewValueKey = `${sub.id}:${reviewSubject.id}`;
+                              const reviewValueOpen = valueOpenKeys.has(reviewValueKey);
                               return (
-                                <div key={reviewSubject.id} className="rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-2.5">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="min-w-0 truncate text-xs font-black text-slate-800">{reviewSubject.name}</p>
-                                    <div className="flex shrink-0 items-center gap-1.5">
-                                      <span className="text-[9px] font-black text-rose-500">복습과목</span>
-                                      <span className="rounded-full bg-white px-2 py-1 text-[9px] font-black text-rose-600">
+                                <div key={reviewSubject.id} className={`rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-2.5 ${reviewValueOpen ? 'sm:col-span-2' : ''}`}>
+                                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+                                    <div className="flex min-w-0 flex-1 basis-36 items-center gap-2">
+                                      <button type="button" data-testid="row-values-toggle" aria-expanded={reviewValueOpen}
+                                        aria-label={`${reviewSubject.name} 복습과목 값만 ${reviewValueOpen ? '접기' : '보기'}`}
+                                        onClick={event => { event.preventDefault(); event.stopPropagation(); toggleValueRow(reviewValueKey); }}
+                                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-base font-black text-white">
+                                        <span className={`transition-transform ${reviewValueOpen ? 'rotate-90' : ''}`}>›</span>
+                                      </button>
+                                      <div className="min-w-0">
+                                        <p className="truncate text-xs font-black text-slate-800">{reviewSubject.name}</p>
+                                        {reviewBasisNote && <p data-testid="review-basis" className="break-keep text-[11px] font-black text-amber-700">{reviewBasisNote}</p>}
+                                      </div>
+                                    </div>
+                                    <div data-testid="review-card-tools" className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                      <span className="text-xs font-black text-rose-500">복습과목</span>
+                                      <span className="rounded-full bg-white px-2 py-1 text-xs font-black text-rose-600">
                                         {getSubjectRemainingPageCount(reviewSubject) <= 0
                                           ? '완료'
-                                          : `완료 예상 ${formatEstimatedDate(reviewCompletionDate)}`}
+                                          : `${reviewForecast?.basis === 'none' ? '계획대로면' : '완료 예상'} ${formatEstimatedDate(reviewCompletionDate)}`}
                                       </span>
                                       <button type="button"
                                         aria-label={`${reviewSubject.name} 성장 표시 ${growthEditingSubjectId === reviewSubject.id ? '닫기' : '수정'}`}
@@ -1377,12 +1721,12 @@ export const Analytics: React.FC<Props> = ({
                                       </button>
                                     </div>
                                   </div>
-                                  <p className="mt-1 text-[10px] font-bold text-slate-400">
+                                  <p className="mt-1 text-xs font-bold text-slate-400">
                                     {reviewActiveStage
-                                      ? `p.${formatPageValue(reviewActiveStage.currentPage)}~${formatPageValue(reviewActiveStage.endPage)}`
+                                      ? `${pagePositionLabel(getPageLabel(reviewSubject))}.${formatPageValue(reviewActiveStage.currentPage)}~${formatPageValue(reviewActiveStage.endPage)}`
                                       : '완료'}
                                     {' · '}
-                                    {reviewMinutesPerPage > 0 ? `1P당 ${reviewMinutesPerPage.toFixed(1)}분` : '측정 필요'}
+                                    {reviewMinutesPerPage > 0 ? `1${getPageLabel(reviewSubject)}당 ${reviewMinutesPerPage.toFixed(1)}분` : '측정 필요'}
                                   </p>
                                   {growthEditingSubjectId === reviewSubject.id && <ReviewGrowthSettings
                                     value={reviewSubject.reviewGrowthDisplay === 'unit' ? 'unit' : 'review'}
@@ -1390,6 +1734,9 @@ export const Analytics: React.FC<Props> = ({
                                       const original = subjects.find(subject => subject.id === reviewSubject.id);
                                       if (original) onUpdateSubject?.({ ...original, reviewGrowthDisplay: value });
                                     }} />}
+                                  {reviewValueOpen && renderValueBlock(
+                                    reviewValueKey, getPageLabel(reviewSubject), weekNeed.reviews[reviewValueKey] || emptyWeek, speedOfSubject?.reviews[reviewSubject.id], reviewMinutesPerPage
+                                  )}
                                 </div>
                               );
                             })}
@@ -1398,7 +1745,7 @@ export const Analytics: React.FC<Props> = ({
 
                         {isInlineEditing && stageEditForm && (
                           <div className="mt-3 rounded-xl bg-slate-900 p-3">
-                            <p className="mb-2 text-[10px] font-black text-slate-500">복습과목</p>
+                            <p className="mb-2 text-xs font-black text-slate-500">복습과목</p>
                             <div className="max-h-40 overflow-y-auto">
                               <div className="flex flex-wrap gap-2">
                                 {subjects
@@ -1454,36 +1801,62 @@ export const Analytics: React.FC<Props> = ({
                 </div>
               )}
             </div>
-          );
-        })}
+          ) };
+        });
+
+    const entries = orderSiblings([...folderEntries, ...subjectEntries], parentKey);
+    const siblingRefs: SiblingRef[] = entries.map(entry => ({ kind: entry.kind, id: entry.id }));
+    // 띠는 항목 사이마다, 그리고 맨 앞과 맨 뒤에 있다(항목이 없으면 하나). before/after는 그 자리 앞뒤 항목의 이름.
+    const renderGap = (index: number) => {
+      const before = entries[index - 1]?.name;
+      const after = entries[index]?.name;
+      const gapKey = `${parentKey}:${index}`;
+      const where = before && after ? `${joinWithAnd(before, after)} 사이` : before ? `${before} 뒤` : after ? `${after} 앞` : '이 자리';
+      return (
+        <React.Fragment key={`gap-${index}`}>
+          <InsertGap open={openGapKey === gapKey} label={`${where}에 추가`} alwaysOpen={entries.length === 0 && parentKey === 'root'}
+            onToggle={() => { setOpenGapKey(current => current === gapKey ? null : gapKey); setGapPlan(null); }}
+            onAddFolder={() => addFolderAt(parentKey, siblingRefs, index)}
+            onAddPlan={() => setGapPlan({ key: gapKey, parentKey, index, siblings: siblingRefs, where })} />
+          {gapPlan?.key === gapKey && (
+            <div data-testid="gap-plan-form" className="my-2 rounded-3xl border-2 border-indigo-300 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-2 rounded-xl bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-900">
+                <span className="min-w-0 truncate">{gapPlan.where}에 추가돼요</span>
+                <button type="button" onClick={() => setGapPlan(null)} className="shrink-0 rounded-lg bg-white px-3 py-1 text-xs font-black text-indigo-700">닫기</button>
+              </div>
+              <SubjectPlanner onAddSubject={addPlanAt} />
+            </div>
+          )}
+        </React.Fragment>
+      );
+    };
+    return (
+      <div className={depth > 0 ? 'ml-3 md:ml-6 pl-3 pt-2 border-l-2 border-slate-200' : ''}>
+        {renderGap(0)}
+        {entries.map((entry, index) => (
+          <React.Fragment key={entry.id}>
+            {entry.node}
+            {renderGap(index + 1)}
+          </React.Fragment>
+        ))}
       </div>
     );
   };
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="rounded-xl border border-indigo-100 bg-white px-4 py-2 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">하루 평균 필요시간</p>
-          <p className="mt-0.5 text-3xl font-black leading-none text-indigo-600">{formatTime(weekdayTotalTime)}</p>
+      <div className="flex flex-col gap-3 md:flex-row md:items-stretch md:justify-between">
+        <div className="flex items-center gap-4 rounded-2xl border border-indigo-100 bg-white px-5 py-3.5 shadow-sm">
+          <p className="text-sm font-bold text-slate-500">하루 평균<br />필요시간</p>
+          <p className="text-4xl font-black leading-none text-indigo-600">{formatTime(weekdayTotalTime)}</p>
         </div>
-        <button 
-          onClick={() => {
-            const newId = Math.random().toString(36).substr(2, 9);
-            const newFolder = { id: newId, name: '새 폴더', color: COLORS[tagDefinitions.length % COLORS.length], isVisible: true };
-            onUpdateTags?.([...tagDefinitions, newFolder]);
-            setEditingId(newId);
-            setFolderEditForm({
-              id: newId,
-              name: newFolder.name,
-              scheduledWeekdays: weekdayIds
-            });
-          }}
-          className="bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-xs hover:bg-indigo-600 transition-all shadow-sm active:scale-95"
-        >
-          ＋ 새 분석 그룹 추가
-        </button>
       </div>
+
+      {visibleSubjectStats.length > 0 && (
+        <PlanUnitSummary unit={planUnit} onUnitChange={unit => { setPlanUnit(unit); setPlanWeekday(null); }} weekday={summaryWeekday} onWeekdayChange={setPlanWeekday}
+          growth={summaryGrowth} amount={summaryAmount} minutes={summaryMinutes} days={summaryDays} shareItems={topShareItems}
+          hasSchedule={subjects.some(subject => (subject.scheduledWeekdays ?? []).length > 0)} />
+      )}
 
       <div className="bg-slate-100/70 p-3 md:p-4 rounded-2xl border border-slate-200">
         {RenderTree({})}
@@ -1491,7 +1864,7 @@ export const Analytics: React.FC<Props> = ({
         {subjects.length === 0 && tagDefinitions.length === 0 && (
           <div className="py-32 text-center opacity-10 grayscale">
             <p className="text-6xl mb-4">🔍</p>
-            <p className="text-xl font-black uppercase tracking-widest">데이터 없음</p>
+            <p className="text-xl font-black uppercase tracking-wide">데이터 없음</p>
           </div>
         )}
       </div>
@@ -1500,10 +1873,10 @@ export const Analytics: React.FC<Props> = ({
 };
 
 const StatBox = ({ label, value, unit, color, isDark, highlight, large }: { label: string, value: string, unit: string, color: string, isDark?: boolean, highlight?: boolean, large?: boolean }) => (
-  <div className={`flex flex-col min-w-0 px-2.5 py-2.5 rounded-lg transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
-    <p className={`text-[8px] md:text-[9px] font-black uppercase mb-1 tracking-tight truncate ${isDark ? 'text-indigo-400' : 'text-slate-400'}`}>{label}</p>
-    <p className={`${large ? 'text-2xl md:text-3xl' : 'text-xl md:text-2xl'} font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
-      {value}<span className="text-[10px] md:text-xs font-bold ml-1 opacity-40">{unit}</span>
+  <div className={`flex flex-col min-w-0 px-3 py-3 rounded-lg transition-all ${highlight ? (isDark ? 'bg-white/10' : 'bg-white shadow-sm border border-slate-100 z-10') : 'opacity-90'}`}>
+    <p className={`text-xs xl:text-[13px] font-bold mb-1.5 truncate ${isDark ? 'text-indigo-300' : 'text-slate-500'}`}>{label}</p>
+    <p className={`${large ? 'text-2xl xl:text-4xl' : 'text-2xl xl:text-3xl'} font-black truncate leading-none ${isDark && !highlight ? 'text-white' : color}`}>
+      {value}<span className="text-xs xl:text-sm font-bold ml-1 opacity-50">{unit}</span>
     </p>
   </div>
 );

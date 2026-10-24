@@ -1,4 +1,5 @@
 import { FollowUpSubject, Subject, StudyLog } from '../types';
+import { chaptersPageCount, endPageForSolved, getCurrentChapter, getSubjectChapters, nextPageAfter, pageAtCount, pagesThrough } from './subjectChapters';
 
 export const WEEKDAYS = [
   { id: 1, label: '월' },
@@ -29,16 +30,20 @@ export const getSubjectStartPage = (subject: Subject) => (
   Math.max(1, Number(subject.startPage) || 1)
 );
 
-export const getSubjectBasePageCount = (subject: Subject) => (
-  Math.max(0, subject.totalPages - getSubjectStartPage(subject) + 1)
-);
+export const getSubjectBasePageCount = (subject: Subject) => {
+  // 단원이 있으면 단원 안 페이지만 센다(단원 사이는 공부하지 않는다)
+  const chapters = getSubjectChapters(subject);
+  return chapters.length > 0 ? chaptersPageCount(chapters) : Math.max(0, subject.totalPages - getSubjectStartPage(subject) + 1);
+};
 
-export const getSubjectBaseCompletedPageCount = (subject: Subject) => (
-  Math.min(
+export const getSubjectBaseCompletedPageCount = (subject: Subject) => {
+  const chapters = getSubjectChapters(subject);
+  if (chapters.length > 0) return Math.min(chaptersPageCount(chapters), pagesThrough(chapters, subject.completedPages));
+  return Math.min(
     getSubjectBasePageCount(subject),
     Math.max(0, subject.completedPages - getSubjectStartPage(subject) + 1)
-  )
-);
+  );
+};
 
 export const getSubjectTotalPageCount = (subject: Subject) => (
   getSubjectBasePageCount(subject)
@@ -67,9 +72,25 @@ export const getAllSubjectReviewIds = (subject: Subject) => Array.from(new Set([
   ...(subject.followUpSubjects || []).flatMap(stage => stage.reviewSubjectIds || [])
 ].filter(id => id && id !== subject.id)));
 
+/** 단계가 본 과목 단계일 때만 단원이 적용된다(이어 풀 과목 단계에는 단원이 없다) */
+export const getStageChapters = (subject: Subject, stage?: { isFollowUp: boolean } | null) => (
+  stage && !stage.isFollowUp ? getSubjectChapters(subject) : []);
+
+/** 시작 페이지에서 pages장을 풀 때의 끝 페이지. 단원이 있으면 단원 사이를 건너뛰어 센다 */
+export const getRecommendedEndPage = (subject: Subject, stage: { isFollowUp: boolean } | null | undefined, start: number, pages: number) => {
+  const chapters = getStageChapters(subject, stage);
+  return (chapters.length > 0 ? endPageForSolved(chapters, start, pages) : null) ?? start + pages - 1;
+};
+
 export const getSubjectStages = (subject: Subject) => {
   const startPage = getSubjectStartPage(subject);
   const baseCompletedPage = Math.max(startPage - 1, subject.completedPages);
+  const chapters = getSubjectChapters(subject);
+  const baseCurrentChapter = getCurrentChapter(chapters, baseCompletedPage);
+  const basePageCount = getSubjectBasePageCount(subject);
+  const baseCompletedCount = chapters.length > 0
+    ? Math.min(basePageCount, pagesThrough(chapters, baseCompletedPage))
+    : Math.min(basePageCount, Math.max(0, baseCompletedPage - startPage + 1));
   const stages = [
     {
       id: subject.id,
@@ -77,8 +98,16 @@ export const getSubjectStages = (subject: Subject) => {
       startPage,
       endPage: subject.totalPages,
       completedPage: baseCompletedPage,
-      currentPage: Math.min(subject.totalPages, baseCompletedPage + 1),
-      remainingPages: Math.max(0, subject.totalPages - baseCompletedPage),
+      // 단원이 있으면 다음에 풀 페이지는 단원 사이를 건너뛴 다음 단원 시작이다
+      currentPage: chapters.length > 0
+        ? nextPageAfter(chapters, baseCompletedPage) ?? subject.totalPages
+        : Math.min(subject.totalPages, baseCompletedPage + 1),
+      remainingPages: chapters.length > 0 ? Math.max(0, basePageCount - baseCompletedCount) : Math.max(0, subject.totalPages - baseCompletedPage),
+      /** 이 단계의 풀 페이지 수 · 푼 페이지 수(단원이 있으면 단원 안 페이지만) */
+      pageCount: basePageCount,
+      completedCount: baseCompletedCount,
+      /** 단원이 있을 때 지금 공부하는 단원(진척도의 기준). 없으면 null */
+      chapter: baseCurrentChapter,
       isFollowUp: false,
       reviewSubjectIds: getSubjectStageReviewSubjectIds(subject, subject.id)
     },
@@ -92,6 +121,9 @@ export const getSubjectStages = (subject: Subject) => {
         completedPage,
         currentPage: Math.min(followUp.endPage, completedPage + 1),
         remainingPages: Math.max(0, followUp.endPage - completedPage),
+        pageCount: getFollowUpPageCount(followUp),
+        completedCount: getFollowUpCompletedPageCount(followUp),
+        chapter: null as ReturnType<typeof getCurrentChapter>,
         isFollowUp: true,
         reviewSubjectIds: getSubjectStageReviewSubjectIds(subject, followUp.id)
       };
@@ -123,8 +155,9 @@ export const adjustSubjectProgress = (subject: Subject, pageDelta: number): Subj
     Math.max(0, getSubjectCompletedPageCount(subject) + pageDelta)
   );
   const baseCompletedPageCount = Math.min(basePageCount, nextCompleted);
+  const chapters = getSubjectChapters(subject);
   const baseCompletedPage = baseCompletedPageCount > 0
-    ? startPage + baseCompletedPageCount - 1
+    ? (chapters.length > 0 ? pageAtCount(chapters, baseCompletedPageCount) ?? startPage - 1 : startPage + baseCompletedPageCount - 1)
     : startPage - 1;
   let remainingCompleted = Math.max(0, nextCompleted - baseCompletedPageCount);
   const followUpSubjects = (subject.followUpSubjects || []).map(followUp => {
@@ -168,6 +201,8 @@ export const getLogStudyDate = (log: StudyLog) => {
 };
 
 export const getLogProgressPages = (log: StudyLog) => {
+  // 단원이 있는 과목의 기록은 단원 사이를 건너뛴 만큼 뺀 페이지 수를 따로 들고 있다
+  if (typeof log.progressPages === 'number' && Number.isFinite(log.progressPages) && log.progressPages >= 0) return log.progressPages;
   if (log.pageCountIsExplicit && log.startPage !== undefined && log.endPage !== undefined) {
     return Math.max(0, log.endPage - log.startPage + 1);
   }
@@ -175,7 +210,7 @@ export const getLogProgressPages = (log: StudyLog) => {
   return Math.max(0, log.pagesRead);
 };
 
-export const getDiffDays = (targetDate: string, from = new Date()) => {
+export const getDiffDays =(targetDate: string, from = new Date()) => {
   const today = new Date(from);
   today.setHours(0, 0, 0, 0);
   const target = new Date(targetDate);
@@ -253,15 +288,86 @@ export const distributePagesByWeekdayWeights = (
   return plan;
 };
 
+/** 요일별 페이지를 한 번에 늘리고 줄이는 크기 = 과목의 페이지 단위. "단위 없음"(0)이면 1. 정해 두지 않았으면 기본 10. */
+export const getWeekdayPageStep = (subject: Pick<Subject, 'growthPageUnit'>) => {
+  const unit = Number(subject.growthPageUnit);
+  if (unit === 0) return 1;
+  return Number.isFinite(unit) && unit >= 1 ? Math.round(unit) : 10;
+};
+
+/**
+ * 합계(total)를 요일들에 weights 비율대로 나눈다. 기존 페이지 비율과 최대한 같게, 페이지 하나씩 나누고
+ * (큰 소수 부분부터 1씩 더 받는다) 0은 그대로 0이다. 비율이 모두 0이면 같은 몫.
+ */
+export const distributePagesProportionally = (total: number, days: number[], weights: Record<string, number>) => {
+  const plan: Record<string, number> = {};
+  WEEKDAYS.forEach(day => { plan[day.id] = 0; });
+  const pages = Math.max(0, Math.round(total));
+  if (days.length === 0 || pages <= 0) return plan;
+  let shares = days.map(day => Math.max(0, Number(weights[day]) || 0));
+  if (shares.reduce((sum, value) => sum + value, 0) <= 0) shares = days.map(() => 1);
+  const weightSum = shares.reduce((sum, value) => sum + value, 0);
+  const exact = shares.map(value => (pages * value) / weightSum);
+  const given = exact.map(Math.floor);
+  let left = pages - given.reduce((sum, value) => sum + value, 0);
+  exact.map((value, index) => ({ index, rest: value - Math.floor(value) })).sort((a, b) => b.rest - a.rest || a.index - b.index)
+    .forEach(({ index }) => { if (left > 0 && shares[index] > 0) { given[index] += 1; left -= 1; } });
+  days.forEach((day, index) => { plan[day] = given[index]; });
+  return plan;
+};
+
+/** 지금 저장된 요일별 페이지에서 이번 계획의 비율 재료를 뽑는다: 학습 요일에 저장된 값, 새로 켠 요일은 다른 요일들의 평균. 쓸 값이 없으면 null. */
+const getReferenceWeights = (subject: Subject, days: number[]): Record<string, number> | null => {
+  const stored = subject.scheduledWeekdayPages || {};
+  const studyDays = normalizeWeekdays(subject.scheduledWeekdays);
+  const known = days.filter(day => studyDays.includes(day) && Number.isFinite(Number(stored[day])) && stored[day] !== undefined);
+  const values = known.map(day => Math.max(0, Number(stored[day])));
+  if (known.length === 0 || values.reduce((sum, value) => sum + value, 0) <= 0) return null;
+  const mean = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+  return days.reduce<Record<string, number>>((next, day) => {
+    next[day] = known.includes(day) ? Math.max(0, Number(stored[day])) : mean;
+    return next;
+  }, {});
+};
+
+/**
+ * 한 주 필요 페이지를 학습 요일에 나눈 계획. 전에 저장해 둔 요일별 페이지가 있으면 그 페이지 비율을 최대한 그대로 두고
+ * 다시 나누고, 없으면 같은 몫으로 나눈다.
+ */
+/**
+ * 한 주 계획을 마감까지 실제 날짜에 깔았을 때 남은 장수를 다 채우는지 확인하고, 모자라면 가장 적은 요일부터 1쪽씩 더한다.
+ * 한 주 장수를 하루 몫 × 7로 정하고 나머지를 한 요일(일요일 등)에 몰면, 마감이 주 중간이라 그 요일이 한 번밖에 안 오는 경우
+ * 계획대로 해도 마감에 끝나지 않았다(21:50 점검: 20쪽 · 12일 → 월~토 1쪽, 일 6쪽 = 마감까지 17쪽, 끝나는 날 ~11/8 > 마감 11/6).
+ */
+const coverDeadline = (plan: Record<string, number>, selectedDays: number[], remainingPages: number, diffDays: number, from: Date) => {
+  if (diffDays < 7) return plan;
+  const need = Math.max(0, Math.ceil(remainingPages));
+  const counts: Record<number, number> = {};
+  for (let offset = 0; offset <= diffDays; offset += 1) { const day = (from.getDay() + offset) % 7; counts[day] = (counts[day] || 0) + 1; }
+  const days = selectedDays.filter(day => counts[day] > 0);
+  if (!days.length) return plan;
+  const next = { ...plan };
+  const covered = () => days.reduce((sum, day) => sum + Math.max(0, next[day] || 0) * counts[day], 0);
+  for (let guard = 0; guard < 2000 && covered() < need; guard += 1) {
+    const pick = [...days].sort((a, b) => (next[a] || 0) - (next[b] || 0) || counts[b] - counts[a])[0];
+    next[pick] = (next[pick] || 0) + 1;
+  }
+  return next;
+};
+
 export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
   const selectedDays = getPlanningWeekdays(subject.scheduledWeekdays, diffDays, from);
   const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, diffDays);
-  return distributePagesByWeekdayWeights(weeklyRequiredPages, selectedDays);
+  const reference = getReferenceWeights(subject, selectedDays);
+  const plan = !reference ? distributePagesByWeekdayWeights(weeklyRequiredPages, selectedDays)
+    : distributePagesProportionally(weeklyRequiredPages, selectedDays, reference);
+  return coverDeadline(plan, selectedDays, remainingPages, diffDays, from);
 };
 
 export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
   const selectedDays = normalizeWeekdays(subject.scheduledWeekdays);
-  const weightPlan = calculateFreshWeekdayPagePlan(subject, remainingPages, diffDays, from);
+  // 마감이 일주일 안이면 저장된 요일별 페이지와 상관없이 남은 요일에 같은 몫으로 나눈다(전과 같다)
+  const weightPlan = calculateFreshWeekdayPagePlan(getPlanningDayCount(diffDays) < 7 ? { ...subject, scheduledWeekdayPages: undefined } : subject, remainingPages, diffDays, from);
   if (getPlanningDayCount(diffDays) < 7) return weightPlan;
   const storedPlan = subject.scheduledWeekdayPages || {};
   const hasStoredPlan = Object.keys(storedPlan).length > 0;
@@ -399,27 +505,37 @@ export const getPastCarryoverPages = (
   const startDateKey = getSubjectPlanStartDateKey(subject, logs, targetStudyDate);
   const targetDate = parseStudyDate(todayDateKey);
   const cursor = parseStudyDate(startDateKey);
-  let carryoverPages = 0;
+  const remainingPages = getSubjectRemainingPageCount(subject);
+  let shortfallPages = 0;
+  let surplusPages = 0;
   let guard = 0;
 
   while (cursor < targetDate && guard < 3650) {
     const cursorDateKey = getLocalDateKey(cursor);
     const cursorWeekday = cursor.getDay();
+    const scopedPages = logs
+      .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === cursorDateKey)
+      .reduce((sum, log) => sum + getLogProgressPages(log), 0);
 
     if (selectedWeekdays.includes(cursorWeekday)) {
-      carryoverPages += getSubjectDayRemainingPages(
+      const dayTarget = getSubjectDayTarget(
         subject,
-        logs,
+        remainingPages + scopedPages,
+        getDiffDays(subject.targetDate, new Date(cursor)),
         cursorWeekday,
-        cursorDateKey,
-        new Date(cursor),
-        false
-      ).remainingDayPages;
+        new Date(cursor)
+      );
+      shortfallPages += Math.min(remainingPages, Math.max(0, dayTarget - scopedPages));
+      surplusPages += Math.max(0, scopedPages - dayTarget);
+    } else {
+      // Pages done on a non-study weekday also pay back earlier shortfall.
+      surplusPages += scopedPages;
     }
 
     cursor.setDate(cursor.getDate() + 1);
     guard += 1;
   }
 
-  return carryoverPages;
+  // Extra pages studied on any earlier day reduce the shortfall carried to today.
+  return Math.max(0, shortfallPages - surplusPages);
 };

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Subject } from '../types';
-import { DEFAULT_GROWTH_PAGE_UNIT, normalizeGrowthUnit } from '../utils/pageGrowth';
+import { Subject, SubjectChapter } from '../types';
+import { DEFAULT_GROWTH_PAGE_UNIT, getGrowthUnitSize } from '../utils/pageGrowth';
+import { parseChapterText } from '../utils/subjectChapters';
+import { DEFAULT_PAGE_LABEL, MAX_PAGE_LABEL_LENGTH, normalizePageLabel, pageWord } from '../utils/pageLabel';
 import {
   calculateFreshWeekdayPagePlan,
   getDiffDays,
@@ -14,7 +16,13 @@ interface Props {
 }
 
 export const createNewStudyPlan = (name: string, startPage: number, endPage: number, targetDate: string,
-  isRequired: boolean, scheduledWeekdays: number[], growthPageUnit = DEFAULT_GROWTH_PAGE_UNIT): Subject => {
+  isRequired: boolean, scheduledWeekdays: number[], growthPageUnit = DEFAULT_GROWTH_PAGE_UNIT,
+  pageLabel = DEFAULT_PAGE_LABEL, chapters: SubjectChapter[] = []): Subject => {
+  // 단원을 미리 정했으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다
+  if (chapters.length > 0) {
+    startPage = chapters[0].startPage;
+    endPage = chapters[chapters.length - 1].endPage;
+  }
   const normalizedStartPage = Math.max(1, Math.round(Number(startPage) || 1));
   const now = new Date();
   return {
@@ -23,7 +31,10 @@ export const createNewStudyPlan = (name: string, startPage: number, endPage: num
     startPage: normalizedStartPage,
     totalPages: Math.max(normalizedStartPage, Math.round(Number(endPage) || normalizedStartPage)),
     completedPages: normalizedStartPage - 1, targetDate, isRequired, scheduledWeekdays,
-    growthPageUnit: normalizeGrowthUnit(growthPageUnit)
+    // 0은 '단위 없음': 효율이 초기화되지 않고 계속 이어진다.
+    growthPageUnit: getGrowthUnitSize(growthPageUnit),
+    pageLabel: normalizePageLabel(pageLabel),
+    ...(chapters.length > 0 ? { chapters: chapters.map(item => ({ ...item })) } : {})
   };
 };
 
@@ -34,6 +45,9 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [date, setDate] = useState('');
   const [isRequired, setIsRequired] = useState(false);
   const [growthPageUnit, setGrowthPageUnit] = useState(DEFAULT_GROWTH_PAGE_UNIT);
+  const [noPageUnit, setNoPageUnit] = useState(false);
+  const [pageLabel, setPageLabel] = useState(DEFAULT_PAGE_LABEL);
+  const [chapterText, setChapterText] = useState('');
   const [scheduledWeekdays, setScheduledWeekdays] = useState<number[]>(WEEKDAYS.map(day => day.id));
 
   const toggleWeekday = (weekday: number) => {
@@ -48,9 +62,13 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   };
 
 
+  const chapterParse = parseChapterText(chapterText);
+  const hasChapters = chapterParse.chapters.length > 0;
+
   const handleAdd = () => {
-    if (!name || !date) return;
-    const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays, growthPageUnit);
+    if (!name || !date || chapterParse.error) return;
+    const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays,
+      noPageUnit ? 0 : growthPageUnit, pageLabel, chapterParse.chapters);
 
     onAddSubject({
       ...nextSubject,
@@ -66,68 +84,106 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     setDate('');
     setIsRequired(false);
     setGrowthPageUnit(DEFAULT_GROWTH_PAGE_UNIT);
+    setNoPageUnit(false);
+    setPageLabel(DEFAULT_PAGE_LABEL);
+    setChapterText('');
     setScheduledWeekdays(WEEKDAYS.map(day => day.id));
   };
 
+  const word = pageWord(normalizePageLabel(pageLabel));
+  const labelClass = 'ml-1 text-[13px] font-bold text-slate-500';
+  const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-base font-bold outline-none transition-all focus:ring-4 focus:ring-indigo-500/10';
   return (
     <div className="animate-fade-in">
-      <h2 className="text-xl font-black text-slate-800 flex items-center gap-2 mb-8">
-        <span className="w-2 h-5 bg-indigo-600 rounded-full"></span>
+      <h2 className="mb-3 flex items-center gap-2 text-xl font-black text-slate-800 md:text-2xl">
+        <span className="h-6 w-2 rounded-full bg-indigo-600"></span>
         새 학습 계획 추가
       </h2>
-      
-      <div className="space-y-4 max-w-2xl mx-auto">
-        <div className="bg-slate-50 p-8 rounded-3xl border border-slate-100 space-y-6">
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">과목 명칭</label>
-            <input 
-              placeholder="예: 선형대수학, 토익 900"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all"
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">시작 페이지</label>
+
+      <div className="space-y-3">
+        <div className="space-y-3 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          {/* 입력칸은 가로로 나란히(넓은 화면 4칸, 좁으면 2칸) 놓아 세로로 길어지지 않게 한다 */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 md:grid-cols-4">
+            <div className="col-span-2 space-y-1">
+              <label htmlFor="new-plan-name" className={labelClass}>과목 명칭</label>
               <input
-                type="number"
-                min="1"
-                step="1"
-                value={startPage}
-                onChange={e => setStartPage(Number(e.target.value))}
-                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
+                id="new-plan-name"
+                placeholder="예: 선형대수학, 토익 900"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                className={fieldClass}
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">끝 페이지</label>
-              <input 
-                type="number"
-                step="1"
-                value={pages}
-                onChange={e => setPages(Number(e.target.value))}
-                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
-              />
+            <div className="col-span-2 space-y-1">
+              <label htmlFor="new-plan-date" className={labelClass}>목표 완료 날짜</label>
+              <input id="new-plan-date" type="date" value={date}
+                onChange={e => setDate(e.target.value)} className={fieldClass} />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">목표 완료 날짜</label>
-              <input 
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="w-full p-4 border border-slate-200 rounded-2xl bg-white font-bold outline-none focus:ring-4 focus:ring-indigo-500/10"
-              />
+              <label htmlFor="new-plan-start" className={labelClass}>시작 페이지</label>
+              <input id="new-plan-start" type="number" min="1" step="1" value={hasChapters ? chapterParse.chapters[0].startPage : startPage} disabled={hasChapters}
+                onChange={e => setStartPage(Number(e.target.value))} className={`${fieldClass} ${hasChapters ? 'opacity-40' : ''}`} />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="new-plan-end" className={labelClass}>끝 페이지</label>
+              <input id="new-plan-end" type="number" step="1" value={hasChapters ? chapterParse.chapters[chapterParse.chapters.length - 1].endPage : pages} disabled={hasChapters}
+                onChange={e => setPages(Number(e.target.value))} className={`${fieldClass} ${hasChapters ? 'opacity-40' : ''}`} />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <label htmlFor="new-plan-chapters" className={labelClass}>단원 범위</label>
+              <input id="new-plan-chapters" value={chapterText} placeholder="1~10, 20~30"
+                onChange={event => setChapterText(event.target.value)} className={fieldClass} />
+              {chapterParse.error && <p data-testid="new-plan-chapters-error" className="ml-1 text-[13px] font-bold text-rose-600">{chapterParse.error}</p>}
+            </div>
+            <div className="col-span-2 space-y-1 md:col-span-1">
+              <label htmlFor="new-plan-page-label" className={labelClass}>단위 이름</label>
+              <input id="new-plan-page-label" value={pageLabel} maxLength={MAX_PAGE_LABEL_LENGTH}
+                placeholder={DEFAULT_PAGE_LABEL} onChange={event => setPageLabel(event.target.value)} className={fieldClass} />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <label htmlFor="new-plan-page-unit" className={labelClass}>{word} 단위</label>
+              <div className="flex items-center gap-3">
+                <input id="new-plan-page-unit" type="number" min="1" step="1" value={growthPageUnit} disabled={noPageUnit}
+                  onChange={event => setGrowthPageUnit(Number(event.target.value))}
+                  className={`${fieldClass} ${noPageUnit ? 'opacity-40' : ''}`} />
+                <label htmlFor="new-plan-no-unit" className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-black text-slate-600">
+                  <input id="new-plan-no-unit" type="checkbox" checked={noPageUnit}
+                    onChange={event => setNoPageUnit(event.target.checked)} className="h-5 w-5 accent-indigo-600" />
+                  단위 없음
+                </label>
+              </div>
+            </div>
+            <div className="col-span-2 space-y-1 md:col-span-1">
+              <p className={labelClass}>중요도</p>
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => setIsRequired(true)}
+                  className={`rounded-lg py-2 text-base font-black transition-all ${
+                    isRequired
+                      ? 'bg-rose-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-400 hover:bg-rose-50 hover:text-rose-500'
+                  }`}
+                >
+                  필수
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRequired(false)}
+                  className={`rounded-lg py-2 text-base font-black transition-all ${
+                    !isRequired
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
+                  }`}
+                >
+                  미필수
+                </button>
+              </div>
             </div>
           </div>
           <div className="space-y-1">
-            <label htmlFor="new-plan-page-unit" className="ml-1 text-[10px] font-black text-slate-400">페이지 단위</label>
-            <input id="new-plan-page-unit" type="number" min="1" step="1" value={growthPageUnit}
-              onChange={event => setGrowthPageUnit(Number(event.target.value))}
-              className="w-full rounded-2xl border border-slate-200 bg-white p-4 font-bold outline-none focus:ring-4 focus:ring-indigo-500/10" />
-          </div>
-          <div className="space-y-2">
-            <label className="ml-1 text-[10px] font-black uppercase tracking-widest text-slate-400">학습 요일</label>
-            <div className="grid grid-cols-7 gap-1.5 rounded-2xl border border-slate-200 bg-white p-2">
+            <p className={labelClass}>학습 요일</p>
+            <div className="grid grid-cols-7 gap-1 rounded-xl border border-slate-200 bg-white p-1">
               {WEEKDAYS.map(day => {
                 const selected = scheduledWeekdays.includes(day.id);
                 return (
@@ -135,7 +191,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
                     key={day.id}
                     type="button"
                     onClick={() => toggleWeekday(day.id)}
-                    className={`rounded-xl py-3 text-sm font-black transition-all ${
+                    className={`rounded-lg py-2 text-base font-black transition-all ${
                       selected
                         ? 'bg-indigo-600 text-white shadow-sm'
                         : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
@@ -147,36 +203,9 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               })}
             </div>
           </div>
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">중요도</label>
-            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-2 border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setIsRequired(true)}
-                className={`rounded-xl py-3 text-sm font-black transition-all ${
-                  isRequired
-                    ? 'bg-rose-600 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-400 hover:bg-rose-50 hover:text-rose-500'
-                }`}
-              >
-                필수
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsRequired(false)}
-                className={`rounded-xl py-3 text-sm font-black transition-all ${
-                  !isRequired
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-400 hover:bg-indigo-50 hover:text-indigo-500'
-                }`}
-              >
-                미필수
-              </button>
-            </div>
-            <p className="px-1 text-[10px] font-bold text-slate-400">
-              학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.
-            </p>
-          </div>
+          <p className="px-1 text-[13px] font-bold text-slate-500">
+            학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.
+          </p>
           <label className="hidden">
             <div>
               <p className="font-black text-slate-700">복습 일정 사용</p>
@@ -190,14 +219,14 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
             />
           </label>
         </div>
-        <button 
+        <button
           onClick={handleAdd}
-          className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-sm hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all active:scale-[0.98]"
+          className="w-full rounded-2xl bg-indigo-600 py-3 text-base font-black text-white shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-[0.98]"
         >
           계획 등록
         </button>
       </div>
-      <p className="mt-8 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+      <p className="mt-3 text-center text-[13px] font-bold text-slate-400">
         * 등록된 계획은 실시간 데이터 분석을 통해 매일의 권장 학습량을 산출합니다.
       </p>
     </div>

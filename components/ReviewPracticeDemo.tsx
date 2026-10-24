@@ -9,16 +9,19 @@ import { calculateQuestionPerformance } from '../utils/reviewPractice';
 import { getLocalDateKey } from '../utils/schedule';
 
 const examples = [
-  { name: '세션 메모 분류 · 중첩', memo: 'a:b:c / x:[y:z]=[p:q]' },
-  { name: '순서 관계 · 학습 과정', memo: '학습 과정;읽기-정리-확인' },
-  { name: '깊은 논리 중첩 · 여러 조건', memo: '성립;[a=b],[c=[d,e]]' },
-  { name: '순서와 논리 중첩', memo: '학습 완료;[읽기-정리-확인],[문제=[예제-점검]]' },
-  { name: '다층 OR · AND', memo: '성립;[[a=b],[c=d]]=[e,[f=g]]' },
-  { name: '오답 순환 · 4문제', memo: '1;첫 번째 답 / 2;두 번째 답 / 3;세 번째 답 / 4;네 번째 답' },
-  { name: '중첩 관계', memo: 'a:[b:c]=[d:c]' },
-  { name: '일부 조건', memo: '성립:[a=b],[c=d]' },
+  { name: '세션 메모 분류 · 중첩', memo: 'a:b:c / x:(y:z):(p:q)' },
+  { name: '순서 관계 · 학습 과정', memo: '학습 과정:읽기-정리-확인' },
+  { name: '깊은 논리 중첩 · 여러 조건', memo: '성립:(a,b),(c,(d,e))' },
+  { name: '순서와 논리 중첩', memo: '학습 완료:(읽기-정리-확인),(문제,(예제-점검))' },
+  { name: '다층 AND', memo: '성립:((a,b),(c,d)),(e,(f,g))' },
+  { name: '오답 순환 · 4문제', memo: '1:첫 번째 답 / 2:두 번째 답 / 3:세 번째 답 / 4:네 번째 답' },
+  { name: '중첩 관계', memo: 'a:(b:c):(d:c)' },
+  { name: '일부 조건', memo: '성립:(a,b),(c,d)' },
   { name: '연속 관점', memo: 'a:b:c:d' },
-  { name: '상하위 토글', memo: ':::toggle 자동차:\n:::toggle 엔진:\n전기;모터\n가솔린;내연기관\n:::end\n타이어;접지\n:::end' },
+  { name: '거꾸로만 (<)', memo: '공차<이웃한 두 항의 차 / 합<더한 값' },
+  { name: '앞으로만 (;)', memo: '공차;이웃한 두 항의 차 / 합;더한 값' },
+  { name: '한 칸 안의 등호 (=)', memo: 'A:B=C:D / E=F:G' },
+  { name: '상하위 토글', memo: ':::toggle 자동차:\n:::toggle 엔진:\n전기:모터\n가솔린:내연기관\n:::end\n타이어:접지\n:::end' },
   { name: '기본 관계 · 역방향', memo: '엔진:동력을 만드는 장치' },
   { name: '노트 회상', memo: '자동차는 동력을 바퀴에 전달하여 움직인다.' }
 ];

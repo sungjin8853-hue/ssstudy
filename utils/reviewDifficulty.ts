@@ -15,8 +15,9 @@ export const calculateReviewQuestionDifficulty = (answers: AnswerSpan[], provide
 };
 
 export const compareReviewQuestionDifficulty = (
-  a: Partial<ReviewQuestionDifficulty> & { level?: number },
-  b: Partial<ReviewQuestionDifficulty> & { level?: number }
+  a: Partial<ReviewQuestionDifficulty> & { level?: number; blankStart?: number },
+  b: Partial<ReviewQuestionDifficulty> & { level?: number; blankStart?: number }
 ) => (a.difficulty ?? a.level ?? 1) - (b.difficulty ?? b.level ?? 1)
   || (a.recallUnits || 0) - (b.recallUnits || 0)
-  || (b.providedUnits || 0) - (a.providedUnits || 0);
+  || (b.providedUnits || 0) - (a.providedUnits || 0)
+  || (a.blankStart || 0) - (b.blankStart || 0);

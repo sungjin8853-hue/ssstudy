@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { StudyLog, Subject, ReviewMemoDocument } from '../types';
 import { ReviewMemoEditor } from './ReviewMemoEditor';
+import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 
 interface Props {
   logs: StudyLog[];
@@ -23,9 +24,10 @@ const getMemoBoxHeight = (text: string) => {
   return `${rows * 30 + 16}px`;
 };
 
-const formatPageRange = (log: StudyLog) => {
-  if (log.startPage && log.endPage) return `p.${log.startPage} ~ p.${log.endPage}`;
-  return `${log.pagesRead}P`;
+const formatPageRange = (log: StudyLog, label = DEFAULT_PAGE_LABEL) => {
+  const position = pagePositionLabel(label);
+  if (log.startPage && log.endPage) return `${position}.${log.startPage} ~ ${position}.${log.endPage}`;
+  return `${log.pagesRead}${label}`;
 };
 
 type ReviewPageRange = {
@@ -51,7 +53,7 @@ const getReviewPageRange = (log: StudyLog): ReviewPageRange | null => {
 
 const formatPageNumber = (value: number) => Number.isInteger(value) ? `${value}` : value.toFixed(1);
 
-const getMergedReviewRangeText = (logs: StudyLog[]) => {
+const getMergedReviewRangeText = (logs: StudyLog[], label = DEFAULT_PAGE_LABEL) => {
   const merged = logs
     .map(getReviewPageRange)
     .filter((range): range is ReviewPageRange => Boolean(range))
@@ -68,7 +70,7 @@ const getMergedReviewRangeText = (logs: StudyLog[]) => {
     }, []);
 
   if (merged.length === 0) {
-    return logs.map(formatPageRange).join(', ');
+    return logs.map(log => formatPageRange(log, label)).join(', ');
   }
 
   return merged
@@ -196,6 +198,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
   const [memoDrafts, setMemoDrafts] = useState<Record<string, string>>({});
   const [timer, setTimer] = useState(0);
 
+  const labelOf = (subjectId: string) => getPageLabel(subjects.find(subject => subject.id === subjectId));
   const dueReviewGroups = useMemo(() => buildReviewGroups(logs, subjects, true), [logs, subjects]);
   const upcomingReviewGroups = useMemo(() => buildReviewGroups(logs, subjects, false), [logs, subjects]);
   const dueReviewCount = dueReviewGroups.reduce((sum, group) => sum + group.logs.length, 0);
@@ -205,11 +208,11 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
     return activeReviewGroup.logs
       .map((log, index) => {
         const memo = (log.reviewMemo || '').trim();
-        const range = formatPageRange(log);
+        const range = formatPageRange(log, labelOf(activeReviewGroup.subjectId));
         return memo ? `${index + 1}. ${range}\n${memo}` : `${index + 1}. ${range}\n핵심어 메모 없음`;
       })
       .join('\n\n');
-  }, [activeReviewGroup]);
+  }, [activeReviewGroup, subjects]);
 
   const startReviewSession = (group: ReviewGroup) => {
     setMemoDrafts(prev => {
@@ -360,7 +363,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                     {activeReviewGroup.logs.length}개 병합
                   </span>
                   <span className="px-3 py-1 bg-white/10 rounded-xl text-xs font-bold text-indigo-200">
-                    {getMergedReviewRangeText(activeReviewGroup.logs)}
+                    {getMergedReviewRangeText(activeReviewGroup.logs, labelOf(activeReviewGroup.subjectId))}
                   </span>
                 </div>
               </div>
@@ -376,7 +379,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                   <div className="min-w-0 flex flex-1 items-center gap-2">
                     <span className="shrink-0 text-[10px] font-black text-indigo-300">복습 범위</span>
                     <span className="min-w-0 break-words text-sm font-black leading-tight text-white">
-                      {getMergedReviewRangeText(activeReviewGroup.logs)}
+                      {getMergedReviewRangeText(activeReviewGroup.logs, labelOf(activeReviewGroup.subjectId))}
                     </span>
                   </div>
                   <button
@@ -391,7 +394,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                 <div className="space-y-1.5">
                   {activeReviewGroup.logs.map(log => (
                     <div key={log.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-1.5">
-                      <p className="mb-0.5 text-[10px] font-black text-rose-400">{formatPageRange(log)}</p>
+                      <p className="mb-0.5 text-[10px] font-black text-rose-400">{formatPageRange(log, labelOf(activeReviewGroup.subjectId))}</p>
                       <ReviewMemoEditor
                         value={getMemoValue(log)}
                         document={log.reviewMemoDocument}
@@ -445,7 +448,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                   </div>
                   <h4 className="text-xl font-black text-slate-800">{group.subjectName}</h4>
                   <p className="mt-2 inline-flex max-w-full rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-black text-rose-600">
-                    {getMergedReviewRangeText(group.logs)}
+                    {getMergedReviewRangeText(group.logs, labelOf(group.subjectId))}
                   </p>
                 </div>
               </div>
@@ -496,7 +499,7 @@ export const ReviewManager: React.FC<Props> = ({ logs, subjects, onReviewAction,
                 </div>
 
                 <p className="z-10 mt-4 inline-flex max-w-full rounded-xl bg-indigo-50 px-3 py-1.5 text-sm font-black text-indigo-900">
-                  {getMergedReviewRangeText(group.logs)}
+                  {getMergedReviewRangeText(group.logs, labelOf(group.subjectId))}
                 </p>
                 <button
                   type="button"
