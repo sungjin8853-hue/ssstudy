@@ -76,6 +76,8 @@ interface Props {
   firstTryTotal: number;
   /** 복습이 끝난 뒤 보여 줄 정리노트 */
   completion: React.ReactNode;
+  /** 마칠 때 고르는 난도(기본 복습). 문제가 없는 기본 복습에도 보인다 */
+  feedback?: React.ReactNode;
   firstTryOk: number;
   firstTryBad: number;
   finishLabel: string;
@@ -222,6 +224,8 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
               {props.completion}
             </section>
           )}
+
+          {props.isComplete && props.feedback}
 
           <button type="button" onClick={props.onFinish} disabled={!props.canFinish}
             className="h-[60px] shrink-0 rounded-2xl bg-indigo-600 px-8 text-[17px] font-black text-white shadow-[0_4px_0_#3730A3] enabled:hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-600 disabled:shadow-none">

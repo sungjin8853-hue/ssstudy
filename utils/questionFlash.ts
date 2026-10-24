@@ -4,7 +4,7 @@
  * 키워드는 줄글과 같은 순서다: 문제가 놓인 자리 → 주어진 값 → 이어 주는 말(관계) → 맞힐 칸. 줄글을 만드는 규칙(proseOf)을 그대로 따라가고,
  * 문장 대신 조각으로 돌려준다. 맞힐 칸은 정답을 확인할 때 같은 자리에서 정답으로 바뀐다.
  */
-import { AFTER, count as stepWords, operatorOf, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel } from './questionProse';
+import { AFTER, count as stepWords, operatorOf, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
 import { blankMark } from './questionStatement';
 import type { CellKind, CellPiece } from './questionStatement';
 
@@ -39,8 +39,8 @@ const CELL_RELATION: Record<CellKind, FlashRelation> = {
 const modeOf = (operator: ReturnType<typeof operatorOf>) => (operator === 'and' ? '모두' : operator === 'sequence' ? '순서대로' : operator === 'or' ? '하나만' : null);
 
 /** 문제가 놓인 자리와 충족한 값을 조각으로. `placeOf`(줄글)와 같은 가름이다. */
-const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly string[])[]) => {
-  const entries = conditions.map((text, index) => ({ text, index }));
+const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string) => {
+  const entries = withoutAnswerPlace(conditions, answer);
   const chip = (text: string, index: number): FlashChip => ({ label: [...(labels?.[index] ?? [])], value: readableLabel(text) });
   const place = [
     ...entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text)).map(item => ({ ...chip(item.text, item.index), role: 'place' as const })),
@@ -58,7 +58,7 @@ const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly
 export const flashOf = (input: ProseInput & { cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] } }, attrs?: ProseAttrs): FlashCard | null => {
   const { kind, prompt, answer, conditions, direction } = input;
   if (kind === 'recall' || kind === 'convert') return null;
-  const { place, done } = placeAndDone(conditions, attrs?.conditions);
+  const { place, done } = placeAndDone(conditions, attrs?.conditions, answer);
   const askLabel = [...(attrs?.answer ?? [])];
   const givenChip: FlashChip = { label: [...(attrs?.prompt ?? [])], value: readableLabel(prompt) };
   const givenOperator = operatorOf(prompt);

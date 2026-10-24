@@ -5799,7 +5799,7 @@ test('basic review screen: the countdown is the pomodoro, shown large, and only 
   assert.ok(effect.includes('playPomodoroEndSound()') && effect.includes('reviewRoundsSeenRef'));
   ['clearPreSessionReview', 'setIsPreSessionReviewRunning', 'finishPreSessionReview', 'onFinish'].forEach(name => assert.ok(!effect.includes(name), `time up never calls ${name}`));
   assert.ok(logger.includes('timeUp={isReviewTimeUp}'));
-  assert.ok(logger.includes('const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !isGateReviewComplete'));
+  assert.ok(logger.includes('const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !stopsAtGateCompletion'), 'a review without questions keeps timing until it is finished');
   assert.ok(logger.includes('getPomodoroProgress(preSessionReviewTargetSeconds, preSessionReviewSeconds, pomodoroMinutes)'), 'the review countdown comes from the estimated time');
   assert.ok(logger.includes('formatTime(reviewPomodoro?.remainingSeconds ?? 0)'));
 });
@@ -10441,4 +10441,22 @@ test('one review is graded once: the last review subject sets the subject memory
   assert.equal(fast.recommended, 'easy');
   assert.equal(basicReviewFeedbackOf(past, 'E', 10, 30).recommended, 'hard');
   assert.equal(basicReviewFeedbackOf([], 'E', 10, 6).recommended, null, 'no past basic review: no recommendation');
+});
+
+test('a toggle named like the answer is left out of the question, and a basic review without questions keeps timing', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const { flashOf } = loadSource('utils/questionFlash.ts');
+  const memo = ':::toggle 조선 전기\n:::toggle 태조\n태조=이성계:조선을 세운 왕\n:::end\n:::end';
+  const asks = buildReviewQuestions(memo).questions.filter(q => q.answer === '태조');
+  assert.ok(asks.length > 0);
+  asks.forEach(q => {
+    assert.ok(!(q.statement || '').includes('‘태조’'), `no answer in the place: ${q.statement}`);
+    const card = flashOf(q);
+    if (card) assert.ok(!card.place.some(chip => chip.value === '태조'));
+  });
+  const other = buildReviewQuestions(memo).questions.find(q => q.answer === '조선을 세운 왕');
+  assert.ok(other && other.statement.includes('‘태조’'), 'other questions keep the toggle as their place');
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('const stopsAtGateCompletion = isGateReviewComplete && gateReviewQuestions.length > 0;'));
+  assert.ok(logger.includes('feedback={basicFeedback && isGateReviewComplete ?'));
 });

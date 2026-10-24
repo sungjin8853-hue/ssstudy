@@ -1518,20 +1518,23 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     }
   }, [activePageAttackTargetSeconds, attackCompletedPages, isTimerRunning, pageAttackRemainingSeconds, step, timerMode]);
 
+  // 기본 복습 시간: 문제가 있으면 문제를 다 풀 때까지, 문제가 없는 기본 복습(페이지만 다시 보기)은 "복습 완료"를 누를 때까지 잰다.
+  // (문제가 없으면 처음부터 "다 푼" 상태라 시간이 00:00에서 멈춰, 복습 시간 · 회차별 효율이 남지 않았다)
+  const stopsAtGateCompletion = isGateReviewComplete && gateReviewQuestions.length > 0;
   useEffect(() => {
-    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0 || isGateReviewComplete) return;
+    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0 || stopsAtGateCompletion) return;
 
     const interval = window.setInterval(() => {
       setPreSessionReviewSeconds(prev => prev + 1);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isPreSessionReviewRunning, preSessionReviewLogs.length, isGateReviewComplete]);
+  }, [isPreSessionReviewRunning, preSessionReviewLogs.length, stopsAtGateCompletion]);
 
   // 기본 복습의 뽀모도로: 예상 시간이 25분 이하면 그 시간이 한 회, 넘으면 25분씩 나눠 회차로 센다(마지막 회차는 남는 시간).
   // 회차가 끝나거나 예상 시간이 모두 지나도 화면은 닫지 않는다. 시간 글자, 닫을 수 있는 안내 띠, 짧은 소리 한 번으로만 알리고 복습은 계속된다.
   const reviewPomodoro = getPomodoroProgress(preSessionReviewTargetSeconds, preSessionReviewSeconds, pomodoroMinutes);
-  const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !isGateReviewComplete;
+  const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !stopsAtGateCompletion;
   const reviewCompletedRounds = isGateReviewComplete ? 0 : reviewPomodoro?.completedRounds ?? 0;
   const reviewRoundsSeenRef = useRef(0);
   const [dismissedReviewRound, setDismissedReviewRound] = useState(0);
@@ -2547,7 +2550,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         firstTryBad={gateWrongCount}
         completion={(
           <div className="flex flex-col gap-4">
-            {basicFeedback && (() => {
+            {maskedByItem.some(entry => entry.maskedKeys.length > 0) && (
+              <p className="text-sm font-medium leading-relaxed text-slate-700">복습 간격이 8일에 닿은 답은 가려져요. 가려진 칸을 누르면 원문이 보이고, 다시 누르면 가려져요.</p>
+            )}
+            {maskedByItem.map(({ item, maskedKeys }) => (
+              <section key={item.log.id} className="space-y-2">
+                <h4 className="text-sm font-bold text-slate-700">{item.range} · 정리노트</h4>
+                <ReviewNoteSummary memo={item.memo} maskedKeys={maskedKeys} />
+              </section>
+            ))}
+          </div>
+        )}
+        feedback={basicFeedback && isGateReviewComplete ? (() => {
               const selected = basicFeedbackChoice ?? basicFeedback.recommended ?? 'good';
               const firstLog = preSessionReviewLogs[0];
               const nowMs = Date.now();
@@ -2570,18 +2584,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                   </button>)}
                 </div>
               </section>;
-            })()}
-            {maskedByItem.some(entry => entry.maskedKeys.length > 0) && (
-              <p className="text-sm font-medium leading-relaxed text-slate-700">복습 간격이 8일에 닿은 답은 가려져요. 가려진 칸을 누르면 원문이 보이고, 다시 누르면 가려져요.</p>
-            )}
-            {maskedByItem.map(({ item, maskedKeys }) => (
-              <section key={item.log.id} className="space-y-2">
-                <h4 className="text-sm font-bold text-slate-700">{item.range} · 정리노트</h4>
-                <ReviewNoteSummary memo={item.memo} maskedKeys={maskedKeys} />
-              </section>
-            ))}
-          </div>
-        )}
+            })() : undefined}
         finishLabel={finishLabel}
         canFinish={isGateReviewComplete}
         onFinish={finishPreSessionReview}

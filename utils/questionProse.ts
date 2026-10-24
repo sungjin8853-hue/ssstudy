@@ -72,9 +72,19 @@ export const AFTER = / 이후$/;
  */
 export interface ProseAttrs { prompt: string[]; answer: string[]; conditions: string[][] }
 
+/**
+ * 자리(위쪽 토글 이름)가 정답과 같은 글이면 문제에 정답이 그대로 보이므로 자리에서 뺀다.
+ * 예: 토글 `태조` 안의 `태조=이성계` → "‘태조’에서 ‘이성계’에 대응하는 것은?"(정답 태조) 대신 "‘이성계’에 대응하는 것은?"
+ */
+export const withoutAnswerPlace = (conditions: readonly string[], answer?: string) => {
+  const hidden = answer === undefined ? '' : readableLabel(answer).trim();
+  return conditions.map((text, index) => ({ text, index }))
+    .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '')).trim() !== hidden);
+};
+
 /** 문제가 놓인 자리: `개념 ‘A’에서 ` · `‘p’ 다음 자리의 `. 속성 이름(labels)이 있으면 값 앞에 붙는다. "충족"이 붙은 조건은 여기 넣지 않는다. */
-export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[]): string => {
-  const entries = conditions.map((text, index) => ({ text, index }));
+export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string): string => {
+  const entries = withoutAnswerPlace(conditions, answer);
   const afters = entries.filter(item => AFTER.test(item.text));
   const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text));
   return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
@@ -88,7 +98,7 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
   const labelsOf = (index: number) => attrs?.conditions[index];
   const entries = conditions.map((text, index) => ({ text, index }));
   const satisfied = entries.filter(item => SATISFIED.test(item.text));
-  const where = placeOf(conditions, attrs?.conditions);
+  const where = placeOf(conditions, attrs?.conditions, answer);
   // 이미 충족한 값들은 한 묶음으로: 속성 이름은 겹치지 않게 모은다
   const doneLabels = [...new Set(satisfied.flatMap(item => labelsOf(item.index) ?? []))];
   const done = satisfied.length ? `${attributeTag(satisfied.map(item => readableLabel(item.text.replace(SATISFIED, ''))).join(', '), doneLabels)} 외에 ` : '';
