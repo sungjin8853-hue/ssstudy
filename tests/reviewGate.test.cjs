@@ -10425,3 +10425,20 @@ test('folders cannot hold each other, and report time charts count review time k
   assert.equal(calculateStudyStreak(timed, now).current, 2);
   assert.equal(buildWeeklyStudy(timed, 1, now).points[0].minutes, 71);
 });
+
+test('one review is graded once: the last review subject sets the subject memory, and a basic review without review subjects asks for a grade too', () => {
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  assert.ok(app.includes('feedbackGrade && !nextReviewSubjectId ? { ...source, reviewFsrs: gradeSubjectCard(source, feedbackGrade, nowMs) } : source'));
+  assert.ok(app.includes('const reviewFsrs = feedbackGrade ? gradeSubjectCard(log, feedbackGrade, nowMs) : log.reviewFsrs;'));
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes("onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined);"));
+  assert.ok(logger.includes('data-basic-feedback="true"') && logger.includes('data-feedback-later="true"'));
+  const { basicReviewFeedbackOf } = loadSource('utils/subjectFeedback.ts');
+  const past = [{ id: 'a', subjectId: 'E', pagesRead: 10, timeSpentMinutes: 30, timestamp: '2026-10-01T00:00:00Z',
+    basicReviewTimeRecords: [{ minutes: 10, pages: 10, timestamp: '2026-10-03T00:00:00Z' }, { minutes: 20, pages: 10, timestamp: '2026-10-05T00:00:00Z' }] }];
+  const fast = basicReviewFeedbackOf(past, 'E', 10, 6);
+  assert.equal(fast.averageSpeed, 45, 'median of 60 and 30 P/h');
+  assert.equal(fast.recommended, 'easy');
+  assert.equal(basicReviewFeedbackOf(past, 'E', 10, 30).recommended, 'hard');
+  assert.equal(basicReviewFeedbackOf([], 'E', 10, 6).recommended, null, 'no past basic review: no recommendation');
+});

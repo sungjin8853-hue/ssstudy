@@ -129,3 +129,20 @@ export const pendingFeedbackOf = (logs: readonly StudyLog[], subjectId: string, 
 export const gradePendingReviews = (logs: StudyLog[], subjectId: string, grade: SubjectGrade, nowMs: number): StudyLog[] => logs.map(log => (
   log.unitReviewPending && log.subjectId === subjectId ? { ...log, feedbackGrade: grade, reviewFsrs: gradeSubjectCard(log, grade, nowMs) } : log
 ));
+
+/**
+ * 기본 복습을 마칠 때 고르는 난도의 바탕: 이번 기본 복습 속도(복습한 장수 ÷ 걸린 시간)와,
+ * 같은 과목의 지난 기본 복습 기록(basicReviewTimeRecords)의 평균 속도(최근 기록의 가운데 값).
+ */
+export const basicReviewFeedbackOf = (logs: readonly StudyLog[], subjectId: string, pages: number, minutes: number) => {
+  const speeds = logs.filter(log => log.subjectId === subjectId)
+    .flatMap(log => log.basicReviewTimeRecords || [])
+    .filter(record => record.pages > 0 && record.minutes > 0)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .slice(-RECENT_SESSIONS)
+    .map(record => speedPerHour(record.pages, record.minutes))
+    .filter((value): value is number => value !== null);
+  const averageSpeed = speeds.length ? median(speeds) : null;
+  const speed = speedPerHour(pages, minutes);
+  return { speed, averageSpeed, targetSpeed: averageSpeed === null ? null : averageSpeed * EASY_SPEED_RATIO, recommended: recommendSubjectGrade(speed, averageSpeed) };
+};

@@ -11,7 +11,7 @@ import {
 import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getPomodoroRemainingPages, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
-import { getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
+import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
 import { calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
 import type { QuestionLineEdit } from './ReviewQuestionTools';
@@ -21,7 +21,7 @@ import { readEditIntake } from '../utils/reviewEditIntake';
 import { convertLabel, foldConvertUnit, isConvertUnitKey, planConvertReview } from '../utils/abilityConvert';
 import { planPairReview } from '../utils/pairReview';
 import { formatResponseSeconds, recommendReviewGrade } from '../utils/gradeRecommendation';
-import { formatSpeed, gradeSubjectCard, pastSessions, previewSubjectIntervals, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_LABELS, SUBJECT_GRADES, summarizeSpeedFeedback } from '../utils/subjectFeedback';
+import { basicReviewFeedbackOf, formatSpeed, gradeSubjectCard, pastSessions, previewSubjectIntervals, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_LABELS, SUBJECT_GRADES, summarizeSpeedFeedback } from '../utils/subjectFeedback';
 import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
@@ -58,7 +58,7 @@ interface Props {
   renderSummary: (taskSelector: React.ReactNode, onSelectSubject: (subjectId: string) => void, completedStudySubjectIds: string[], pomodoroPlan: PomodoroPlan | null, idle?: IdleSummaryContext) => React.ReactNode;
   onLogSession: (log: StudyLog) => void;
   onUpdateSubjects?: (subjects: Subject[]) => void;
-  onReviewAction: (logIds: string[], action: 'complete' | 'condense', reviewTimeSpentMinutes?: number) => void;
+  onReviewAction: (logIds: string[], action: 'complete' | 'condense', reviewTimeSpentMinutes?: number, feedbackGrade?: SubjectGrade) => void;
   onAdvanceReviewSubject: (logIds: string[], completedReviewSubjectId: string, nextReviewSubjectId: string | null, reviewTimeSpentMinutes: number, measurement: ReviewMeasurement, feedbackGrade?: SubjectGrade) => void;
   onRecordReviewSubjectTime: (logIds: string[], completedReviewSubjectId: string, reviewTimeSpentMinutes: number, measurement: ReviewMeasurement) => void;
   onUpdateReviewMemo: (logId: string, memo: string, document?: ReviewMemoDocument) => void;
@@ -987,6 +987,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [solvedPageCount, setSolvedPageCount] = useState('');
   /** 과목을 끝낸 뒤 고른 난도 피드백. 고르지 않으면 속도로 권한 평가(없으면 보통)로 저장한다. */
   const [feedbackChoice, setFeedbackChoice] = useState<SubjectGrade | null>(null);
+  // 기본 복습(복습과목 없음)을 마칠 때 고른 난도. 고르지 않으면 추천(없으면 보통)
+  const [basicFeedbackChoice, setBasicFeedbackChoice] = useState<SubjectGrade | null>(null);
   const [initialReadAmount, setInitialReadAmount] = useState('');
   const [skipReview, setSkipReview] = useState(false);
   const [minutes, setMinutes] = useState(0);
@@ -1839,6 +1841,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setIsGateAnswerRevealed(false);
     setGateDroppedIds([]);
     setGateRemovalNotice(null);
+    setBasicFeedbackChoice(null);
   };
 
   const openPreSessionReview = (group: ReviewQueueGroup, mode: PreSessionReviewMode) => {
@@ -2060,16 +2063,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setActiveReviewRun({ ...activeReviewRun, logIds: nextLogIds });
   };
 
-  const finishPreSessionReview = () => {
-    if (preSessionReviewLogs.length === 0) return;
-    if (!isGateReviewComplete) return;
-
+  // 이번 복습 문제의 결과(기록마다). 마칠 때 저장하고, 완료 화면의 난도 버튼은 이것을 넣어 본 다음 복습을 보여 준다
+  const buildGateOutcomes = (): ReviewGateOutcome[] => {
     // 결합·건너뛰기 문제는 맡은 단위 문제마다 같은 결과를 기록한다(일정은 단위마다 따로 쌓인다).
     const pieces = gateReviewQuestions
       .filter(question => gatePractice?.completed.includes(question.id))
       .flatMap(question => (question.covered ?? [{ logId: question.logId, questionKey: question.questionKey }])
         .map(cover => ({ ...cover, gateId: question.id })));
-    const outcomes: ReviewGateOutcome[] = preSessionGateMemoItems.flatMap(item => {
+    return preSessionGateMemoItems.flatMap(item => {
       const own = pieces.filter(piece => piece.logId === item.log.id);
       if (own.length === 0) return [];
       const wrongQuestionKeys = own
@@ -2089,6 +2090,22 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         unlockedLevel: gatePractice?.unlocked[item.log.id] || 1
       }];
     });
+  };
+
+  // 기본 복습을 마칠 때의 난도 피드백: 복습과목이 이어지지 않는 기본 복습만(복습과목이 있으면 마지막 복습과목에서 고른다, 오답 다시 풀기는 묻지 않는다)
+  const basicFeedback = useMemo(() => {
+    if (preSessionReviewLogs.length === 0 || !preSessionReviewGroup || preSessionReviewGroup.isGateRetry) return null;
+    const parent = subjects.find(subject => subject.id === preSessionReviewGroup.parentSubjectId);
+    if (getAvailableReviewSubjectIds(preSessionReviewGroup.reviewSubjectIds, parent, subjects).length > 0) return null;
+    const pages = preSessionReviewLogs.reduce((sum, log) => sum + Math.max(0, log.pagesRead), 0);
+    return basicReviewFeedbackOf(logs, preSessionReviewGroup.parentSubjectId, pages, preSessionReviewSeconds / 60);
+  }, [logs, preSessionReviewGroup, preSessionReviewLogs, preSessionReviewSeconds, subjects]);
+
+  const finishPreSessionReview = () => {
+    if (preSessionReviewLogs.length === 0) return;
+    if (!isGateReviewComplete) return;
+
+    const outcomes = buildGateOutcomes();
     onFinishReviewGate(outcomes, Boolean(preSessionReviewGroup?.isGateRetry));
 
     if (preSessionReviewGroup?.isGateRetry) {
@@ -2116,7 +2133,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     }
 
     setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...finishedLogIds])));
-    onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60);
+    onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined);
     clearPreSessionReview();
     setSelectedTaskKey('');
     setInspectedRecordDetailId('');
@@ -2530,6 +2547,30 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         firstTryBad={gateWrongCount}
         completion={(
           <div className="flex flex-col gap-4">
+            {basicFeedback && (() => {
+              const selected = basicFeedbackChoice ?? basicFeedback.recommended ?? 'good';
+              const firstLog = preSessionReviewLogs[0];
+              const nowMs = Date.now();
+              const withResults = firstLog ? applyReviewGateOutcomes([firstLog], buildGateOutcomes(), false, nowMs)[0] : null;
+              const intervals = previewReviewCompletionIntervals(withResults, nowMs);
+              const label = getPageLabel(subjects.find(subject => subject.id === preSessionReviewGroup?.parentSubjectId));
+              return <section aria-label="난도 피드백" data-basic-feedback="true" className="w-full rounded-2xl border border-indigo-100 bg-white p-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
+                  <p className="text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(basicFeedback.speed, label)}</span></p>
+                </div>
+                <p className="mt-1 text-[13px] font-bold text-slate-700">평균 속도 {formatSpeed(basicFeedback.averageSpeed, label)}{basicFeedback.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {SUBJECT_GRADES.map(grade => <button key={grade} type="button" data-basic-feedback-grade={grade} aria-pressed={selected === grade}
+                    data-recommended={basicFeedback.recommended === grade ? 'true' : undefined} onClick={() => setBasicFeedbackChoice(grade)}
+                    className={`relative flex min-h-[4.5rem] flex-col items-start justify-center gap-0.5 rounded-xl border-2 px-3 py-2 text-left ${selected === grade ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-500' : 'border-slate-200 bg-slate-50'}`}>
+                    {basicFeedback.recommended === grade && <span className="absolute -top-2.5 right-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[11px] font-black text-white">추천</span>}
+                    <span className="text-base font-black text-slate-900">{SUBJECT_GRADE_LABELS[grade]}</span>
+                    <span className="text-xs font-bold text-slate-600">다음 복습 {formatReviewInterval(intervals[grade])} 뒤</span>
+                  </button>)}
+                </div>
+              </section>;
+            })()}
             {maskedByItem.some(entry => entry.maskedKeys.length > 0) && (
               <p className="text-sm font-medium leading-relaxed text-slate-700">복습 간격이 8일에 닿은 답은 가려져요. 가려진 칸을 누르면 원문이 보이고, 다시 누르면 가려져요.</p>
             )}
@@ -3136,7 +3177,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               const selected = chosenFeedbackGrade();
               const parentLog = activeReviewRun ? logs.find(log => log.id === activeReviewRun.logIds[0]) ?? null : null;
               // 이번이 마지막 복습과목이면 마칠 때 실제로 다음 복습이 열리는 때(풀린 문제들의 다음 복습과 과목 난도 중 이른 쪽)를 보여 준다
-              const intervals = nextReviewRunSubjectId ? previewSubjectIntervals(parentLog, Date.now()) : previewReviewCompletionIntervals(parentLog, Date.now());
+              // 다음 복습은 마지막 복습과목의 난도로 한 번만 정한다: 앞 복습과목에서는 날짜를 보여 주지 않는다
+              const intervals = nextReviewRunSubjectId ? null : previewReviewCompletionIntervals(parentLog, Date.now());
               return <section aria-label="난도 피드백" data-difficulty-feedback="true" className="mb-4 w-full rounded-2xl border border-indigo-100 bg-white p-4">
                 <div className="flex items-baseline justify-between gap-3">
                   <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
@@ -3154,9 +3196,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                     className={`relative flex min-h-[4.5rem] flex-col items-start justify-center gap-0.5 rounded-xl border-2 px-3 py-2 text-left ${selected === grade ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-500' : 'border-slate-200 bg-slate-50'}`}>
                     {recommended === grade && <span className="absolute -top-2.5 right-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[11px] font-black text-white">추천</span>}
                     <span className="flex flex-wrap items-baseline gap-x-1 text-base font-black text-slate-900">{SUBJECT_GRADE_LABELS[grade]}{grade === 'easy' && <span data-feedback-target="true" className="whitespace-nowrap text-[13px] font-bold text-slate-600">(목표하는 속도 {formatSpeed(summary.targetSpeed, pageLabel)})</span>}</span>
-                    <span className="text-xs font-bold text-slate-600">다음 복습 {formatReviewInterval(intervals[grade])} 뒤</span>
+                    {intervals && <span className="text-xs font-bold text-slate-600">다음 복습 {formatReviewInterval(intervals[grade])} 뒤</span>}
                   </button>)}
                 </div>
+                {!intervals && <p data-feedback-later="true" className="mt-2 text-[13px] font-bold text-slate-600">다음 복습 날짜는 마지막 복습과목에서 고른 난도로 정해요</p>}
               </section>;
             })()}
 

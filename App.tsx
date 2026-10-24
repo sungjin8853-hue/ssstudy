@@ -679,7 +679,7 @@ const App: React.FC = () => {
   };
 
   // 복습 액션 처리 (완료 또는 축약)
-  const handleReviewAction = (logIds: string | string[], action: 'complete' | 'condense', reviewTimeSpentMinutes = 0) => {
+  const handleReviewAction = (logIds: string | string[], action: 'complete' | 'condense', reviewTimeSpentMinutes = 0, feedbackGrade?: SubjectGrade) => {
     const targetIds = new Set(Array.isArray(logIds) ? logIds : [logIds]);
     setLogs(prev => {
       const targetLogs = prev.filter(log => targetIds.has(log.id));
@@ -694,9 +694,11 @@ const App: React.FC = () => {
             return { ...log, isCondensed: true };
         }
 
-        // 복습 완료 시 다음 주기 계산
+        // 복습 완료 시 다음 주기 계산. 기본 복습을 마칠 때 고른 난도가 있으면 먼저 그 기록의 과목 단위 기억(FSRS-6)을 갱신한다
         const currentStep = log.reviewStep || 0;
-        const schedule = completeRegularReviewSchedule(log, Date.now());
+        const nowMs = Date.now();
+        const reviewFsrs = feedbackGrade ? gradeSubjectCard(log, feedbackGrade, nowMs) : log.reviewFsrs;
+        const schedule = completeRegularReviewSchedule({ ...log, reviewFsrs }, nowMs);
         const reviewTimeShare = shouldRecordReviewTime
           ? reviewTimeSpentMinutes * (Math.max(0, log.pagesRead) / totalReviewPages)
           : 0;
@@ -704,6 +706,7 @@ const App: React.FC = () => {
         return {
             ...log,
             isReviewed: true, // 레거시 호환용
+            ...(reviewFsrs ? { reviewFsrs } : {}),
             ...schedule,
             reviewTimeSpentMinutes: (log.reviewTimeSpentMinutes || 0) + reviewTimeShare,
             reviewCompletedPages: (log.reviewCompletedPages || 0) + (shouldRecordReviewTime ? Math.max(0, log.pagesRead) : 0),
@@ -784,8 +787,8 @@ const App: React.FC = () => {
       const recorded = recordReviewMeasurement(prev, logIds, completedReviewSubjectId, reviewTimeSpentMinutes, true, completedAt, measurement);
       return recorded.map(source => {
         if (!targetIds.has(source.id)) return source;
-        // 난도 피드백이 있으면 먼저 이 기록의 과목 단위 기억(FSRS-6)을 갱신한다
-        const log: StudyLog = feedbackGrade ? { ...source, reviewFsrs: gradeSubjectCard(source, feedbackGrade, nowMs) } : source;
+        // 한 번의 복습은 한 번만 평가한다: 복습과목이 여러 개면 마지막 복습과목의 난도로 이 기록의 과목 단위 기억(FSRS-6)을 갱신한다
+        const log: StudyLog = feedbackGrade && !nextReviewSubjectId ? { ...source, reviewFsrs: gradeSubjectCard(source, feedbackGrade, nowMs) } : source;
 
         if (nextReviewSubjectId) {
           return {
