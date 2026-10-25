@@ -10,7 +10,7 @@ export const ReviewGrowthSettings: React.FC<{ value: 'review' | 'unit'; onChange
     <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="복습과목 측정 방식">
       {([
         { value: 'review', label: '평균 속도 증가율', sub: '평균 · 이번 복습 두 값' },
-        { value: 'unit', label: '타임어택 포함', sub: '이전 복습(단위) 대비 · 뽀모도로 성장' }
+        { value: 'unit', label: '타임어택 포함', sub: '이전 복습(단위) 대비 · 직전 25분보다 성장' }
       ] as const).map(option => (
         <button key={option.value} type="button" aria-pressed={value === option.value}
           onClick={event => { event.stopPropagation(); onChange(option.value); }}
@@ -151,19 +151,19 @@ export const UnitGauge: React.FC<{ done: number; total: number }> = ({ done, tot
   );
 };
 
-/** 비교 버튼의 글자: "뽀모도로 1회 전 ›" · "이전 단위 ›" · "이이전 단위 ›" · "평균 ›". 견줄 수 없는 때는 이유를 적는다. */
+/** 비교 버튼의 글자: "이전 단위 ›" · "이이전 단위 ›" · "평균 ›". 견줄 수 없는 때는 이유를 적는다. */
 const compareLabel = (view: ReturnType<typeof getEfficiencyView>) => {
   const { choice } = view;
   if (choice.kind === 'average') return view.average ? '평균' : '평균 없음';
   if (choice.kind === 'unit') return choice.n === 0 ? '비교할 단위 없음' : choice.n === 1 ? '이전 단위' : '이이전 단위';
-  return choice.n === 0 ? '비교할 뽀모도로 없음' : `뽀모도로 ${choice.n}회 전`;
+  return choice.n === 0 ? '비교할 기록 없음' : `${choice.n}번 전 25분`;
 };
 
 /**
  * "효율" 셀(전체·타임어택 효율 + 속도·공부량 변화)과 그 아래 "다음 단위까지" 게이지.
  *  - 효율 값은 과목의 가장 최근 25분(뽀모도로) 평균이다. 페이지 단위를 넘어도 새로 시작하지 않는다.
  *    새 단위가 막 시작돼 그 단위에 푼 기록이 아직 없으면 이전 단위의 평균을 가져와 보인다.
- *  - 제목 옆 버튼을 누르면 비교 기준이 뽀모도로 1회 전 → … → 5회 전 → 이전 단위 → 이이전 단위 → 평균으로 넘어가고, 한 번 더 누르면 1회 전으로 돌아간다.
+ *  - 이전 단위 대비 값만 보이고(제목 옆 버튼: 이전 단위 → 이이전 단위 → 평균), 그 아래 한 줄에 그 성장이 직전 25분보다 얼마나 늘었는지 보인다.
  *  - 페이지 단위는 푼 장수로 센다. 단위가 없는 과목에는 "다음 단위까지" 줄과 단위 비교가 없다(평균과는 견줄 수 있다).
  */
 export const UnitGrowthEfficiency: React.FC<{
@@ -173,20 +173,24 @@ export const UnitGrowthEfficiency: React.FC<{
   /** 단위가 끝나는 때: 학습과목은 "복습에 넣기", 복습과목은 복습을 마칠 때 */
   unitEnd?: 'register' | 'review';
 }> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false, unitEnd = 'register' }) => {
-  // 기본은 이전 단위와 견준다(이전 단위가 없으면 버튼이 "비교할 단위 없음"). 효율 숫자 옆에는 늘 뽀모도로 1회 전 대비가 따로 붙는다.
-  // 고르기 전(null)에는 이전 단위, 마친 단위가 아직 없으면 뽀모도로 1회 전과 견준다
-  const [picked, setComparison] = useState<EfficiencyComparison | null>(null);
-  const unitView = getEfficiencyView(scope, { kind: 'unit', n: 1 });
-  const comparison: EfficiencyComparison = picked ?? (unitView.maxUnits > 0 || unitView.inherited ? { kind: 'unit', n: 1 } : { kind: 'pomodoro', n: 1 });
-  const view = picked ? getEfficiencyView(scope, comparison) : comparison.kind === 'unit' ? unitView : getEfficiencyView(scope, comparison);
-  const pomodoro = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
-  const showPomodoro = !(view.choice.kind === 'pomodoro' && view.choice.n === 1) && pomodoro.choice.kind === 'pomodoro' && pomodoro.choice.n === 1;
+  // 이전 단위 대비 값만 보인다(버튼으로 이전 단위 → 이이전 단위 → 평균). 그 아래 한 줄은 그 성장이 직전 25분보다 얼마나 늘었는지다.
+  const [comparison, setComparison] = useState<EfficiencyComparison>({ kind: 'unit', n: 1 });
+  const view = getEfficiencyView(scope, comparison);
+  // 같은 기준과 견준 성장의 변화 = 지금 25분과 직전 25분의 차이(기준이 같아서 빼면 기준이 지워진다)
+  const recent = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
+  const hasRecent = recent.choice.kind === 'pomodoro' && recent.choice.n === 1;
   const progress = scope.progress;
-  const canCompare = view.options.length > 1 || (view.options.length === 1 && !sameComparison(view.options[0], view.choice));
+  const unitOptions = view.options.filter(option => option.kind !== 'pomodoro');
+  const canCompare = unitOptions.length > 1 || (unitOptions.length === 1 && !sameComparison(unitOptions[0], view.choice));
+  const nextUnitComparison = (): EfficiencyComparison => {
+    if (!unitOptions.length) return view.choice;
+    const at = unitOptions.findIndex(option => sameComparison(option, view.choice));
+    return unitOptions[(at + 1) % unitOptions.length];
+  };
   const compare = (
     <button type="button" data-testid="unit-compare" aria-label="비교 기준 바꾸기"
       data-comparison={view.comparison} data-comparison-kind={view.choice.kind} disabled={!canCompare}
-      onClick={() => setComparison(nextEfficiencyComparison(view))}
+      onClick={() => setComparison(nextUnitComparison())}
       className="flex h-10 items-center gap-1.5 whitespace-nowrap rounded-full border-2 border-indigo-400 bg-indigo-100 px-3.5 text-sm font-black text-indigo-900 transition-colors hover:bg-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-default disabled:border-indigo-300 disabled:bg-indigo-50 disabled:text-indigo-800 disabled:hover:bg-indigo-50">
       {compareLabel(view)}
       {canCompare && <span aria-hidden="true">›</span>}
@@ -197,8 +201,9 @@ export const UnitGrowthEfficiency: React.FC<{
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
         overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done}
-        pomodoroOverall={showPomodoro ? pomodoro.overall : null} pomodoroAttack={showPomodoro ? pomodoro.attack : null}
+        recentOverall={view.overall && hasRecent ? recent.overall : null} recentAttack={view.attack && hasRecent ? recent.attack : null}
         compareTitle={`${compareLabel(view)} 대비`}
+        emptyNote={unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">
             <div data-testid="unit-pages-done" className="flex items-baseline justify-between gap-3">

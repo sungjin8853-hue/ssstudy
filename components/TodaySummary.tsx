@@ -289,8 +289,8 @@ export const buildCompletedDetailRows = (
         // 복습과목의 단위는 복습 한 번(그 복습과목을 마친 때까지)
         const scope = getEfficiencyScope(growthLogs.filter(log => log.timestamp <= latest.latestTimestamp),
           owner ? reviewCompletionBoundaries(logs, owner.id, latest.subjectId) : []);
-        const described = describeGrowthChange(getEfficiencyView(scope, 1).overall, false, label);
-        growth = described ? `뽀모도로 1회 전 대비 ${described}` : null;
+        const described = describeGrowthChange(getEfficiencyView(scope, { kind: 'unit', n: 1 }).overall, false, label);
+        growth = described ? `이전 단위 대비 ${described}` : null;
       } else if (latest.reviewSpeedChangePercent !== null) {
         // 기준 장당 시간(합계 ÷ 장수)과 이번 장당 시간으로 속도·공부량의 차이를 정수로 보여준다.
         const described = describeGrowthChange(latest.pages > 0 && latest.minutes > 0

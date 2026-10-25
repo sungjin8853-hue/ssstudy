@@ -3190,8 +3190,8 @@ test('review subjects respect the selected growth display without editing page u
   assert.ok(!unit.includes('평균 증가율'));
   // 아직 복습을 마친 적이 없어 지금 단위(복습 한 번)에 15장(5장 + 10장)을 채우는 중
   assert.ok(unit.includes('unit-pages-done') && /unit-pages-done[\s\S]*?>15<\/span><span[^>]*>P<\/span><\/p>/.test(unit) && unit.includes('복습을 마치면 단위가 끝나요'));
-  // 최근 25분(2.5분/P, 1시간에 24장)을 1회 전(5분/P, 12장)과 견준다: 속도 +12.0P/h, 공부량 −2.5분/P
-  assert.ok(unit.includes('뽀모도로 1회 전') && unit.includes('속도 +12.0P/h') && unit.includes('공부량 −2.5분/P') && !unit.includes('+150.0%'));
+  // 아직 복습을 마친 적이 없어 견줄 단위가 없다: 비교 칸 대신 안내 한 줄
+  assert.ok(unit.includes('growth-empty') && unit.includes('복습을 한 번 마치면') && !unit.includes('+150.0%'));
   assert.ok(!unit.includes('성장 설정'));
 });
 
@@ -3213,7 +3213,7 @@ test('review growth settings select either mode and retain the saved selection o
     const saved = JSON.parse(JSON.stringify({ ...reviewChainSubjects[1], reviewGrowthDisplay: value }));
     assert.equal(normalizePageGrowthSettings(saved).reviewGrowthDisplay, value);
     const html = renderToStaticMarkup(React.createElement(ReviewGrowthSettings, { value, onChange() {} }));
-    assert.ok(html.includes(`aria-pressed="true"`) && html.includes('평균 속도 증가율') && html.includes('타임어택 포함') && html.includes('뽀모도로 성장'));
+    assert.ok(html.includes(`aria-pressed="true"`) && html.includes('평균 속도 증가율') && html.includes('타임어택 포함') && html.includes('직전 25분보다 성장'));
     assert.ok(!html.includes('type="number"') && !html.includes('임시'));
     assert.equal(saved.completedPages, reviewChainSubjects[1].completedPages);
   }
@@ -3445,7 +3445,7 @@ test('the compare button steps from 1 pomodoro back up to 5 and returns to 1', (
   assert.deepEqual([rested.comparison, rested.reference.averageTimePerPage], [1, 5]);
 });
 
-test('the efficiency cell has a title with a pomodoro compare button next to it, two efficiencies with speed and study amount chips, and no percentages', () => {
+test('the efficiency cell shows only the change against the previous unit, with one small line for how much that growth rose since the 25 minutes before', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { UnitGrowthEfficiency } = loadSource('components/PageGrowth.tsx');
@@ -3453,61 +3453,43 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   // 세 번째 값은 단위 경계("복습에 넣기"를 누른 시각들)
   const render = (logs, props = {}, boundaries = []) => renderToStaticMarkup(React.createElement(UnitGrowthEfficiency,
     { scope: getEfficiencyScope(logs, boundaries), ...props }));
+  const cut = [Date.parse('2026-10-12T06:00:00Z')];
   const logs = [
     source({ id: 'old', pagesRead: 5, startPage: 1, endPage: 5, timeSpentMinutes: 25, timeAttackMinutes: 10, timestamp: '2026-10-12T05:00:00Z' }),
     source({ id: 'new', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T09:00:00Z' })];
-  const html = render(logs);
+  // old를 공부하고 6시에 복습에 넣었다 → 이전 단위(old, 5분/P)와 지금 단위(new, 2.5분/P)
+  const html = render(logs, {}, cut);
   assert.ok(html.includes('data-testid="efficiency-cell"') && html.includes('aria-label="효율"'));
-  // 제목 "효율" 다음에 비교 버튼, 그 아래 전체 효율 → 타임어택 효율, 맨 아래 다음 단위까지
   assert.match(html, /<h4[^>]*>효율<\/h4>[\s\S]*data-testid="unit-compare"/);
-  assert.ok(html.indexOf('unit-compare') < html.indexOf('전체 효율') && html.indexOf('전체 효율') < html.indexOf('타임어택 효율')
-    && html.indexOf('타임어택 효율') < html.indexOf('이번 단위'));
-  // 기본은 뽀모도로 1회 전. 시간(h)은 보이지 않는다.
-  assert.match(html, /data-testid="unit-compare"[^>]*data-comparison="1"/);
-  assert.ok(html.includes('뽀모도로 1회 전') && !html.includes('h 공부') && !html.includes('이후'));
-  // 가장 최근 25분: 전체 2.5분/P(타임어택 0.5분/P)
+  assert.ok(html.indexOf('unit-compare') < html.indexOf('전체 효율') && html.indexOf('전체 효율') < html.indexOf('타임어택 효율') && html.indexOf('타임어택 효율') < html.indexOf('이번 단위'));
+  assert.match(html, /data-testid="unit-compare"[^>]*data-comparison-kind="unit"/);
+  assert.ok(html.includes('이전 단위 대비') && !html.includes('뽀모도로'), 'no word 뽀모도로 in the efficiency cell');
   assert.ok(html.includes('>2.5</span>') && html.includes('>0.5</span>'));
-  // 전체: 속도 +12.0P/h, 공부량 −2.5분/P. 타임어택: 속도 +90.0P/h, 공부량 −1.5분/P
-  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P'));
-  assert.ok(html.includes('속도 +90.0P/h') && html.includes('공부량 −1.5분/P'));
+  // 이전 단위 대비: 전체 속도 +12.0P/h · 공부량 −2.5분/P, 타임어택 +90.0P/h · −1.5분/P (칸 하나씩)
+  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && html.includes('속도 +90.0P/h') && html.includes('공부량 −1.5분/P'));
+  assert.equal((html.match(/data-testid="growth-chips"/g) || []).length, 2);
   assert.equal((html.match(/data-growth-kind="speed"/g) || []).length, 2);
-  assert.equal((html.match(/data-growth-kind="amount"/g) || []).length, 2);
+  // 그 아래 작은 줄: 그 성장이 직전 25분보다 얼마나 늘었는지(지금 25분 − 직전 25분과 같다)
+  assert.equal((html.match(/data-testid="growth-recent"/g) || []).length, 2);
+  assert.ok(html.includes('직전 25분보다 성장'));
   assert.ok(!/[+−-]\d+(\.\d+)?%/.test(html) && !html.includes('rose'), 'no percent growth anywhere');
-  // 아직 복습에 넣지 않아 첫 단위를 채우는 중(고정 단위 크기가 없어 남은 장수 대신 지금까지 푼 장수)
-  assert.ok(html.includes('unit-pages-done') && html.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
-  // 앞 25분이 하나뿐이어도 과목 평균이 있어 버튼이 눌린다(뽀모도로 1회 전 ↔ 평균). 마친 단위가 없으니 단위 기준은 없다.
-  assert.ok(!/<button[^>]*data-testid="unit-compare"[^>]*disabled=""/.test(html) && html.includes('›'));
-  // 25분 한 덩어리뿐이면 견줄 앞 뽀모도로도, 평균도, 마친 단위도 없어 버튼이 눌리지 않는다
-  const single = render([source({ id: 'solo', pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 25, timestamp: '2026-10-12T05:00:00Z' })]);
-  assert.match(single, /<button[^>]*data-testid="unit-compare"[^>]*disabled=""/);
-  assert.ok(single.includes('비교할 뽀모도로 없음') && !single.includes('data-growth-kind'));
-  // 임시값 안내 문구 같은 설명은 화면에 쓰지 않는다(도움말 ? 안에만 둔다)
-  assert.ok(!html.includes('임시로') && !html.includes('직전 단위 값'));
-  // 앞 25분이 둘이면 버튼이 눌린다
-  const three = render([source({ id: 'z', pagesRead: 4, startPage: 1, endPage: 4, timeSpentMinutes: 25, timestamp: '2026-10-12T01:00:00Z' }), ...logs]);
-  assert.ok(!/<button[^>]*data-testid="unit-compare"[^>]*disabled=""/.test(three) && three.includes('›'));
-  // 다른 글자를 단위 이름으로 쓰면 어디서나 그 글자가 나온다: n/h · 분/n · n.1~20 · 20n 단위
-  const custom = render(logs, { label: 'n' });
-  assert.ok(custom.includes('속도 +12.0n/h') && custom.includes('공부량 −2.5분/n') && /unit-pages-done[\s\S]*?n<\/span>/.test(custom));
-  assert.ok(custom.includes('>n</span>') && !custom.includes('P/h') && !custom.includes('분/P'));
-  const word = render(logs, { label: '회' });
-  assert.ok(word.includes('속도 +12.0회/h') && word.includes('공부량 −2.5분/회') && word.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
-  // 단위를 막 채웠다: 새 단위가 0장부터 채워지고, 효율 칸에는 이전 단위의 평균을 가져온다. 그 단위 자신과는 견주지 않는다(앞 단위가 없으면 견줄 것이 없다).
-  const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, [Date.parse('2026-10-12T06:00:00Z')]);
-  assert.ok(filled.includes('>5.0</span>') && !filled.includes('새 단위 시작 전'));
-  assert.ok(/unit-pages-done[\s\S]*?>0<\/span>/.test(filled) && filled.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'), 'a new unit starts from zero after 복습에 넣기');
-  assert.ok(filled.includes('비교할 단위 없음') && !filled.includes('뽀모도로 1회 전'));
+  assert.ok(html.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'));
+  // 버튼은 이전 단위 ↔ 평균만 돈다(25분 비교는 버튼에 없다)
+  assert.ok(!/<button[^>]*data-testid="unit-compare"[^>]*disabled=""/.test(html));
+  // 복습에 넣은 적이 없으면 견줄 단위가 없다: 비교 칸 대신 안내 한 줄
+  const first = render(logs);
+  assert.ok(first.includes('growth-empty') && first.includes('복습에 넣으면 다음 단위부터 이전 단위와 견줘요') && !first.includes('data-growth-kind'));
+  assert.ok(first.includes('비교할 단위 없음') && !first.includes('뽀모도로'));
+  // 다른 글자를 단위 이름으로 쓰면 그 글자가 나온다
+  const custom = render(logs, { label: 'n' }, cut);
+  assert.ok(custom.includes('속도 +12.0n/h') && custom.includes('공부량 −2.5분/n') && !custom.includes('P/h') && !custom.includes('분/P'));
+  // 단위를 막 마쳤다: 새 단위는 0장, 효율 칸은 이전 단위 평균을 가져오고, 견줄 앞 단위가 없으면 안내 한 줄
+  const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, cut);
+  assert.ok(filled.includes('>5.0</span>') && /unit-pages-done[\s\S]*?>0<\/span>/.test(filled) && filled.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'));
   assert.match(filled, /<button[^>]*data-testid="unit-compare"[^>]*disabled=""/);
-  // 25분이 안 되는 기록뿐이면 견줄 앞 뽀모도로가 없다
-  const alone = render([source({ pagesRead: 7, startPage: 1, endPage: 7, timeSpentMinutes: 20, timeAttackMinutes: 10 })]);
-  assert.ok(alone.includes('비교할 뽀모도로 없음') && !alone.includes('data-growth-kind') && !alone.includes('측정 필요'));
-  // 기록이 하나도 없으면 넘겨받은 값(처음 추정값)을 쓰고, 이번 단위는 0장이다
+  // 기록이 하나도 없으면 넘겨받은 값을 쓰고, 이번 단위는 0장이다
   const empty = render([], { efficiency: 3.2, attackEfficiency: 0 });
-  assert.ok(empty.includes('>3.2</span>') && empty.includes('측정 필요') && empty.includes('비교할 뽀모도로 없음'));
-  assert.ok(/unit-pages-done[\s\S]*?>0<\/span>/.test(empty) && empty.includes('이번 단위'));
-  // 복습에 넣은 적이 없으면 마친 단위가 없어 뽀모도로 1회 전과 견주고, 효율은 처음부터 이어진다
-  const none = render(logs);
-  assert.ok(none.includes('뽀모도로 1회 전') && none.includes('1번째 단위'));
+  assert.ok(empty.includes('>3.2</span>') && empty.includes('측정 필요') && /unit-pages-done[\s\S]*?>0<\/span>/.test(empty));
 });
 
 test('speed and study amount are shown to one decimal place: pages per hour and minutes per page, with no percentages', () => {
@@ -3630,7 +3612,7 @@ test('pomodoro and the efficiency cell share a compact strip with both growth va
   const { getEfficiencyScope } = loadSource('utils/pageGrowth.ts');
   const scope = getEfficiencyScope([
     source({ pagesRead: 5, startPage: 1, endPage: 5, timeSpentMinutes: 25, timeAttackMinutes: 10 }),
-    source({ id: 'new', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T04:00:00Z' })], 20, 1);
+    source({ id: 'new', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T04:00:00Z' })], [Date.parse('2026-10-12T03:00:00Z')]);
   const html = renderToStaticMarkup(React.createElement(PomodoroSummary, {
     pages: 5, efficiency: 5.12, attackEfficiency: 2.26, remainingTaskPages: 21,
     efficiencySlot: React.createElement(UnitGrowthEfficiency, { scope, efficiency: 5.12, attackEfficiency: 2.26 })
@@ -3685,11 +3667,8 @@ test('both efficiency values use the latest 25 minutes for ordinary and review s
     // 최근 25분 = 새 기록 5분(5P) + 앞 기록 20분(4P) → 9P: 전체 2.8분/P(25 ÷ 9), 타임어택 (2.5 + 8) ÷ 9 = 1.2분/P
     assert.ok(html.includes('current-overall-efficiency') && html.includes('>2.8</span>') && !html.includes('>5.0</span>'));
     assert.ok(html.includes('current-attack-efficiency') && html.includes('>1.2</span>') && !html.includes('>2.0</span>'));
-    // 뽀모도로 1회 전(앞 기록 25분: 5.0분/P · 타임어택 2.0분/P)과 견준 변화:
-    // 전체 속도 +9.6P/h, 공부량 −2.2분/P / 타임어택 속도 +21.4P/h, 공부량 −0.8분/P
-    assert.ok(html.includes('속도 +9.6P/h') && html.includes('공부량 −2.2분/P'));
-    assert.ok(html.includes('속도 +21.4P/h') && html.includes('공부량 −0.8분/P'));
-    assert.ok(html.includes('뽀모도로 1회 전'));
+    // 단위를 아직 끝낸 적이 없어 견줄 이전 단위가 없다: 비교 칸 대신 안내 한 줄, 뽀모도로라는 말은 없다
+    assert.ok(html.includes('growth-empty') && !html.includes('data-growth-kind') && !html.includes('뽀모도로 1회 전'));
     // 단위가 없는 과목(growthPageUnit 0)에는 다음 단위까지 게이지가 없다
     assert.ok(!html.includes('다음 단위까지') && !html.includes('unit-pages-remaining'));
     assert.equal((html.match(/>분\/P<\/span>/g) || []).length, 2, 'the two efficiency values carry the per-page unit as their own span');
@@ -4806,13 +4785,13 @@ test('the unit name replaces P and p everywhere in the subject screen and the me
     taskSelector: '오늘 할 일', activeWeekday: 1, activeStudyDate: '2026-10-12', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {},
     pomodoroPlan: { subjectId: 'main', pages: 5, minutes: 25, remainingTaskPages: 25 } }));
   // 속도 n/h, 공부량 분/n, 위치 n.1~20, 단위 20n
-  assert.ok(html.includes('속도 +12.0n/h') && html.includes('공부량 −2.5분/n') && html.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
+  assert.ok(html.includes('growth-empty') && html.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
   assert.ok(html.includes('>분/n</span>'), 'the efficiency values carry the unit name');
   assert.ok(!html.includes('P/h') && !html.includes('분/P') && !/>P<\/span>/.test(html.replace(/<h[^>]*>[\s\S]*?<\/h\d>/g, '')), 'no default P is left in the subject screen');
   // 기본 과목은 그대로 P / p.
   const plain = renderToStaticMarkup(React.createElement(TodaySummary, { logs, subjects: [{ ...custom, pageLabel: undefined }], detailSubjectId: 'main',
     taskSelector: '오늘 할 일', activeWeekday: 1, activeStudyDate: '2026-10-12', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {} }));
-  assert.ok(plain.includes('속도 +12.0P/h') && plain.includes('1번째 단위 · 복습에 넣으면') && !plain.includes('n/h'));
+  assert.ok(plain.includes('>분/P</span>') && plain.includes('1번째 단위 · 복습에 넣으면') && !plain.includes('분/n'));
   // 뽀모도로 요약의 "풀 장수"
   const pomodoro = renderToStaticMarkup(React.createElement(PomodoroSummary, { pages: 6, efficiency: 4.26, attackEfficiency: 1.93, remainingTaskPages: 13, label: '회' }));
   assert.match(pomodoro, /풀 회[\s\S]*6<[^>]*>회/);
