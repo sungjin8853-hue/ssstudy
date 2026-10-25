@@ -99,7 +99,6 @@ export const EfficiencyBoxes: React.FC<{
   efficiency?: number;
   attackEfficiency?: number;
   overall?: GrowthChange | null;
-  attack?: GrowthChange | null;
   headerAction?: React.ReactNode;
   /** 과목이 "페이지"를 부르는 글자(기본 P) */
   label?: string;
@@ -107,12 +106,11 @@ export const EfficiencyBoxes: React.FC<{
   done?: boolean;
   /** 그 성장이 25분 전보다 얼마나 늘었는지(지금 25분 − 직전 25분). 기준과 견줄 수 있을 때만 */
   recentOverall?: GrowthChange | null;
-  recentAttack?: GrowthChange | null;
   /** 견줄 단위가 아직 없을 때 비교 칸 자리에 보이는 말 */
   emptyNote?: string;
   /** 칸 맨 아래 줄(이번 단위). 위 두 줄과 같은 모양으로 들어간다 */
   footer?: React.ReactNode;
-}> = ({ efficiency, attackEfficiency, overall, attack, headerAction, label = DEFAULT_PAGE_LABEL, done = false, recentOverall, recentAttack, footer, emptyNote }) => {
+}> = ({ efficiency, attackEfficiency, overall, headerAction, label = DEFAULT_PAGE_LABEL, done = false, recentOverall, footer, emptyNote }) => {
   const has = (value?: number) => Boolean(value && value > 0);
   return (
     <section aria-label="효율" data-testid="efficiency-cell"
@@ -126,14 +124,14 @@ export const EfficiencyBoxes: React.FC<{
           <span><b>효율</b>은 가장 최근 공부 25분의 평균이에요. 짧은 시간의 값은 믿기 어려워서 25분을 한 덩어리로 봐요.</span>
           <span><b>전체 효율</b>은 풀이와 정리 시간을 모두 합해서 푼 장수로 나눠요. 막힌 문제를 넘긴 만큼 정리에서 드러나서 성장을 재는 기준이 돼요.</span>
           <span><b>타임어택 효율</b>은 타임어택에서 한 장당 걸린 시간이에요. 막힌 문제는 바로 넘기니까 성장은 전체 효율로 봐요.</span>
-          <span><b>속도</b>는 1시간 동안 푸는 장수가 얼마나 늘었는지, <b>공부량</b>은 한 페이지에 쓴 시간이 몇 분 늘었는지예요. 제목 옆 버튼에 적힌 기준(<b>이전 단위</b>)과 견준 값이에요. 오르면 초록, 내리면 빨강이고, 그 아래 작은 줄은 그 성장이 25분 전보다 얼마나 늘었는지예요. 제목 옆 버튼으로 이전 단위, 이이전 단위, 평균과 견줄 수 있어요.</span>
+          <span>전체 효율 아래에 <b>속도</b>(1시간 동안 푸는 장수가 얼마나 늘었는지)와 <b>공부량</b>(한 페이지에 쓴 시간이 몇 분 늘었는지)이 붙어요. 제목 옆 버튼에 적힌 기준(<b>이전 단위</b>, 이이전 단위, 평균)과 견준 값이고, 오르면 초록, 내리면 빨강이에요. 그 아래 작은 줄은 그 성장이 25분 전보다 얼마나 늘었는지예요. 타임어택 효율은 값만 보여줘요.</span>
           <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 효율은 단위를 넘어도 새로 시작하지 않고 계속 이어져요. 평균은 이 과목 전체의 장당 시간이에요.</span>
         </HelpPopover>
       </div>
       <EfficiencyRow testId="current-overall-efficiency" title="전체 효율" badge="성장 척도" value={has(efficiency) ? efficiency! : null}
         compare={overall} recent={recentOverall} label={label} emptyNote={emptyNote} big />
       <EfficiencyRow testId="current-attack-efficiency" title="타임어택 효율" value={has(attackEfficiency) ? attackEfficiency! : null}
-        compare={attack} recent={recentAttack} label={label} />
+        label={label} />
       {footer && <div className="border-t border-slate-300 pt-2.5">{footer}</div>}
     </section>
   );

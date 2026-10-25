@@ -3249,8 +3249,9 @@ test('review growth display switches between completion speed gains and pomodoro
   // 두 번의 복습(복습 한 번 = 한 단위)을 마쳤다: 마지막 복습(6분/P)을 그 전 복습(4분/P)과 견준다 → 속도 −5.0P/h, 공부량 +2.0분/P
   assert.ok(unit.includes('이전 단위') && unit.includes('속도 −5.0P/h') && unit.includes('공부량 +2.0분/P'), unit.slice(unit.indexOf('efficiency-cell'), unit.indexOf('efficiency-cell') + 1500));
   assert.ok(unit.includes('>6.0</span>'));
-  assert.equal((unit.match(/data-growth-kind="speed"/g) || []).length, 2);
-  assert.equal((unit.match(/data-growth-kind="amount"/g) || []).length, 2);
+  // 증감은 전체 효율에만 붙는다(타임어택 효율은 값만)
+  assert.equal((unit.match(/data-growth-kind="speed"/g) || []).length, 1);
+  assert.equal((unit.match(/data-growth-kind="amount"/g) || []).length, 1);
   assert.ok(!unit.includes('임시로') && !unit.includes('h 공부'));
 });
 
@@ -3469,12 +3470,13 @@ test('the efficiency cell shows only the change against the previous unit, with 
   assert.ok(html.indexOf('>2.5</span>') < html.indexOf('속도 +12.0P/h') && html.indexOf('속도 +12.0P/h') < html.indexOf('타임어택 효율'));
   assert.ok(/data-testid="growth-chips"[^>]*bg-green-100[^>]*text-green-700/.test(html) && !html.includes('text-rose-700'));
   assert.ok(html.includes('>2.5</span>') && html.includes('>0.5</span>'));
-  // 이전 단위 대비: 전체 속도 +12.0P/h · 공부량 −2.5분/P, 타임어택 +90.0P/h · −1.5분/P (칸 하나씩)
-  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && html.includes('속도 +90.0P/h') && html.includes('공부량 −1.5분/P'));
-  assert.equal((html.match(/data-testid="growth-chips"/g) || []).length, 2);
-  assert.equal((html.match(/data-growth-kind="speed"/g) || []).length, 2);
+  // 이전 단위 대비: 전체 속도 +12.0P/h · 공부량 −2.5분/P. 타임어택 효율은 값만 보이고 증감 · 25분 전 줄이 없다
+  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && !html.includes('+90.0P/h') && !html.includes('−1.5분/P'));
+  assert.equal((html.match(/data-testid="growth-chips"/g) || []).length, 1);
+  assert.equal((html.match(/data-growth-kind="speed"/g) || []).length, 1);
+  assert.ok(!/current-attack-efficiency[\s\S]*growth-(chips|recent)/.test(html.slice(0, html.indexOf('unit-pages-done'))));
   // 그 아래 작은 줄: 그 성장이 25분 전보다 얼마나 늘었는지(지금 25분 − 직전 25분과 같다)
-  assert.equal((html.match(/data-testid="growth-recent"/g) || []).length, 2);
+  assert.equal((html.match(/data-testid="growth-recent"/g) || []).length, 1);
   assert.ok(html.includes('25분 전보다') && !html.includes('직전'));
   assert.ok(!/[+−-]\d+(\.\d+)?%/.test(html) && !html.includes('rose'), 'no percent growth anywhere');
   // "이번 단위 2번째" 배지가 있으니 안내 줄에 "2번째 단위"를 다시 적지 않는다
@@ -3629,7 +3631,7 @@ test('pomodoro and the efficiency cell share a compact strip with both growth va
   assert.ok(html.includes('필요 횟수'));
   assert.match(html, /5<[^>]*>회/);
   assert.ok(html.includes('전체 효율') && html.includes('타임어택 효율'));
-  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && html.includes('속도 +90.0P/h'));
+  assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && !html.includes('속도 +90.0P/h'));
   assert.ok(html.includes('unit-pages-done'));
   // 값은 가장 최근 25분(2.5 / 0.5)이고, 넘겨받은 5.1 / 2.3(처음 추정값)이 아니다
   assert.ok(html.includes('current-overall-efficiency') && html.includes('>2.5</span>'));

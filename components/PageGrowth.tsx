@@ -200,8 +200,8 @@ export const UnitGrowthEfficiency: React.FC<{
     <div data-testid="unit-growth" className="flex flex-col !border-t-0">
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
-        overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done}
-        recentOverall={view.overall && hasRecent ? recent.overall : null} recentAttack={view.attack && hasRecent ? recent.attack : null}
+        overall={view.overall} headerAction={compare} label={label} done={done}
+        recentOverall={view.overall && hasRecent ? recent.overall : null}
         emptyNote={unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">
