@@ -197,16 +197,20 @@ export const UnitGrowthEfficiency: React.FC<{
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
         overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done}
-        pomodoroOverall={showPomodoro ? pomodoro.overall : null} pomodoroAttack={showPomodoro ? pomodoro.attack : null} />
-      {progress && (
-        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-slate-300 pt-3">
-          <div data-testid="unit-pages-done" className="flex items-baseline gap-3">
-            <p className="text-base font-black text-slate-800">이번 단위</p>
-            <p className="font-mono text-[36px] font-black leading-none tabular-nums text-slate-900">{Number(progress.done.toFixed(2))}<span className="ml-0.5 text-2xl">{label}</span></p>
+        pomodoroOverall={showPomodoro ? pomodoro.overall : null} pomodoroAttack={showPomodoro ? pomodoro.attack : null}
+        compareTitle={`${compareLabel(view)} 대비`}
+        footer={progress ? (
+          <div className="flex flex-col gap-1">
+            <div data-testid="unit-pages-done" className="flex items-baseline justify-between gap-3">
+              <span className="flex items-center gap-2">
+                <span className="text-base font-black text-slate-800">이번 단위</span>
+                <span className="rounded-md bg-slate-700 px-2 py-0.5 text-xs font-black text-white">{progress.index}번째</span>
+              </span>
+              <p className="whitespace-nowrap font-black leading-none tabular-nums text-slate-900"><span className="font-mono text-[30px]">{Number(progress.done.toFixed(2))}</span><span className="ml-1 text-base text-slate-500">{label}</span></p>
+            </div>
+            <p className="text-xs font-bold text-slate-600">{progress.index}번째 단위 · {unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</p>
           </div>
-          <span className="text-sm font-bold text-slate-600">{progress.index}번째 단위 · {unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</span>
-        </div>
-      )}
+        ) : undefined} />
     </div>
   );
 };

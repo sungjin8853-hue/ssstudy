@@ -40,14 +40,51 @@ export const GrowthChips: React.FC<{ change: GrowthChange | null | undefined; sp
   );
 };
 
-/** 효율 숫자 옆의 작은 글자: 뽀모도로 1회 전보다 속도가 얼마나 올랐는지(예: "뽀모도로 1회 전 +1.2P/h") */
-const PomodoroDelta: React.FC<{ change: GrowthChange | null | undefined; label: string }> = ({ change, label }) => {
-  if (!change) return null;
+/**
+ * 비교 칸 하나: 위에 무엇과 견줬는지, 아래에 속도와 공부량을 같은 모양으로 한 줄씩. 두 칸(고른 기준 · 뽀모도로 1회 전)이 똑같이 생겼다.
+ * 속도가 오르면 초록, 그 밖은 짙은 회색(빨간색은 쓰지 않는다 — 느려진 것도 더 오래 공부했다는 뜻이다).
+ */
+const ChangeBox: React.FC<{ title: string; change: GrowthChange; label: string; primary?: boolean }> = ({ title, change, label, primary = false }) => {
+  const arrow = (value: number) => (value > 0 ? <Arrow direction="up" /> : value < 0 ? <Arrow direction="down" /> : null);
   return (
-    <span data-testid="pomodoro-delta" title={`뽀모도로 1회 전보다 ${SPEED_REFERENCE_LABEL} 동안 푸는 ${pageWord(label)} 수의 차이`}
-      className={`ml-2 whitespace-nowrap align-middle text-sm font-black ${change.speedPages > 0 ? 'text-green-800' : 'text-slate-600'}`}>
-      뽀모도로 1회 전 {describeSpeed(change, label).replace(/^속도 /, '')}
-    </span>
+    <div data-testid={primary ? 'growth-chips' : 'pomodoro-delta'} className="flex min-w-0 flex-col gap-1 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-300">
+      <p className="truncate text-xs font-bold text-slate-600">{title}</p>
+      <p data-growth-kind={primary ? 'speed' : 'pomodoro-speed'} title={`${SPEED_REFERENCE_LABEL} 동안 푸는 ${pageWord(label)} 수의 차이`}
+        className={`flex items-center gap-1 whitespace-nowrap text-[15px] font-black tabular-nums ${change.speedPages > 0 ? 'text-green-800' : 'text-slate-800'}`}>
+        {arrow(change.speedPages)}{describeSpeed(change, label)}
+      </p>
+      <p data-growth-kind={primary ? 'amount' : 'pomodoro-amount'} title={`${pageWord(label)} 하나에 쓴 시간(분)의 차이`}
+        className="flex items-center gap-1 whitespace-nowrap text-[15px] font-black tabular-nums text-slate-700">
+        {arrow(change.studyMinutes)}{describeStudyAmount(change, label)}
+      </p>
+    </div>
+  );
+};
+
+/** 효율 한 줄: 이름과 값이 한 줄, 그 아래 비교 칸들(고른 기준 · 뽀모도로 1회 전)이 같은 크기로 나란히 */
+const EfficiencyRow: React.FC<{
+  testId: string; title: string; badge?: string; value: number | null; compare?: GrowthChange | null; compareTitle: string;
+  pomodoro?: GrowthChange | null; label: string; big?: boolean;
+}> = ({ testId, title, badge, value, compare, compareTitle, pomodoro, label, big = false }) => {
+  const boxes = [
+    compare ? <ChangeBox key="compare" title={compareTitle} change={compare} label={label} primary /> : null,
+    pomodoro ? <ChangeBox key="pomodoro" title="뽀모도로 1회 전 대비" change={pomodoro} label={label} /> : null
+  ].filter(Boolean);
+  return (
+    <div data-testid={testId} className={`flex min-w-0 flex-col gap-2 ${big ? '' : 'border-t border-slate-300 pt-2.5'}`}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="flex items-center gap-2">
+          <span className="text-base font-black text-slate-800">{title}</span>
+          {badge && <span className="rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-black text-white">{badge}</span>}
+        </span>
+        <p className={`whitespace-nowrap font-black leading-none tabular-nums ${big ? 'text-indigo-900' : 'text-slate-900'}`}>
+          {value !== null
+            ? <><span className={`font-mono ${big ? 'text-[44px] md:text-[48px]' : 'text-[30px]'}`}>{value.toFixed(1)}</span><span className="ml-1 text-base text-slate-500">분/{label}</span></>
+            : <span className="text-base text-slate-600">측정 필요</span>}
+        </p>
+      </div>
+      {boxes.length > 0 && <div className={`grid gap-2 ${boxes.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>{boxes}</div>}
+    </div>
   );
 };
 
@@ -68,7 +105,11 @@ export const EfficiencyBoxes: React.FC<{
   /** 효율 숫자 옆 빈칸에 붙는 뽀모도로 1회 전 대비(속도). 위 기준이 이미 뽀모도로 1회 전이면 주지 않는다 */
   pomodoroOverall?: GrowthChange | null;
   pomodoroAttack?: GrowthChange | null;
-}> = ({ efficiency, attackEfficiency, overall, attack, headerAction, label = DEFAULT_PAGE_LABEL, done = false, pomodoroOverall, pomodoroAttack }) => {
+  /** 위쪽 비교 칸의 이름(예: "이전 단위 대비"). 제목 옆 버튼으로 고른 기준이다 */
+  compareTitle?: string;
+  /** 칸 맨 아래 줄(이번 단위). 위 두 줄과 같은 모양으로 들어간다 */
+  footer?: React.ReactNode;
+}> = ({ efficiency, attackEfficiency, overall, attack, headerAction, label = DEFAULT_PAGE_LABEL, done = false, pomodoroOverall, pomodoroAttack, compareTitle = '비교 대비', footer }) => {
   const has = (value?: number) => Boolean(value && value > 0);
   return (
     <section aria-label="효율" data-testid="efficiency-cell"
@@ -86,29 +127,11 @@ export const EfficiencyBoxes: React.FC<{
           <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 효율은 단위를 넘어도 새로 시작하지 않고 계속 이어져요. 평균은 이 과목 전체의 장당 시간이에요.</span>
         </HelpPopover>
       </div>
-      <div data-testid="current-overall-efficiency" className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex items-center gap-2">
-            <span className="text-base font-black text-slate-800">전체 효율</span>
-            <span className="rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-black text-white">성장 척도</span>
-          </span>
-          <p className="whitespace-nowrap font-black leading-tight tabular-nums text-indigo-900">
-            {has(efficiency) ? <><span className="font-mono text-[44px] md:text-[48px]">{efficiency!.toFixed(1)}</span><span className="ml-1 text-lg text-slate-500">분/{label}</span></> : <span className="text-xl text-slate-600">측정 필요</span>}
-            {has(efficiency) && <PomodoroDelta change={pomodoroOverall} label={label} />}
-          </p>
-        </div>
-        <GrowthChips change={overall} label={label} />
-      </div>
-      <div data-testid="current-attack-efficiency" className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-300 pt-2.5">
-        <div className="flex items-baseline gap-3 whitespace-nowrap">
-          <span className="text-base font-black text-slate-800">타임어택 효율</span>
-          <span className="font-black leading-tight tabular-nums text-slate-900">
-            {has(attackEfficiency) ? <><span className="font-mono text-[30px]">{attackEfficiency!.toFixed(1)}</span><span className="ml-1 text-base text-slate-500">분/{label}</span></> : <span className="text-base text-slate-600">측정 필요</span>}
-            {has(attackEfficiency) && <PomodoroDelta change={pomodoroAttack} label={label} />}
-          </span>
-        </div>
-        <GrowthChips change={attack} label={label} />
-      </div>
+      <EfficiencyRow testId="current-overall-efficiency" title="전체 효율" badge="성장 척도" value={has(efficiency) ? efficiency! : null}
+        compare={overall} compareTitle={compareTitle} pomodoro={pomodoroOverall} label={label} big />
+      <EfficiencyRow testId="current-attack-efficiency" title="타임어택 효율" value={has(attackEfficiency) ? attackEfficiency! : null}
+        compare={attack} compareTitle={compareTitle} pomodoro={pomodoroAttack} label={label} />
+      {footer && <div className="border-t border-slate-300 pt-2.5">{footer}</div>}
     </section>
   );
 };

@@ -3189,7 +3189,7 @@ test('review subjects respect the selected growth display without editing page u
     subjects: reviewChainSubjects.map(subject => subject.id === 'first' ? { ...subject, growthPageUnit: 20, reviewGrowthDisplay: 'unit' } : subject) }));
   assert.ok(!unit.includes('평균 증가율'));
   // 아직 복습을 마친 적이 없어 지금 단위(복습 한 번)에 15장(5장 + 10장)을 채우는 중
-  assert.ok(unit.includes('unit-pages-done') && /unit-pages-done[\s\S]*?>15<span[^>]*>P<\/span><\/p>/.test(unit) && unit.includes('복습을 마치면 단위가 끝나요'));
+  assert.ok(unit.includes('unit-pages-done') && /unit-pages-done[\s\S]*?>15<\/span><span[^>]*>P<\/span><\/p>/.test(unit) && unit.includes('복습을 마치면 단위가 끝나요'));
   // 최근 25분(2.5분/P, 1시간에 24장)을 1회 전(5분/P, 12장)과 견준다: 속도 +12.0P/h, 공부량 −2.5분/P
   assert.ok(unit.includes('뽀모도로 1회 전') && unit.includes('속도 +12.0P/h') && unit.includes('공부량 −2.5분/P') && !unit.includes('+150.0%'));
   assert.ok(!unit.includes('성장 설정'));
@@ -3495,7 +3495,7 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   // 단위를 막 채웠다: 새 단위가 0장부터 채워지고, 효율 칸에는 이전 단위의 평균을 가져온다. 그 단위 자신과는 견주지 않는다(앞 단위가 없으면 견줄 것이 없다).
   const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, [Date.parse('2026-10-12T06:00:00Z')]);
   assert.ok(filled.includes('>5.0</span>') && !filled.includes('새 단위 시작 전'));
-  assert.ok(/unit-pages-done[\s\S]*?>0<span/.test(filled) && filled.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'), 'a new unit starts from zero after 복습에 넣기');
+  assert.ok(/unit-pages-done[\s\S]*?>0<\/span>/.test(filled) && filled.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'), 'a new unit starts from zero after 복습에 넣기');
   assert.ok(filled.includes('비교할 단위 없음') && !filled.includes('뽀모도로 1회 전'));
   assert.match(filled, /<button[^>]*data-testid="unit-compare"[^>]*disabled=""/);
   // 25분이 안 되는 기록뿐이면 견줄 앞 뽀모도로가 없다
@@ -3504,7 +3504,7 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   // 기록이 하나도 없으면 넘겨받은 값(처음 추정값)을 쓰고, 이번 단위는 0장이다
   const empty = render([], { efficiency: 3.2, attackEfficiency: 0 });
   assert.ok(empty.includes('>3.2</span>') && empty.includes('측정 필요') && empty.includes('비교할 뽀모도로 없음'));
-  assert.ok(/unit-pages-done[\s\S]*?>0<span/.test(empty) && empty.includes('이번 단위'));
+  assert.ok(/unit-pages-done[\s\S]*?>0<\/span>/.test(empty) && empty.includes('이번 단위'));
   // 복습에 넣은 적이 없으면 마친 단위가 없어 뽀모도로 1회 전과 견주고, 효율은 처음부터 이어진다
   const none = render(logs);
   assert.ok(none.includes('뽀모도로 1회 전') && none.includes('1번째 단위'));
@@ -4652,7 +4652,7 @@ test('pomodoro, next-unit and efficiency numbers are large, and the two cells ha
   // 전체 효율 44~48px, 타임어택 30px, 알약 15px
   assert.ok(boxes.includes('md:text-[48px]') && boxes.includes('text-[30px]') && boxes.includes('text-[15px] font-black'));
   // 이번 단위: 36px 숫자(단위 크기가 정해져 있지 않아 게이지는 없다)
-  assert.ok(growth.includes('text-[36px]') && growth.includes('text-base font-black text-slate-800') && !growth.includes('<UnitGauge'));
+  assert.ok(growth.includes('text-[30px]') && growth.includes('text-base font-black text-slate-800') && !growth.includes('<UnitGauge'), 'the unit line sits inside the efficiency cell in the same style as the efficiency rows');
   // 복습과목의 두 공부량 증가율 칸: 라벨 16px / 숫자 30~36px
   const cell = growth.slice(growth.indexOf('const GrowthLines'), growth.indexOf('export const UnitGauge'));
   assert.ok(cell.includes('text-base font-black text-slate-700') && cell.includes('lg:text-4xl') && !cell.includes('text-xs'));
