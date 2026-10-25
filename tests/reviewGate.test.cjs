@@ -5434,7 +5434,7 @@ test('speed panels: percent inside every ratio bar, progress bar, a folder total
   assert.ok(!panelSource.includes('forecast-groups') && !panelSource.includes('columnWeights') && !panelSource.includes('forecast-row'), 'the legend grid and the per-subject rows are gone');
 
   const facts = renderToStaticMarkup(React.createElement(panels.SpeedFacts, { series }));
-  assert.ok(facts.includes('속도 증가율 · 최근') && facts.includes('페이지당 가속도') && facts.includes('+0.37') && facts.includes('P/h/P') && facts.includes('+2.4P/h'));
+  assert.ok(facts.includes('속도 증가율 · 최근') && facts.includes('페이지당 가속도') && facts.includes('+0.37') && facts.includes('P/h · 1P마다') && facts.includes('+2.4P/h'));
   assert.ok(!facts.includes('학습시간 가속도') && !facts.includes('P/h²'), '학습 설정은 시간이 아니라 페이지당 가속도(P/h per P)를 보여 준다');
   assert.ok(renderToStaticMarkup(React.createElement(panels.SpeedFacts, { series: buildSpeedSeries([]) })).includes('측정 필요'));
   // 세부 설명 줄은 없다(튜토리얼로 옮김): 가속도 밑 설명, 그래프 위 값 줄, 범례 괄호
@@ -5544,7 +5544,7 @@ test('"과목·폴더 관리" subjects: weekday need in % under the weekly total
   assert.ok(progress.includes('학습 진척도') && progress.includes('role="progressbar"') && /data-testid="progress-percent"[^>]*>\d+%</.test(progress) && !/학습 진척도[^<]*\d+%/.test(progress), 'progress is the last block of the card, its % is inside the bar');
   assert.ok(!html.includes('누적 시간') && !html.includes('>효율<'), 'cumulative time and the old efficiency box are removed');
   assert.ok(html.includes('>전체 효율<') && !html.includes('타임어택 효율'), 'the subject card shows only the overall efficiency, next to the daily averages');
-  assert.ok(html.includes('속도 증가율 · 하루 평균') && html.includes('페이지당 가속도') && html.includes('P/h/P'), 'the subject growth box follows the chosen unit');
+  assert.ok(html.includes('속도 증가율 · 하루 평균') && html.includes('페이지당 가속도') && html.includes('P/h · 1P마다'), 'the subject growth box follows the chosen unit');
   assert.ok(html.includes('속도 그래프와 예측 펼치기') && !html.includes('data-testid="speed-chart"') && !html.includes('data-testid="forecast"'), 'graph and forecast stay behind ›');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
   assert.ok(source.includes('data-testid="subject-speed-detail"') && source.includes('<SpeedGainChart') && source.includes('<ForecastList') && source.includes('setSpeedOpenSubjectIds'));
@@ -6411,7 +6411,7 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
     const { RatioBar, WeekdayNeedBar } = loadSource('components/SpeedPanels.tsx');
     const ratio = renderToStaticMarkup(React.createElement(RatioBar, { large: true, ariaLabel: 'x', segments: [{ id: 'a', name: 'A', value: 3, color: '#2563eb' }, { id: 'b', name: 'B', value: 1, color: '#f97316' }] }));
     const weekly = renderToStaticMarkup(React.createElement(WeekdayNeedBar, { days: [{ weekday: 1, label: '월', minutes: 90 }, { weekday: 2, label: '화', minutes: 60 }] }));
-    const heightOf = (markup) => Number((/ h-(\d+) /.exec(markup) || [])[1]);
+    const heightOf = (markup) => Number((/ (?:min-)?h-(\d+) /.exec(markup) || [])[1]);
     assert.ok(heightOf(ratio) > heightOf(weekly), `ratio bar h-${heightOf(ratio)} vs weekly h-${heightOf(weekly)}`);
     assert.ok(ratio.includes('text-[18px]'), 'the percent text is bigger too');
   }
@@ -10504,4 +10504,49 @@ test('an edit taken into review can be skipped from the note screen: the review 
   assert.equal('reviewEditIntake' in completeRegularReviewSchedule(edited, now) && completeRegularReviewSchedule(edited, now).reviewEditIntake, undefined);
   // 스위치를 끄고 고치면 기록이 생기지 않는다
   assert.equal(updateReviewGateMemo(log, '광합성:빛 에너지\n호흡:열', undefined, { intake: false, nowMs: now }).reviewEditIntake, undefined);
+});
+
+test('the subject speed chart never mixes the page positions of different books', () => {
+  const { analyzeSubjectSpeed } = loadSource('utils/speedGrowth.ts');
+  const A = { id: 'A', name: '수학', startPage: 1, totalPages: 20, completedPages: 10, targetDate: '2099-01-01', reviewSubjectIds: ['R'] };
+  const R = { id: 'R', name: '오답', startPage: 1, totalPages: 60, completedPages: 30, targetDate: '2099-01-01' };
+  const at = day => new Date(Date.parse('2026-10-01T03:00:00Z') + day * 864e5).toISOString();
+  const logs = [
+    { id: 's1', subjectId: 'A', startPage: 1, endPage: 5, pagesRead: 5, timeSpentMinutes: 25, timestamp: at(0) },
+    { id: 's2', subjectId: 'A', startPage: 6, endPage: 10, pagesRead: 5, timeSpentMinutes: 25, timestamp: at(1) },
+    { id: 'r1', subjectId: 'R', reviewParentSubjectId: 'A', reviewPageRangeBased: true, startPage: 21, endPage: 30, pagesRead: 10, timeSpentMinutes: 25, timestamp: at(2), pomodoroSession: true }
+  ];
+  const analysis = analyzeSubjectSpeed([A, R], logs, A);
+  assert.ok(analysis.series.points.length >= 2);
+  assert.ok(analysis.series.points.every(point => point.page === null), 'with review records mixed in, the axis is pages solved');
+  const own = analyzeSubjectSpeed([A, R], logs.slice(0, 2), A);
+  assert.ok(own.series.points.every(point => typeof point.page === 'number'), 'one book keeps page positions');
+});
+
+test('a follow-up subject can have chapters, its own required flag and its own page word', () => {
+  const schedule = loadSource('utils/schedule.ts');
+  const { getPageLabel } = loadSource('utils/pageLabel.ts');
+  const A = { id: 'A', name: '수학', startPage: 1, totalPages: 10, completedPages: 10, targetDate: '2099-01-01', isRequired: false, pageLabel: 'P',
+    followUpSubjects: [{ id: 'F', name: '심화', startPage: 1, endPage: 30, completedPage: 0, chapters: [{ startPage: 1, endPage: 10 }, { startPage: 21, endPage: 30 }], isRequired: true, pageLabel: '문제' }] };
+  const stage = schedule.getSubjectStages(A).find(item => item.id === 'F');
+  assert.equal(stage.status, 'current');
+  assert.equal(stage.pageCount, 20, 'only pages inside the chapters');
+  assert.equal(schedule.getStageChapters(A, stage).length, 2);
+  assert.equal(schedule.isSubjectRequiredNow(A), true, 'the follow-up decides while it is studied');
+  assert.equal(getPageLabel(A), '문제');
+  const after = schedule.adjustSubjectProgress(A, 12);
+  const moved = schedule.getSubjectStages(after).find(item => item.id === 'F');
+  assert.equal(after.followUpSubjects[0].completedPage, 22, '12 pages inside the chapters end at p.22');
+  assert.equal(moved.currentPage, 23);
+  assert.equal(moved.remainingPages, 8);
+  assert.equal(schedule.isSubjectRequiredNow({ ...A, completedPages: 3 }), false, 'before the follow-up starts the subject decides');
+  assert.equal(getPageLabel({ ...A, completedPages: 3 }), 'P');
+});
+
+test('a new review subject can be made inside the stage editor and is linked to that stage at once', () => {
+  const analytics = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
+  assert.ok(analytics.includes('data-testid="new-review-subject-open"') && analytics.includes('data-testid="new-review-chapters"') && analytics.includes('data-testid="new-review-label"'));
+  assert.ok(analytics.includes('createNewStudyPlan(name, newReviewForm.startPage, newReviewForm.endPage, owner.targetDate, false, [], 0,'), 'the deadline follows the owner subject');
+  assert.ok(analytics.includes("reviewSubjectIds: [...(owner.reviewSubjectIds || []), created.id]"));
+  assert.ok(analytics.includes('data-testid="follow-up-page-label"') && analytics.includes('follow-up-required-'));
 });

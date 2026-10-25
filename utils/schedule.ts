@@ -15,16 +15,23 @@ export const normalizeWeekdays = (days?: number[]) => (
   days && days.length > 0 ? days : WEEKDAYS.map(day => day.id)
 );
 
-export const getFollowUpPageCount = (followUp: FollowUpSubject) => (
-  Math.max(0, Math.round(followUp.endPage) - Math.round(followUp.startPage) + 1)
-);
+/** 후행과목의 단원(없으면 빈 목록) */
+export const getFollowUpChapters = (followUp: Pick<FollowUpSubject, 'chapters'>) => getSubjectChapters(followUp);
 
-export const getFollowUpCompletedPageCount = (followUp: FollowUpSubject) => (
-  Math.min(
+export const getFollowUpPageCount = (followUp: FollowUpSubject) => {
+  // 단원이 있으면 단원 안 페이지만 센다
+  const chapters = getFollowUpChapters(followUp);
+  return chapters.length > 0 ? chaptersPageCount(chapters) : Math.max(0, Math.round(followUp.endPage) - Math.round(followUp.startPage) + 1);
+};
+
+export const getFollowUpCompletedPageCount = (followUp: FollowUpSubject) => {
+  const chapters = getFollowUpChapters(followUp);
+  if (chapters.length > 0) return Math.min(chaptersPageCount(chapters), pagesThrough(chapters, followUp.completedPage));
+  return Math.min(
     getFollowUpPageCount(followUp),
     Math.max(0, Math.round(followUp.completedPage) - Math.round(followUp.startPage) + 1)
-  )
-);
+  );
+};
 
 export const getSubjectStartPage = (subject: Subject) => (
   Math.max(1, Number(subject.startPage) || 1)
@@ -72,9 +79,13 @@ export const getAllSubjectReviewIds = (subject: Subject) => Array.from(new Set([
   ...(subject.followUpSubjects || []).flatMap(stage => stage.reviewSubjectIds || [])
 ].filter(id => id && id !== subject.id)));
 
-/** 단계가 본 과목 단계일 때만 단원이 적용된다(이어 풀 과목 단계에는 단원이 없다) */
-export const getStageChapters = (subject: Subject, stage?: { isFollowUp: boolean } | null) => (
-  stage && !stage.isFollowUp ? getSubjectChapters(subject) : []);
+/** 그 단계의 단원: 본 과목 단계는 과목의 단원, 후행과목 단계는 그 후행과목에 정한 단원(없으면 빈 목록) */
+export const getStageChapters = (subject: Subject, stage?: { isFollowUp: boolean; id?: string } | null) => {
+  if (!stage) return [];
+  if (!stage.isFollowUp) return getSubjectChapters(subject);
+  const followUp = (subject.followUpSubjects || []).find(item => item.id === stage.id);
+  return followUp ? getFollowUpChapters(followUp) : [];
+};
 
 /** 시작 페이지에서 pages장을 풀 때의 끝 페이지. 단원이 있으면 단원 사이를 건너뛰어 센다 */
 export const getRecommendedEndPage = (subject: Subject, stage: { isFollowUp: boolean } | null | undefined, start: number, pages: number) => {
@@ -113,17 +124,23 @@ export const getSubjectStages = (subject: Subject) => {
     },
     ...(subject.followUpSubjects || []).map(followUp => {
       const completedPage = Math.max(followUp.startPage - 1, followUp.completedPage);
+      const followUpChapters = getFollowUpChapters(followUp);
+      const pageCount = getFollowUpPageCount(followUp);
+      const completedCount = getFollowUpCompletedPageCount(followUp);
       return {
         id: followUp.id,
         name: followUp.name,
         startPage: followUp.startPage,
         endPage: followUp.endPage,
         completedPage,
-        currentPage: Math.min(followUp.endPage, completedPage + 1),
-        remainingPages: Math.max(0, followUp.endPage - completedPage),
-        pageCount: getFollowUpPageCount(followUp),
-        completedCount: getFollowUpCompletedPageCount(followUp),
-        chapter: null as ReturnType<typeof getCurrentChapter>,
+        // 단원이 있으면 단원 사이를 건너뛴 다음 단원 시작이 다음에 풀 페이지다
+        currentPage: followUpChapters.length > 0
+          ? nextPageAfter(followUpChapters, completedPage) ?? followUp.endPage
+          : Math.min(followUp.endPage, completedPage + 1),
+        remainingPages: followUpChapters.length > 0 ? Math.max(0, pageCount - completedCount) : Math.max(0, followUp.endPage - completedPage),
+        pageCount,
+        completedCount,
+        chapter: (followUpChapters.length > 0 ? getCurrentChapter(followUpChapters, completedPage) : null) as ReturnType<typeof getCurrentChapter>,
         isFollowUp: true,
         reviewSubjectIds: getSubjectStageReviewSubjectIds(subject, followUp.id)
       };
@@ -139,6 +156,14 @@ export const getSubjectStages = (subject: Subject) => {
         ? 'current' as const
         : 'upcoming' as const
   }));
+};
+
+/** 지금 공부하는 단계로 본 필수 여부: 후행과목을 공부 중이고 그 후행과목에 필수 여부를 정했으면 그 값, 아니면 과목의 값 */
+export const isSubjectRequiredNow = (subject: Subject | undefined | null): boolean => {
+  if (!subject) return false;
+  const stage = getActiveSubjectStage(subject);
+  const followUp = stage?.isFollowUp ? (subject.followUpSubjects || []).find(item => item.id === stage.id) : undefined;
+  return Boolean(followUp?.isRequired ?? subject.isRequired);
 };
 
 export const getActiveSubjectStage = (subject: Subject) => {
@@ -164,10 +189,11 @@ export const adjustSubjectProgress = (subject: Subject, pageDelta: number): Subj
     const pageCount = getFollowUpPageCount(followUp);
     const completedCount = Math.min(pageCount, remainingCompleted);
     remainingCompleted -= completedCount;
+    const followUpChapters = getFollowUpChapters(followUp);
     return {
       ...followUp,
       completedPage: completedCount > 0
-        ? followUp.startPage + completedCount - 1
+        ? (followUpChapters.length > 0 ? pageAtCount(followUpChapters, completedCount) ?? followUp.startPage - 1 : followUp.startPage + completedCount - 1)
         : followUp.startPage - 1
     };
   });

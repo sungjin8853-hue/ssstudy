@@ -4,11 +4,11 @@ import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../uti
 import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/review';
 import { ReviewGrowthSettings } from './PageGrowth';
 import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
-import { SubjectPlanner } from './SubjectPlanner';
+import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
 import { buildReviewWeekCells, buildWeekPlan, mergeWeekCells, resolveSavedWeekdayPages, stepWeekdayPages, toggleStudyWeekday, WeekCell } from '../utils/weekPlan';
-import { getPageLabel, pagePositionLabel } from '../utils/pageLabel';
+import { DEFAULT_PAGE_LABEL, getPageLabel, MAX_PAGE_LABEL_LENGTH, normalizePageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatEstimatedDate, SubjectStage } from '../utils/completionEstimate';
 import {
   calculateFreshWeekdayPagePlan,
@@ -26,6 +26,7 @@ import {
   getSubjectCompletedPageCount,
   getSubjectRemainingPageCount,
   getSubjectStages,
+  getStageChapters,
   getSubjectStageReviewSubjectIds,
   getSubjectTotalPageCount,
   normalizeWeekdays,
@@ -90,10 +91,13 @@ export const Analytics: React.FC<Props> = ({
     name: string;
     startPage: number;
     endPage: number;
-    /** 단원 범위 글(`1~10, 20~30`). 본 과목 단계에서만 쓰고 비우면 단원 없음 */
+    /** 단원 범위 글(`1~10, 20~30`). 비우면 단원 없음 */
     chapterText: string;
     reviewSubjectIds: string[];
     isNew: boolean;
+    /** 후행과목만: 필수 여부와 "페이지"를 부르는 글자(비우면 본 과목의 글자) */
+    isRequired: boolean;
+    pageLabel: string;
   } | null>(null);
   // 아직 ✓를 누르지 않은 새 후행과목: 화면을 떠나면(✓·× 없이) 지운다. 최신 과목 목록과 고칠 함수를 ref로 들고 있는다.
   const pendingNewStageRef = useRef<{ subjectId: string; stageId: string } | null>(null);
@@ -201,6 +205,25 @@ export const Analytics: React.FC<Props> = ({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setExpandedSubjectReviewIds(next);
+  };
+
+  // 단계 연필(✎) 안에서 새 복습과목 만들기: 이름 · 시작/끝 페이지 · 단원 범위 · 단위 이름. 마감일은 그 과목을 따른다(복습과목은 원래 과목의 마감일을 물려받는다).
+  const [newReviewForm, setNewReviewForm] = useState<{ name: string; startPage: number; endPage: number; chapterText: string; pageLabel: string } | null>(null);
+  const createReviewSubjectInline = (owner: Subject) => {
+    if (!newReviewForm || !stageEditForm) return;
+    const chapterParse = parseChapterText(newReviewForm.chapterText);
+    if (chapterParse.error) return;
+    const name = newReviewForm.name.trim() || `${owner.name} 복습`;
+    const created = createNewStudyPlan(name, newReviewForm.startPage, newReviewForm.endPage, owner.targetDate, false, [], 0,
+      newReviewForm.pageLabel.trim() || DEFAULT_PAGE_LABEL, chapterParse.chapters);
+    onAddSubject?.({ ...created, tagIds: owner.tagIds, scheduledWeekdayPages: {} });
+    // "만들고 넣기"는 바로 그 단계의 복습과목으로 붙인다(✓를 누르지 않고 닫아도 떠도는 과목이 남지 않게)
+    const stageId = stageEditForm.stageId;
+    onUpdateSubject?.(stageId === owner.id
+      ? { ...owner, reviewSubjectIds: [...(owner.reviewSubjectIds || []), created.id] }
+      : { ...owner, followUpSubjects: (owner.followUpSubjects || []).map(item => item.id === stageId ? { ...item, reviewSubjectIds: [...(item.reviewSubjectIds || []), created.id] } : item) });
+    setStageEditForm(current => current ? { ...current, reviewSubjectIds: [...current.reviewSubjectIds, created.id] } : current);
+    setNewReviewForm(null);
   };
 
   const toggleStageEditReviewSubject = (reviewSubjectId: string) => {
@@ -448,21 +471,26 @@ export const Analytics: React.FC<Props> = ({
     setEditingId(null);
     setEditForm(null);
     setFolderEditForm(null);
+    setNewReviewForm(null);
     setStageEditForm({
       subjectId: subject.id,
       stageId: stage.id,
       name: stage.name,
       startPage: stage.startPage,
       endPage: stage.endPage,
-      chapterText: stage.isFollowUp ? '' : formatChapters(getSubjectChapters(subject)),
+      chapterText: formatChapters(getStageChapters(subject, stage)),
       reviewSubjectIds: [...stage.reviewSubjectIds],
-      isNew
+      isNew,
+      isRequired: stage.isFollowUp
+        ? ((subject.followUpSubjects || []).find(item => item.id === stage.id)?.isRequired ?? subject.isRequired ?? false)
+        : subject.isRequired ?? false,
+      pageLabel: stage.isFollowUp ? (subject.followUpSubjects || []).find(item => item.id === stage.id)?.pageLabel ?? '' : ''
     });
   };
 
   const saveInlineStageEditor = (subject: Subject) => {
     if (!stageEditForm || stageEditForm.subjectId !== subject.id) return;
-    const chapterParse = stageEditForm.stageId === subject.id ? parseChapterText(stageEditForm.chapterText) : { chapters: [], error: null };
+    const chapterParse = parseChapterText(stageEditForm.chapterText);
     if (chapterParse.error) return;
     const chapters = chapterParse.chapters;
     // 단원을 정했으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다
@@ -494,7 +522,10 @@ export const Analytics: React.FC<Props> = ({
                   startPage,
                   endPage,
                   completedPage: Math.min(endPage, Math.max(startPage - 1, stage.completedPage)),
-                  reviewSubjectIds
+                  reviewSubjectIds,
+                  chapters: chapters.length > 0 ? chapters : undefined,
+                  isRequired: stageEditForm.isRequired,
+                  pageLabel: stageEditForm.pageLabel.trim() ? normalizePageLabel(stageEditForm.pageLabel) : undefined
                 }
               : stage
           ))
@@ -1421,7 +1452,8 @@ export const Analytics: React.FC<Props> = ({
                       && remainingOrderIndex < remainingStages.length - 1
                       && (remainingOrderIndex > 0 || canReplaceCurrentStage);
                     // 단원이 있는 단계는 단원 사이 빈 페이지를 세지 않는다
-                    const stageHasChapters = !stage.isFollowUp && getSubjectChapters(sub).length > 0;
+                    const stageChapterList = getStageChapters(sub, stage);
+                    const stageHasChapters = stageChapterList.length > 0;
                     const stagePageCount = stageHasChapters ? stage.pageCount : Math.max(0, stage.endPage - stage.startPage + 1);
                     const stageCompletedPages = stageHasChapters ? stage.completedCount : Math.min(
                       stagePageCount,
@@ -1430,7 +1462,7 @@ export const Analytics: React.FC<Props> = ({
                     const stageProgress = stagePageCount > 0
                       ? Math.round((stageCompletedPages / stagePageCount) * 100)
                       : 0;
-                    const editChapterParse = isInlineEditing && stageEditForm && !stage.isFollowUp
+                    const editChapterParse = isInlineEditing && stageEditForm
                       ? parseChapterText(stageEditForm.chapterText) : null;
                     const editHasChapters = Boolean(editChapterParse && editChapterParse.chapters.length > 0);
                     const linkedReviewSubjects = stage.reviewSubjectIds
@@ -1548,6 +1580,34 @@ export const Analytics: React.FC<Props> = ({
                                       {editChapterParse.error && <span data-testid="stage-chapters-error" className="mt-1 block text-xs font-bold text-rose-600">{editChapterParse.error}</span>}
                                     </label>
                                   )}
+                                  {stage.isFollowUp && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <span className="block text-xs font-black text-slate-400">필수 여부</span>
+                                        <div role="group" aria-label="후행과목 필수 여부" className="mt-1 flex gap-1">
+                                          {[{ value: true, label: '필수' }, { value: false, label: '선택' }].map(option => (
+                                            <button key={option.label} type="button" aria-pressed={stageEditForm.isRequired === option.value} data-testid={`follow-up-required-${option.value ? 'yes' : 'no'}`}
+                                              onClick={event => { event.preventDefault(); event.stopPropagation(); setStageEditForm(current => current ? { ...current, isRequired: option.value } : current); }}
+                                              className={`h-8 flex-1 rounded-lg text-xs font-black ${stageEditForm.isRequired === option.value ? (option.value ? 'bg-rose-600 text-white' : 'bg-indigo-600 text-white') : 'bg-white text-slate-500 ring-1 ring-slate-200'}`}>
+                                              {option.label}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <label className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <span className="block text-xs font-black text-slate-400">단위 이름</span>
+                                        <input
+                                          data-testid="follow-up-page-label"
+                                          value={stageEditForm.pageLabel}
+                                          maxLength={MAX_PAGE_LABEL_LENGTH}
+                                          placeholder={getPageLabel({ pageLabel: sub.pageLabel })}
+                                          onClick={event => event.stopPropagation()}
+                                          onChange={event => setStageEditForm(current => current ? { ...current, pageLabel: event.target.value } : current)}
+                                          className="mt-1 w-full bg-transparent text-base font-black text-slate-900 outline-none"
+                                        />
+                                      </label>
+                                    </div>
+                                  )}
                                   {stage.status !== 'completed' && (
                                     <div className="flex items-center gap-2">
                                       <span className="mr-auto text-xs font-black text-slate-400">
@@ -1603,7 +1663,7 @@ export const Analytics: React.FC<Props> = ({
                                     {stageBasisNote && <span data-testid="stage-basis" className="text-xs font-black text-amber-700">{stageBasisNote}</span>}
                                   </div>
                                   <p className="mt-1 text-xs font-bold text-slate-400">
-                                    p.{formatPageValue(stage.startPage)}~{formatPageValue(stage.endPage)}{stageHasChapters ? ` · 단원 ${getSubjectChapters(sub).length}개` : ''} · {stageProgress}%
+                                    {pagePositionLabel(normalizePageLabel((sub.followUpSubjects || []).find(item => item.id === stage.id)?.pageLabel || sub.pageLabel))}.{formatPageValue(stage.startPage)}~{formatPageValue(stage.endPage)}{stageHasChapters ? ` · 단원 ${stageChapterList.length}개` : ''} · {stageProgress}%
                                   </p>
                                 </>
                               )}
@@ -1762,7 +1822,53 @@ export const Analytics: React.FC<Props> = ({
 
                         {isInlineEditing && stageEditForm && (
                           <div className="mt-3 rounded-xl bg-slate-900 p-3">
-                            <p className="mb-2 text-xs font-black text-slate-500">복습과목</p>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <p className="text-xs font-black text-slate-500">복습과목</p>
+                              {!newReviewForm && !reviewSubjectIdSet.has(sub.id) && (
+                                <button type="button" data-testid="new-review-subject-open"
+                                  onClick={event => { event.preventDefault(); event.stopPropagation(); setNewReviewForm({ name: '', startPage: 1, endPage: 100, chapterText: '', pageLabel: '' }); }}
+                                  className="rounded-lg border border-rose-400 px-3 py-1.5 text-xs font-black text-rose-200 hover:bg-rose-500 hover:text-white">＋ 새 복습과목</button>
+                              )}
+                            </div>
+                            {newReviewForm && (() => {
+                              const parsed = parseChapterText(newReviewForm.chapterText);
+                              const hasChapters = parsed.chapters.length > 0;
+                              const field = 'rounded-lg border border-slate-700 bg-slate-800 px-3 py-2';
+                              const input = 'mt-1 w-full bg-transparent text-sm font-black text-white outline-none disabled:text-slate-400';
+                              return (
+                                <div data-testid="new-review-subject-form" className="mb-3 grid gap-2 rounded-xl border border-rose-400/60 p-2" onClick={event => event.stopPropagation()}>
+                                  <label className={field}><span className="block text-[11px] font-black text-slate-400">이름</span>
+                                    <input data-testid="new-review-name" value={newReviewForm.name} placeholder={`${sub.name} 복습`} autoFocus
+                                      onChange={event => setNewReviewForm(current => current ? { ...current, name: event.target.value } : current)} className={input} /></label>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <label className={field}><span className="block text-[11px] font-black text-slate-400">시작 페이지</span>
+                                      <input data-testid="new-review-start" type="number" min="1" step="1" disabled={hasChapters}
+                                        value={hasChapters ? parsed.chapters[0].startPage : newReviewForm.startPage}
+                                        onChange={event => setNewReviewForm(current => current ? { ...current, startPage: Number(event.target.value) } : current)} className={input} /></label>
+                                    <label className={field}><span className="block text-[11px] font-black text-slate-400">끝 페이지</span>
+                                      <input data-testid="new-review-end" type="number" min="1" step="1" disabled={hasChapters}
+                                        value={hasChapters ? parsed.chapters[parsed.chapters.length - 1].endPage : newReviewForm.endPage}
+                                        onChange={event => setNewReviewForm(current => current ? { ...current, endPage: Number(event.target.value) } : current)} className={input} /></label>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <label className={field}><span className="block text-[11px] font-black text-slate-400">단원 범위</span>
+                                      <input data-testid="new-review-chapters" value={newReviewForm.chapterText} placeholder="1~10, 20~30"
+                                        onChange={event => setNewReviewForm(current => current ? { ...current, chapterText: event.target.value } : current)} className={input} />
+                                      {parsed.error && <span className="mt-1 block text-[11px] font-bold text-rose-300">{parsed.error}</span>}</label>
+                                    <label className={field}><span className="block text-[11px] font-black text-slate-400">단위 이름</span>
+                                      <input data-testid="new-review-label" value={newReviewForm.pageLabel} placeholder={DEFAULT_PAGE_LABEL} maxLength={MAX_PAGE_LABEL_LENGTH}
+                                        onChange={event => setNewReviewForm(current => current ? { ...current, pageLabel: event.target.value } : current)} className={input} /></label>
+                                  </div>
+                                  <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={event => { event.preventDefault(); setNewReviewForm(null); }}
+                                      className="h-9 rounded-lg bg-slate-700 px-3 text-xs font-black text-slate-200">취소</button>
+                                    <button type="button" data-testid="new-review-create" disabled={Boolean(parsed.error)}
+                                      onClick={event => { event.preventDefault(); createReviewSubjectInline(sub); }}
+                                      className="h-9 rounded-lg bg-rose-500 px-3 text-xs font-black text-white disabled:opacity-40">만들고 넣기</button>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             <div className="max-h-40 overflow-y-auto">
                               <div className="flex flex-wrap gap-2">
                                 {subjects

@@ -26,7 +26,7 @@ import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -665,7 +665,7 @@ export const buildStudyOrderForDate = (
     })
     .filter(item => item.remainingDayPages > 0)
     .sort((a, b) => {
-      const requiredDiff = Number(Boolean(b.subject.isRequired)) - Number(Boolean(a.subject.isRequired));
+      const requiredDiff = Number(isSubjectRequiredNow(b.subject)) - Number(isSubjectRequiredNow(a.subject));
       if (requiredDiff !== 0) return requiredDiff;
 
       const timeDiff = a.estimatedMinutes - b.estimatedMinutes;
@@ -849,7 +849,7 @@ export const buildDueReviewGroups = (
       };
     })
     .sort((a, b) => {
-      const requiredDiff = Number(Boolean(b.subject?.isRequired)) - Number(Boolean(a.subject?.isRequired));
+      const requiredDiff = Number(isSubjectRequiredNow(b.subject)) - Number(isSubjectRequiredNow(a.subject));
       if (requiredDiff !== 0) return requiredDiff;
 
       const knownTimeDiff = Number(a.averageTimePerPage <= 0) - Number(b.averageTimePerPage <= 0);
@@ -921,11 +921,11 @@ const formatPlanMinutes = (minutes: number) => {
 export const buildStudyRunQueue = (reviewGroups: ReviewQueueGroup[], studyOrder: StudyOrderItem[]): StudyRunQueueItem[] => {
   const reviewItems: StudyRunQueueItem[] = reviewGroups.map(group => ({
     kind: 'review', key: `review-${group.id}`, reviewGroup: group,
-    isRequired: Boolean(group.subject?.isRequired), estimatedMinutes: group.estimatedMinutes, name: group.subjectName
+    isRequired: isSubjectRequiredNow(group.subject), estimatedMinutes: group.estimatedMinutes, name: group.subjectName
   }));
   const studyItems: StudyRunQueueItem[] = studyOrder.map(item => ({
     kind: 'study', key: `study-${item.subject.id}`, studyItem: item,
-    isRequired: Boolean(item.subject.isRequired), estimatedMinutes: item.estimatedMinutes, name: item.subject.name
+    isRequired: isSubjectRequiredNow(item.subject), estimatedMinutes: item.estimatedMinutes, name: item.subject.name
   }));
   return [...reviewItems, ...studyItems].sort((a, b) => (
     Number(a.kind !== 'review') - Number(b.kind !== 'review')
@@ -2637,7 +2637,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const pendingDetailKeys = new Set(pendingCards.map(card => card.detailKey));
   const doneCards: TaskCardData[] = completedDetailRows.filter(row => !pendingDetailKeys.has(row.detailId)).map(row => ({
     key: `done-${row.detailId}`, detailKey: row.detailId, kind: row.kind, kindLabel: row.kindLabel, title: row.title,
-    meta: '', required: row.kind === 'study' && Boolean(subjects.find(subject => subject.id === row.detailId)?.isRequired),
+    meta: '', required: row.kind === 'study' && isSubjectRequiredNow(subjects.find(subject => subject.id === row.detailId)),
     timeLabel: '', state: 'done', done: toDoneData(row)
   }));
   const allCards: TaskCardData[] = [...pendingCards, ...doneCards];

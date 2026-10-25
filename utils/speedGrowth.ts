@@ -286,7 +286,11 @@ export const analyzeSubjectSpeed = (subjects: Subject[], logs: StudyLog[], subje
         basis: own.latestSpeed !== null ? 'measured' : baseSpeed ? 'inherited' : 'none' });
     });
   });
-  const combined = toUnit([...familyLogs, ...workingReviewSamples]);
+  // 현재 과목과 복습과목은 서로 다른 책이라 페이지 위치를 한 가로축에 놓을 수 없다(섞으면 그래프가 앞뒤로 뒤죽박죽 된다).
+  // 복습과목 기록이 섞이면 페이지 위치를 빼서 "푼 장수의 합"(늘 앞으로만 감)을 가로축으로 쓴다.
+  const combined = toUnit(workingReviewSamples.length > 0
+    ? [...familyLogs, ...workingReviewSamples].map(sample => ({ ...sample, startPage: undefined, endPage: undefined }))
+    : familyLogs);
   return {
     stageId: current?.id ?? null, series: combined.series, efficiency: combined.efficiency, own: toUnit(familyLogs), basicReview: toUnit(getBasicReviewSpeedSamples(familyLogs)), reviews,
     forecast, totalMinutes: forecast.reduce((sum, item) => sum + (item.minutes ?? 0), 0)

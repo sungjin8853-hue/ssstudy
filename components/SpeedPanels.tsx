@@ -114,11 +114,11 @@ export const WeekdayNeedBar: React.FC<{ days: WeekdayNeed[]; scheduledDays?: num
       </div>
       {total > 0 ? (
         <div role="img" aria-label={`요일별 필요 시간 ${active.map(item => `${item.day.label} ${formatHoursMinutes(item.day.minutes)}(${item.percent}%)`).join(', ')}`}
-          className="flex h-8 w-full gap-0.5 overflow-hidden rounded-lg">
+          className="flex min-h-8 w-full gap-0.5 overflow-hidden rounded-lg">
           {active.map(({ day, percent }, index) => (
             <div key={day.weekday} data-testid="weekday-segment" data-weekday={day.weekday} title={`${day.label}요일 ${formatHoursMinutes(day.minutes)} · ${percent}%`}
               style={{ flexGrow: day.minutes, flexBasis: 0 }}
-              className={`flex min-w-[3.5rem] flex-wrap content-center items-center justify-center gap-x-2 whitespace-nowrap px-1 leading-tight sm:min-w-[4.25rem] ${index % 2 === 0 ? 'bg-indigo-700 text-white' : 'bg-indigo-300 text-indigo-950'} ${day.isToday ? 'ring-2 ring-inset ring-amber-300' : ''}`}>
+              className={`flex min-w-[3.5rem] flex-wrap content-center items-center justify-center gap-x-2 whitespace-nowrap px-1 py-0.5 leading-tight sm:min-w-[4.25rem] ${index % 2 === 0 ? 'bg-indigo-700 text-white' : 'bg-indigo-300 text-indigo-950'} ${day.isToday ? 'ring-2 ring-inset ring-amber-300' : ''}`}>
               {/* 요일이 시간보다 크고 굵다(굵기: 요일 bold > 시간 semibold). 칸이 넓으면 한 줄로, 좁으면 위아래로 쌓인다. */}
               <span className="text-[15px] font-bold sm:text-[17px]">{day.label}</span>
               <span data-testid="weekday-time" className="text-[14px] font-semibold tabular-nums sm:text-[16px]">{formatHoursMinutes(day.minutes)}</span>
@@ -292,7 +292,7 @@ export const WeekdayTimeBar: React.FC<{ days: WeekdayNeed[]; selected: number | 
   const active = days.filter(day => day.minutes > 0);
   if (active.length === 0) return <div data-testid="weekday-time-bar-empty" className="flex h-12 items-center justify-center rounded-lg bg-slate-100 text-[13px] font-bold text-slate-500">{hasSchedule ? '측정 필요 · 속도를 재면 요일별 시간이 나와요' : '학습 요일 없음'}</div>;
   return (
-    <div data-testid="weekday-time-bar" role="group" aria-label="요일별 학습 시간" className="flex h-8 w-full gap-0.5 overflow-hidden rounded-lg">
+    <div data-testid="weekday-time-bar" role="group" aria-label="요일별 학습 시간" className="flex min-h-8 w-full gap-0.5 overflow-hidden rounded-lg">
       {active.map((day, index) => {
         const picked = selected === day.weekday;
         return (
@@ -300,7 +300,7 @@ export const WeekdayTimeBar: React.FC<{ days: WeekdayNeed[]; selected: number | 
             aria-label={`${day.label}요일 ${formatHoursMinutes(day.minutes)}`} title={`${day.label}요일 ${formatHoursMinutes(day.minutes)}`}
             onClick={() => onSelect(picked ? null : day.weekday)}
             style={{ flexGrow: day.minutes, flexBasis: 0 }}
-            className={`flex min-w-[3.5rem] flex-wrap content-center items-center justify-center gap-x-2 whitespace-nowrap px-1 leading-tight transition-opacity sm:min-w-[4.25rem] ${index % 2 === 0 ? 'bg-indigo-700 text-white' : 'bg-indigo-300 text-indigo-950'} ${picked ? 'ring-2 ring-inset ring-slate-900' : day.isToday ? 'ring-2 ring-inset ring-amber-300' : ''} ${selected !== null && !picked ? 'opacity-50' : ''}`}>
+            className={`flex min-w-[3.5rem] flex-wrap content-center items-center justify-center gap-x-2 whitespace-nowrap px-1 py-0.5 leading-tight transition-opacity sm:min-w-[4.25rem] ${index % 2 === 0 ? 'bg-indigo-700 text-white' : 'bg-indigo-300 text-indigo-950'} ${picked ? 'ring-2 ring-inset ring-slate-900' : day.isToday ? 'ring-2 ring-inset ring-amber-300' : ''} ${selected !== null && !picked ? 'opacity-50' : ''}`}>
             <span className="text-[15px] font-bold sm:text-[17px]">{day.label}</span>
             <span data-testid="weekday-time" className="text-[14px] font-semibold tabular-nums sm:text-[16px]">{formatHoursMinutes(day.minutes)}</span>
           </button>
@@ -679,7 +679,7 @@ export const SpeedFacts: React.FC<{ series: SpeedSeries; label?: string; /** 단
     <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
       <p className="text-[12px] font-bold text-slate-500">페이지당 가속도</p>
       <p data-testid="speed-acceleration" className={`font-mono text-[22px] font-black leading-tight tabular-nums ${pageAcceleration === null ? 'text-slate-400' : pageAcceleration < 0 ? 'text-amber-700' : 'text-indigo-700'}`}>
-        {pageAcceleration === null ? '측정 필요' : <>{formatSignedHundredth(pageAcceleration)}<span className="ml-1 text-[13px] font-bold text-slate-500">{label}/h/{label}</span></>}
+        {pageAcceleration === null ? '측정 필요' : <>{formatSignedHundredth(pageAcceleration)}<span className="ml-1 text-[13px] font-bold text-slate-500">{label}/h · 1{label}마다</span></>}
       </p>
     </div>
   </div>

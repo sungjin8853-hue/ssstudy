@@ -13,6 +13,7 @@ import {
   getLogStudyDate,
   getRecommendedEndPage,
   getStageChapters,
+  isSubjectRequiredNow,
   getSubjectStages,
   getSubjectRemainingPageCount,
   normalizeWeekdays,
@@ -890,7 +891,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       <span data-testid="detail-kind" className={`shrink-0 rounded-md px-2.5 py-0.5 text-[13px] font-black ${kindChip}`}>
         {detailData.owner ? '복습과목' : detailData.isBasicReviewDetail ? '기본 복습' : '학습'}
       </span>
-      {!detailIsReview && detailData.subject.isRequired && <span className="shrink-0 rounded-md border border-slate-900 px-2 py-0.5 text-[13px] font-black text-slate-900">필수</span>}
+      {!detailIsReview && isSubjectRequiredNow(detailData.subject) && <span className="shrink-0 rounded-md border border-slate-900 px-2 py-0.5 text-[13px] font-black text-slate-900">필수</span>}
       {/* 기본 복습은 제목 옆에 복습할 범위(시작~끝 페이지)를 둔다(21:55 "제목 옆 복습 시작페이지와 끝 페이지") */}
       {detailData.isBasicReviewDetail && basicReviewPlan?.rangeLabel && (
         <span data-testid="basic-review-range" className="shrink-0 font-mono text-[20px] font-black tabular-nums text-slate-800">{pagePos}.{basicReviewPlan.rangeLabel}</span>
