@@ -442,7 +442,10 @@ export interface SpeedAxis {
 
 export const speedAxisOf = (points: Array<{ page?: number | null; pagesDone?: number }>): SpeedAxis => {
   const positions = points.map(point => point.page);
-  const position = positions.length > 0 && positions.every(value => typeof value === 'number' && Number.isFinite(value));
+  // 페이지 위치는 앞으로만 갈 때만 가로축으로 쓴다. 같은 쪽을 다시 풀거나 앞 페이지로 돌아간 기록이 섞이면 위치가 앞뒤로 오가
+  // 선이 겹쳐 그려지므로(한 위치에 여러 값), 그때는 늘 앞으로만 가는 "푼 장수의 합"을 가로축으로 쓴다.
+  const position = positions.length > 0 && positions.every((value, index) => typeof value === 'number' && Number.isFinite(value)
+    && (index === 0 || value >= (positions[index - 1] as number)));
   const values = position ? positions as number[] : points.map(point => point.pagesDone ?? 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -679,7 +682,7 @@ export const SpeedFacts: React.FC<{ series: SpeedSeries; label?: string; /** 단
     <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
       <p className="text-[12px] font-bold text-slate-500">페이지당 가속도</p>
       <p data-testid="speed-acceleration" className={`font-mono text-[22px] font-black leading-tight tabular-nums ${pageAcceleration === null ? 'text-slate-400' : pageAcceleration < 0 ? 'text-amber-700' : 'text-indigo-700'}`}>
-        {pageAcceleration === null ? '측정 필요' : <>{formatSignedHundredth(pageAcceleration)}<span className="ml-1 text-[13px] font-bold text-slate-500">{label}/h · 1{label}마다</span></>}
+        {pageAcceleration === null ? '측정 필요' : <>{formatSignedHundredth(pageAcceleration)}<span className="ml-1 text-[13px] font-bold text-slate-500">{label}/h씩 · 1{label} 풀 때마다</span></>}
       </p>
     </div>
   </div>

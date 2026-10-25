@@ -1,5 +1,6 @@
 import type { StudyLog } from '../types';
 import { pageUnitIndex } from './pageGrowth';
+import { unitIndexAt } from './reviewUnits';
 import { getLogStudyDate } from './schedule';
 
 /**
@@ -76,6 +77,28 @@ export const groupLogsByPageUnit = (logs: StudyLog[], unitSize: number, firstPag
         && pageUnitIndex(log.startPage!, unitSize, first) < pageUnitIndex(log.endPage!, unitSize, first)).map(log => log.id)
     }))
     .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+};
+
+/**
+ * 단위(15:28 결정)마다 한 구역: 이전 "복습에 넣기"부터 다음 "복습에 넣기"까지(처음은 시작부터 첫 복습에 넣기까지).
+ * boundaries는 복습에 넣은 시각들(오래된 것부터, reviewUnits.registrationBoundaries). 아직 넣지 않은 기록들은 지금 채우는 단위다.
+ * 복습에 넣은 적이 한 번도 없으면 전처럼 학습한 날마다 한 구역이다. 단위의 쪽 범위는 그 단위 기록들의 처음·끝 페이지다.
+ */
+export const groupLogsByReviewUnit = (logs: StudyLog[], boundaries: readonly number[], scope = 'notes'): NoteUnitPage[] => {
+  if (!logs.length) return [];
+  const chronological = [...logs].sort(byTime);
+  if (!boundaries.length) return groupLogsByDay(chronological, scope);
+  const byUnit = new Map<number, StudyLog[]>();
+  chronological.forEach(log => {
+    const index = unitIndexAt(timeOf(log), boundaries);
+    byUnit.set(index, [...(byUnit.get(index) ?? []), log]);
+  });
+  return [...byUnit.entries()].sort(([a], [b]) => a - b).map(([index, items]): NoteUnitPage => {
+    const starts = items.map(log => log.startPage ?? log.endPage).filter((page): page is number => Number.isFinite(page));
+    const ends = items.map(log => log.endPage ?? log.startPage).filter((page): page is number => Number.isFinite(page));
+    return { key: `${scope}:runit:${index}`, kind: 'unit', index,
+      ...(starts.length && ends.length ? { start: Math.min(...starts), end: Math.max(...ends) } : {}), logs: items, spanning: [] };
+  });
 };
 
 /** 노트를 열 때 보여 주는 쪽: 맨 뒤 쪽(가장 뒤의 단위·가장 최근의 날). */

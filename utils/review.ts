@@ -186,7 +186,7 @@ export interface UnitReviewResult {
 
 /** 대기 기록을 복습으로 등록한 기록: 복습 포함, 고른 난도(reviewFsrs)가 정한 때가 첫 복습(난도가 없으면 2시간 뒤) */
 const registerPendingLog = (log: StudyLog, nowMs: number, range?: { start: number; end: number }): StudyLog => ({
-  ...log, unitReviewPending: undefined, reviewUnitRange: range ?? log.reviewUnitRange,
+  ...log, unitReviewPending: undefined, reviewUnitRange: range ?? log.reviewUnitRange, reviewRegisteredAt: new Date(nowMs).toISOString(),
   isCondensed: false, reviewEnabled: true, isReviewed: false, reviewStep: 0,
   nextReviewDate: new Date(log.reviewFsrs ? log.reviewFsrs.lastReviewMs + fsrsIntervalMs(log.reviewFsrs) : nowMs + INITIAL_REVIEW_DELAY_MS).toISOString()
 });

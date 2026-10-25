@@ -1,4 +1,5 @@
 import { formatDoneMinutes } from '../utils/studyReport';
+import { registrationBoundaries, reviewCompletionBoundaries } from '../utils/reviewUnits';
 import React, { useEffect, useMemo, useState } from 'react';
 import { StudyLog, Subject, ReviewMemoDocument } from '../types';
 import { calculateBasicReviewEfficiencyByNumber, calculateRecentTimedPageAverage, calculateReviewChangeAmounts, calculateStats, getReviewSpeedSeries, calculateSubjectReviewAverageTimePerPage, calculateTimeAttackAverage, getReviewEfficiencySamples } from '../utils/math';
@@ -22,7 +23,7 @@ import {
 import { getSubjectChapters, pagesBetween } from '../utils/subjectChapters';
 import { ReviewMemoEditor } from './ReviewMemoEditor';
 import { ReviewSpeedGrowthCell, SpeedGraph, UnitGrowthEfficiency } from './PageGrowth';
-import { describeGrowthChange, describeSpeed, getEfficiencyScope, getEfficiencyView, getGrowthUnitSize, pagesPerReferenceTime, toGrowthChange } from '../utils/pageGrowth';
+import { describeGrowthChange, describeSpeed, getEfficiencyScope, getEfficiencyView, pagesPerReferenceTime, toGrowthChange } from '../utils/pageGrowth';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel, pageWord } from '../utils/pageLabel';
 import { getSubjectChain, getSubjectFamily, hasSubjectChain, isFamilyStudyLog, SubjectFamily } from '../utils/subjectChain';
 import { estimateSubjectEndDate, formatShortEndDate } from '../utils/completionEstimate';
@@ -279,13 +280,15 @@ export const buildCompletedDetailRows = (
     const subject = subjects.find(item => item.id === latest.subjectId);
     const label = getPageLabel(subject);
     if (kind === 'review' && !isBasic) {
-      if (subject?.reviewGrowthDisplay === 'unit') {
+      // 복습과목도 기본은 단위(복습 한 번) 비교다. '이번 복습' 비율은 직접 고른 과목만
+      if (subject?.reviewGrowthDisplay !== 'review') {
         const owner = owners.get(latest.subjectId);
         const growthLogs = owner
           ? getReviewEfficiencySamples(logs, owner.id, latest.subjectId).map((sample, index) => ({ ...sample, id: `completed-growth-${index}`, subjectId: latest.subjectId }))
           : logs;
+        // 복습과목의 단위는 복습 한 번(그 복습과목을 마친 때까지)
         const scope = getEfficiencyScope(growthLogs.filter(log => log.timestamp <= latest.latestTimestamp),
-          getGrowthUnitSize(subject.growthPageUnit), subject.startPage);
+          owner ? reviewCompletionBoundaries(logs, owner.id, latest.subjectId) : []);
         const described = describeGrowthChange(getEfficiencyView(scope, 1).overall, false, label);
         growth = described ? `뽀모도로 1회 전 대비 ${described}` : null;
       } else if (latest.reviewSpeedChangePercent !== null) {
@@ -602,8 +605,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       efficiency,
       attackEfficiency: calculateTimeAttackAverage(growthLogs),
       reviewStartPage: owner ? dueRepeat ? getRepeatedReviewRange(dueRepeat, subject).startPage : getReviewStartPage(subject) : null,
-      // 단위는 지금 공부하는 단계(과목 자신 또는 후행과목)의 첫 페이지부터 끊고, 단계가 끝나 가는 정도도 그 단계 기준으로 본다.
-      efficiencyScope: getEfficiencyScope(growthLogs, getGrowthUnitSize(subject.growthPageUnit), activeStage?.startPage ?? subject.startPage, activeStage?.completedPage ?? subject.completedPages),
+      // 단위: 학습과목은 "복습에 넣기" 사이(처음은 시작부터 첫 복습에 넣기까지), 복습과목은 복습 한 번
+      efficiencyScope: getEfficiencyScope(growthLogs, owner ? reviewCompletionBoundaries(logs, owner.id, subject.id) : registrationBoundaries(subjectLogs)),
       reviewSpeedChanges: owner ? calculateReviewChangeAmounts(logs, owner.id, subject.id, activeStudyDate) : null,
       reviewSpeedSeries: owner ? getReviewSpeedSeries(logs, owner.id, subject.id) : null,
       basicReviewTrend,
@@ -843,13 +846,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   ) : null;
   // 오른쪽 "성장" 칸의 내용. 복습과목은 측정 방식이 둘 중 하나다: 평균·이번 복습 증가율(+속도 그래프, 비슷한 새 문제집 사이의 성장)
   // 또는 전체·타임어택 효율(한 문제집을 계속 복습). 증가율 방식이면 효율 줄은 아예 그리지 않는다.
-  const reviewRateMode = Boolean(detailData && detailData.owner && detailData.subject.reviewGrowthDisplay !== 'unit');
+  const reviewRateMode = Boolean(detailData && detailData.owner && detailData.subject.reviewGrowthDisplay === 'review');
   const growthNode = detailData && reviewRateMode
     ? <ReviewSpeedGrowthCell changes={detailData.reviewSpeedChanges!} series={detailData.reviewSpeedSeries ?? undefined} label={pageLabel} />
     : undefined;
   const efficiencyNode = detailData
     ? (reviewRateMode ? <></>
-      : <UnitGrowthEfficiency key={detailData.subject.id} scope={detailData.efficiencyScope} label={pageLabel}
+      : <UnitGrowthEfficiency key={detailData.subject.id} scope={detailData.efficiencyScope} label={pageLabel} unitEnd={detailData.owner ? 'review' : 'register'}
         efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency} done={showDoneCard && Boolean(doneRow)} />)
     : undefined;
   const stepsChips = idle && detailData ? (

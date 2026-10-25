@@ -8,9 +8,9 @@ import { NoteSymbolBar } from './NoteSymbolBar';
 import { NoteTutorial } from './Tutorials';
 import { parseNoteDiagram, parseCriterionRelation, parseCriterionLabels, parseLogicText } from '../utils/noteDiagram';
 import type { LogicNode, DiagramLogicOperator as ReviewLogicalOperator } from '../utils/noteDiagram';
-import { groupLogsByPageUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS, paginateNoteSections } from '../utils/noteUnits';
+import { groupLogsByReviewUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS, paginateNoteSections } from '../utils/noteUnits';
 import type { NoteSheetPage, NoteSheetSection } from '../utils/noteUnits';
-import { getGrowthUnitSize } from '../utils/pageGrowth';
+import { registrationBoundaries } from '../utils/reviewUnits';
 import type { DiagramArrow, DiagramItem, DiagramOperator } from '../utils/noteDiagram';
 import { createSessionMemoRecord, readSessionMemos } from '../utils/sessionMemo';
 import { NotePracticeDialog } from './NotePractice';
@@ -557,7 +557,7 @@ const SectionHeading: React.FC<{ section: NoteSheetSection }> = ({ section }) =>
     {section.kind === 'unit' ? (
       <>
         <span data-note-unit-number={(section.index ?? 0) + 1} className="text-xl font-black text-indigo-900">{(section.index ?? 0) + 1}번째 단위</span>
-        <span className="font-mono text-sm font-bold text-slate-500">p.{section.start}~{section.end}</span>
+        {section.start !== undefined && section.end !== undefined && <span className="font-mono text-sm font-bold text-slate-500">p.{section.start}~{section.end}</span>}
       </>
     ) : (
       <span data-note-day-heading={section.day} className="text-xl font-black text-indigo-900">{dayLabel(section.day)}</span>
@@ -707,7 +707,9 @@ export const NoteTab: React.FC<{
     };
   }, [current, onUpdateReviewMemo]);
   const currentSubject = current ? subjects.find(subject => subject.id === current.id) : undefined;
-  const unitSize = currentSubject ? getGrowthUnitSize(currentSubject.growthPageUnit) : 0;
+  // 단위: "복습에 넣기" 사이(이 과목의 모든 기록에서 복습에 넣은 시각으로 나눈다). 넣은 적이 없으면 하루마다
+  const unitBoundaries = useMemo(() => (current ? registrationBoundaries(logs.filter(log => log.subjectId === current.id)) : []), [current?.id, logs]);
+  const unitKey = unitBoundaries.join(',');
   const rowCache = useRef(new Map<string, number>());
   const [layoutTick, setLayoutTick] = useState(0);
   const repaginate = () => { rowCache.current.clear(); setLayoutTick(tick => tick + 1); };
@@ -719,9 +721,9 @@ export const NoteTab: React.FC<{
     return rowsOfLog;
   }, []);
   const pages = useMemo(
-    () => (current ? paginateNoteSections(groupLogsByPageUnit(current.logs, unitSize, currentSubject?.startPage ?? 1, current.id), NOTE_PAGE_ROWS, rowsOf) : []),
+    () => (current ? paginateNoteSections(groupLogsByReviewUnit(current.logs, unitBoundaries, current.id), NOTE_PAGE_ROWS, rowsOf) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [current, unitSize, currentSubject?.startPage, rowsOf, layoutTick]
+    [current, unitKey, rowsOf, layoutTick]
   );
   const [pageKey, setPageKey] = useState<string | null>(null);
   const foundPage = pages.findIndex(item => item.key === pageKey);
@@ -884,7 +886,7 @@ export const NoteTab: React.FC<{
       {showTutorial && <NoteTutorial onClose={() => setShowTutorial(false)} />}
       {showPractice && (
         <NotePracticeDialog subjectId={current.id} subjectName={current.name} criterion={criterion} onClose={() => setShowPractice(false)}
-          units={groupLogsByPageUnit(current.logs, unitSize, currentSubject?.startPage ?? 1, current.id)}
+          units={groupLogsByReviewUnit(current.logs, unitBoundaries, current.id)}
           defaultUnitKey={page?.sections[0]?.key} />
       )}
     </div>

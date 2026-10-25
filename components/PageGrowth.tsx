@@ -10,7 +10,7 @@ export const ReviewGrowthSettings: React.FC<{ value: 'review' | 'unit'; onChange
     <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="복습과목 측정 방식">
       {([
         { value: 'review', label: '평균 속도 증가율', sub: '평균 · 이번 복습 두 값' },
-        { value: 'unit', label: '타임어택 포함', sub: '전체·타임어택 효율, 뽀모도로 성장' }
+        { value: 'unit', label: '타임어택 포함', sub: '이전 복습(단위) 대비 · 뽀모도로 성장' }
       ] as const).map(option => (
         <button key={option.value} type="button" aria-pressed={value === option.value}
           onClick={event => { event.stopPropagation(); onChange(option.value); }}
@@ -170,9 +170,17 @@ export const UnitGrowthEfficiency: React.FC<{
   scope: EfficiencyScope; efficiency?: number; attackEfficiency?: number; label?: string;
   /** 오늘 할 양을 끝낸 과목(초록 톤) */
   done?: boolean;
-}> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false }) => {
-  const [comparison, setComparison] = useState<EfficiencyComparison>({ kind: 'pomodoro', n: 1 });
-  const view = getEfficiencyView(scope, comparison);
+  /** 단위가 끝나는 때: 학습과목은 "복습에 넣기", 복습과목은 복습을 마칠 때 */
+  unitEnd?: 'register' | 'review';
+}> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false, unitEnd = 'register' }) => {
+  // 기본은 이전 단위와 견준다(이전 단위가 없으면 버튼이 "비교할 단위 없음"). 효율 숫자 옆에는 늘 뽀모도로 1회 전 대비가 따로 붙는다.
+  // 고르기 전(null)에는 이전 단위, 마친 단위가 아직 없으면 뽀모도로 1회 전과 견준다
+  const [picked, setComparison] = useState<EfficiencyComparison | null>(null);
+  const unitView = getEfficiencyView(scope, { kind: 'unit', n: 1 });
+  const comparison: EfficiencyComparison = picked ?? (unitView.maxUnits > 0 || unitView.inherited ? { kind: 'unit', n: 1 } : { kind: 'pomodoro', n: 1 });
+  const view = picked ? getEfficiencyView(scope, comparison) : comparison.kind === 'unit' ? unitView : getEfficiencyView(scope, comparison);
+  const pomodoro = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
+  const showPomodoro = !(view.choice.kind === 'pomodoro' && view.choice.n === 1) && pomodoro.choice.kind === 'pomodoro' && pomodoro.choice.n === 1;
   const progress = scope.progress;
   const canCompare = view.options.length > 1 || (view.options.length === 1 && !sameComparison(view.options[0], view.choice));
   const compare = (
@@ -188,17 +196,15 @@ export const UnitGrowthEfficiency: React.FC<{
     <div data-testid="unit-growth" className="flex flex-col !border-t-0">
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
-        overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done} />
+        overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done}
+        pomodoroOverall={showPomodoro ? pomodoro.overall : null} pomodoroAttack={showPomodoro ? pomodoro.attack : null} />
       {progress && (
-        <div className="mt-3 flex flex-col gap-2.5 border-t border-slate-300 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <div data-testid="unit-pages-remaining" className="flex items-baseline gap-3">
-              <p className="text-base font-black text-slate-800">다음 단위까지</p>
-              <p className="font-mono text-[36px] font-black leading-none tabular-nums text-slate-900">{Number(progress.remaining.toFixed(2))}<span className="ml-0.5 text-2xl">{label}</span></p>
-            </div>
-            <span className="text-sm font-bold text-slate-600">{progress.index}번째 단위 · {progress.unitSize}{label}씩</span>
+        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-slate-300 pt-3">
+          <div data-testid="unit-pages-done" className="flex items-baseline gap-3">
+            <p className="text-base font-black text-slate-800">이번 단위</p>
+            <p className="font-mono text-[36px] font-black leading-none tabular-nums text-slate-900">{Number(progress.done.toFixed(2))}<span className="ml-0.5 text-2xl">{label}</span></p>
           </div>
-          <UnitGauge done={progress.done} total={progress.unitSize} />
+          <span className="text-sm font-bold text-slate-600">{progress.index}번째 단위 · {unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</span>
         </div>
       )}
     </div>

@@ -68,7 +68,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const handleAdd = () => {
     if (!name || !date || chapterParse.error) return;
     const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays,
-      noPageUnit ? 0 : growthPageUnit, pageLabel, chapterParse.chapters);
+      0, pageLabel, chapterParse.chapters);
 
     onAddSubject({
       ...nextSubject,
@@ -139,19 +139,6 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               <label htmlFor="new-plan-page-label" className={labelClass}>단위 이름</label>
               <input id="new-plan-page-label" value={pageLabel} maxLength={MAX_PAGE_LABEL_LENGTH}
                 placeholder={DEFAULT_PAGE_LABEL} onChange={event => setPageLabel(event.target.value)} className={fieldClass} />
-            </div>
-            <div className="col-span-2 space-y-1">
-              <label htmlFor="new-plan-page-unit" className={labelClass}>{word} 단위</label>
-              <div className="flex items-center gap-3">
-                <input id="new-plan-page-unit" type="number" min="1" step="1" value={growthPageUnit} disabled={noPageUnit}
-                  onChange={event => setGrowthPageUnit(Number(event.target.value))}
-                  className={`${fieldClass} ${noPageUnit ? 'opacity-40' : ''}`} />
-                <label htmlFor="new-plan-no-unit" className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-black text-slate-600">
-                  <input id="new-plan-no-unit" type="checkbox" checked={noPageUnit}
-                    onChange={event => setNoPageUnit(event.target.checked)} className="h-5 w-5 accent-indigo-600" />
-                  단위 없음
-                </label>
-              </div>
             </div>
             <div className="col-span-2 space-y-1 md:col-span-1">
               <p className={labelClass}>중요도</p>

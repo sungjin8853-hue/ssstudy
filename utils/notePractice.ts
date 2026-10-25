@@ -22,7 +22,7 @@ const dayText = (day?: string) => {
 
 /** 범위를 고르는 칸에 보이는 이름: "3번째 단위 · p.21~30" 또는 "10월 12일" */
 export const noteUnitLabel = (unit: NoteUnitPage) => (
-  unit.kind === 'unit' ? `${(unit.index ?? 0) + 1}번째 단위 · p.${unit.start}~${unit.end}` : dayText(unit.day)
+  unit.kind === 'unit' ? `${(unit.index ?? 0) + 1}번째 단위${unit.start !== undefined ? ` · p.${unit.start}~${unit.end}` : ''}` : dayText(unit.day)
 );
 
 /** 처음 단위부터 마지막 단위까지(순서와 상관없이 두 끝을 받는다) 안에 있는 노트가 있는 기록. 한 기록은 한 번만 센다. */

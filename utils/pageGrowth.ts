@@ -1,5 +1,6 @@
 import { StudyLog, Subject } from '../types';
 import { getLocalDateKey } from './schedule';
+import { unitIndexAt } from './reviewUnits';
 import { DEFAULT_PAGE_LABEL, normalizePageLabel } from './pageLabel';
 
 export const DEFAULT_GROWTH_PAGE_UNIT = 10;
@@ -16,7 +17,7 @@ export const getGrowthUnitSize = (value?: number) => (value === 0 ? 0 : normaliz
 export const normalizePageGrowthSettings = (subject: Subject) => ({
   growthPageUnit: getGrowthUnitSize(subject.growthPageUnit),
   pageLabel: normalizePageLabel(subject.pageLabel),
-  reviewGrowthDisplay: subject.reviewGrowthDisplay === 'unit' ? 'unit' as const : 'review' as const
+  reviewGrowthDisplay: subject.reviewGrowthDisplay === 'review' ? 'review' as const : 'unit' as const
 });
 
 export interface PageEfficiencyUnit {
@@ -83,21 +84,16 @@ export const buildPageEfficiencyUnits = (logs: PageEfficiencySample[], pageUnit?
   return units;
 };
 
-// One point per page unit (the last may still be filling), dated when the unit was reached.
-// speedIncrease compares each unit with the subject's first unit, like the growth cells do.
-export const getUnitSpeedTrend = (logs: StudyLog[], pageUnit?: number) => {
-  const unitSize = normalizeGrowthUnit(pageUnit);
+// 단위(경계 시각으로 나눈 것)마다 한 점. 마지막 점은 아직 채우는 단위일 수 있다. speedIncrease는 첫 단위 대비(%)다.
+export const getUnitSpeedTrend = (logs: StudyLog[], boundaries: readonly number[] = []) => {
   const valid = logs.filter(log => Number.isFinite(log.pagesRead) && log.pagesRead > 0
     && Number.isFinite(log.timeSpentMinutes) && log.timeSpentMinutes > 0 && Number.isFinite(Date.parse(log.timestamp)))
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-  const units = buildPageEfficiencyUnits(valid, unitSize);
-  const endedAt: string[] = [];
-  let cumulativePages = 0;
-  valid.forEach(log => {
-    cumulativePages += log.pagesRead;
-    while (endedAt.length < units.length && cumulativePages >= (endedAt.length + 1) * unitSize - 1e-9) endedAt.push(log.timestamp);
-  });
-  while (endedAt.length < units.length) endedAt.push(valid[valid.length - 1].timestamp);
+  const units = buildBoundaryUnits(valid, boundaries);
+  // 단위가 끝난 때: 그 단위의 마지막 기록 시각
+  const lastByUnit = new Map<number, string>();
+  valid.forEach(log => lastByUnit.set(unitIndexAt(Date.parse(log.timestamp), boundaries), log.timestamp));
+  const endedAt = [...lastByUnit.entries()].sort(([a], [b]) => a - b).map(([, timestamp]) => timestamp);
   return units.map((unit, index) => ({
     unit,
     timestamp: endedAt[index],
@@ -177,14 +173,10 @@ export const pageUnitIndex = (page: number, unitSize: number, firstPage = 1) => 
   Math.max(0, Math.floor((page - firstPage) / unitSize))
 );
 
-/** "다음 단위까지"에 쓰는 값. 단위는 푼 장수로 센다: 단위 크기만큼 풀 때마다 한 단위가 찬다. */
+/** 지금 채우는 단위: 몇 번째인가(1부터)와 그 단위에서 지금까지 푼 장수(막 복습에 넣었으면 0) */
 export interface UnitProgress {
-  unitSize: number;
-  /** 지금 채우는 단위가 몇 번째인가(1부터). 막 단위를 마쳤으면 다음 단위가 0장으로 시작한다. */
   index: number;
-  /** 지금 단위에서 푼 장수 (막 단위를 마쳤으면 0) */
   done: number;
-  remaining: number;
 }
 
 /**
@@ -202,20 +194,41 @@ export interface EfficiencyScope {
   progress: UnitProgress | null;
 }
 
-export const getEfficiencyScope = (samples: PageEfficiencySample[], unitSize: number, firstPage = 1, reachedPage?: number): EfficiencyScope => {
+/**
+ * 경계 시각들(boundaries, 오래된 것부터)로 나눈 단위들. 기록은 끝난 시각으로 단위가 정해진다(경계 시각 이하 → 그 경계의 단위).
+ * 마친 단위(경계가 있는 것)는 complete, 마지막 경계 뒤의 기록은 지금 채우는 단위(complete false)다. 기록이 없는 단위는 넣지 않는다.
+ */
+export const buildBoundaryUnits = (samples: PageEfficiencySample[], boundaries: readonly number[]): PageEfficiencyUnit[] => {
+  const groups = new Map<number, PageEfficiencySample[]>();
+  chronological(samples).forEach(log => {
+    const index = unitIndexAt(Date.parse(log.timestamp), boundaries);
+    groups.set(index, [...(groups.get(index) ?? []), log]);
+  });
+  return [...groups.entries()].sort(([a], [b]) => a - b).map(([index, logs], order) => {
+    let pages = 0, minutes = 0, attack = 0, squares = 0;
+    logs.forEach(log => {
+      const rate = log.timeSpentMinutes / log.pagesRead;
+      pages += log.pagesRead;
+      minutes += log.timeSpentMinutes;
+      attack += Number.isFinite(log.timeAttackMinutes) ? Math.min(log.timeSpentMinutes, Math.max(0, log.timeAttackMinutes!)) : log.timeSpentMinutes;
+      squares += log.pagesRead * rate ** 2;
+    });
+    return { index: order + 1, pages, minutes, averageTimePerPage: minutes / pages, complete: index < boundaries.length,
+      timeAttackMinutes: attack, timeAttackAverageTimePerPage: attack / pages,
+      standardDeviation: Math.sqrt(Math.max(0, squares / pages - (minutes / pages) ** 2)) };
+  });
+};
+
+/**
+ * 효율 칸이 쓸 기록과 단위. 단위는 경계 시각(학습과목은 "복습에 넣기", 복습과목은 복습을 마친 때)으로 나눈다.
+ * 효율(가장 최근 25분)은 단위를 넘어도 새로 시작하지 않는다. progress는 지금 채우는 단위(몇 번째 · 지금까지 푼 장수)다.
+ */
+export const getEfficiencyScope = (samples: PageEfficiencySample[], boundaries: readonly number[] = []): EfficiencyScope => {
   const logs = chronological(samples);
-  if (!(unitSize > 0)) return { current: logs, units: [], progress: null };
-  // 기록이 없으면 지금까지 푼 쪽수(끝 페이지 − 시작 페이지 + 1)로 게이지를 채운다.
-  const solved = logs.length > 0 ? logs.reduce((sum, log) => sum + log.pagesRead, 0)
-    : typeof reachedPage === 'number' && Number.isFinite(reachedPage) ? Math.max(0, reachedPage - firstPage + 1) : 0;
-  const finished = Math.floor(solved / unitSize + 1e-9);
-  const rest = solved - finished * unitSize;
-  const done = rest < 1e-9 ? 0 : rest;
-  return {
-    current: logs,
-    units: buildPageEfficiencyUnits(logs, unitSize),
-    progress: { unitSize, index: finished + 1, done, remaining: unitSize - done }
-  };
+  const units = buildBoundaryUnits(logs, boundaries);
+  const finished = units.filter(unit => unit.complete).length;
+  const open = units.find(unit => !unit.complete);
+  return { current: logs, units, progress: { index: finished + 1, done: open ? open.pages : 0 } };
 };
 
 /** 효율 칸에서 견줄 수 있는 가장 먼 뽀모도로. 5회 전보다 더 이전과는 견주지 않는다. */

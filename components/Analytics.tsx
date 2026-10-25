@@ -1806,7 +1806,7 @@ export const Analytics: React.FC<Props> = ({
                                     {reviewMinutesPerPage > 0 ? `1${getPageLabel(reviewSubject)}당 ${reviewMinutesPerPage.toFixed(1)}분` : '측정 필요'}
                                   </p>
                                   {growthEditingSubjectId === reviewSubject.id && <ReviewGrowthSettings
-                                    value={reviewSubject.reviewGrowthDisplay === 'unit' ? 'unit' : 'review'}
+                                    value={reviewSubject.reviewGrowthDisplay === 'review' ? 'review' : 'unit'}
                                     onChange={value => {
                                       const original = subjects.find(subject => subject.id === reviewSubject.id);
                                       if (original) onUpdateSubject?.({ ...original, reviewGrowthDisplay: value });

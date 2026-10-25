@@ -40,6 +40,17 @@ export const GrowthChips: React.FC<{ change: GrowthChange | null | undefined; sp
   );
 };
 
+/** 효율 숫자 옆의 작은 글자: 뽀모도로 1회 전보다 속도가 얼마나 올랐는지(예: "뽀모도로 1회 전 +1.2P/h") */
+const PomodoroDelta: React.FC<{ change: GrowthChange | null | undefined; label: string }> = ({ change, label }) => {
+  if (!change) return null;
+  return (
+    <span data-testid="pomodoro-delta" title={`뽀모도로 1회 전보다 ${SPEED_REFERENCE_LABEL} 동안 푸는 ${pageWord(label)} 수의 차이`}
+      className={`ml-2 whitespace-nowrap align-middle text-sm font-black ${change.speedPages > 0 ? 'text-green-800' : 'text-slate-600'}`}>
+      뽀모도로 1회 전 {describeSpeed(change, label).replace(/^속도 /, '')}
+    </span>
+  );
+};
+
 /**
  * "효율" 셀: 전체 효율(성장 척도, 크게) + 타임어택 효율(작게)과 각각의 속도·공부량 변화.
  * 제목 옆에 비교 기준(뽀모도로 N회 전)을 바꾸는 버튼(headerAction)이 들어간다. 값은 가장 최근 25분의 평균이다.
@@ -54,7 +65,10 @@ export const EfficiencyBoxes: React.FC<{
   label?: string;
   /** 오늘 할 양을 끝낸 과목: 셀 전체가 초록 톤이라 이 칸도 같은 톤으로 맞춘다 */
   done?: boolean;
-}> = ({ efficiency, attackEfficiency, overall, attack, headerAction, label = DEFAULT_PAGE_LABEL, done = false }) => {
+  /** 효율 숫자 옆 빈칸에 붙는 뽀모도로 1회 전 대비(속도). 위 기준이 이미 뽀모도로 1회 전이면 주지 않는다 */
+  pomodoroOverall?: GrowthChange | null;
+  pomodoroAttack?: GrowthChange | null;
+}> = ({ efficiency, attackEfficiency, overall, attack, headerAction, label = DEFAULT_PAGE_LABEL, done = false, pomodoroOverall, pomodoroAttack }) => {
   const has = (value?: number) => Boolean(value && value > 0);
   return (
     <section aria-label="효율" data-testid="efficiency-cell"
@@ -68,8 +82,8 @@ export const EfficiencyBoxes: React.FC<{
           <span><b>효율</b>은 가장 최근 공부 25분(뽀모도로)의 평균이에요. 짧은 시간의 값은 믿기 어려워서 25분을 한 덩어리로 봐요.</span>
           <span><b>전체 효율</b>은 풀이와 정리 시간을 모두 합해서 푼 장수로 나눠요. 막힌 문제를 넘긴 만큼 정리에서 드러나서 성장을 재는 기준이 돼요.</span>
           <span><b>타임어택 효율</b>은 타임어택에서 한 장당 걸린 시간이에요. 막힌 문제는 바로 넘기니까 성장은 전체 효율로 봐요.</span>
-          <span><b>속도</b>는 1시간 동안 푸는 장수가 얼마나 늘었는지, <b>공부량</b>은 한 페이지에 쓴 시간이 몇 분 늘었는지예요. 제목 옆 버튼을 누르면 뽀모도로 1회 전, 2회 전 … 5회 전, 이전 단위, 이이전 단위, 평균과 차례로 견줘요.</span>
-          <span><b>페이지 단위</b>는 푼 장수로 세요. 단위 크기만큼 풀 때마다 한 단위가 차고, 마친 단위의 평균과 견줄 수 있어요. 효율은 단위를 넘어도 새로 시작하지 않고 계속 이어져요. 평균은 이 과목 전체의 장당 시간이에요.</span>
+          <span><b>속도</b>는 1시간 동안 푸는 장수가 얼마나 늘었는지, <b>공부량</b>은 한 페이지에 쓴 시간이 몇 분 늘었는지예요. 기본은 <b>이전 단위</b>와 견주고(마친 단위가 없으면 뽀모도로 1회 전), 효율 숫자 옆에는 뽀모도로 1회 전보다 오른 속도가 따로 보여요. 제목 옆 버튼으로 뽀모도로 1~5회 전, 이전 단위, 이이전 단위, 평균과 견줄 수 있어요.</span>
+          <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 효율은 단위를 넘어도 새로 시작하지 않고 계속 이어져요. 평균은 이 과목 전체의 장당 시간이에요.</span>
         </HelpPopover>
       </div>
       <div data-testid="current-overall-efficiency" className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -80,6 +94,7 @@ export const EfficiencyBoxes: React.FC<{
           </span>
           <p className="whitespace-nowrap font-black leading-tight tabular-nums text-indigo-900">
             {has(efficiency) ? <><span className="font-mono text-[44px] md:text-[48px]">{efficiency!.toFixed(1)}</span><span className="ml-1 text-lg text-slate-500">분/{label}</span></> : <span className="text-xl text-slate-600">측정 필요</span>}
+            {has(efficiency) && <PomodoroDelta change={pomodoroOverall} label={label} />}
           </p>
         </div>
         <GrowthChips change={overall} label={label} />
@@ -89,6 +104,7 @@ export const EfficiencyBoxes: React.FC<{
           <span className="text-base font-black text-slate-800">타임어택 효율</span>
           <span className="font-black leading-tight tabular-nums text-slate-900">
             {has(attackEfficiency) ? <><span className="font-mono text-[30px]">{attackEfficiency!.toFixed(1)}</span><span className="ml-1 text-base text-slate-500">분/{label}</span></> : <span className="text-base text-slate-600">측정 필요</span>}
+            {has(attackEfficiency) && <PomodoroDelta change={pomodoroAttack} label={label} />}
           </span>
         </div>
         <GrowthChips change={attack} label={label} />

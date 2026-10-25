@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Subject, StudyLog } from '../types';
 import { formatSignedTenth, getUnitSpeedTrend } from '../utils/pageGrowth';
+import { registrationBoundaries, reviewCompletionBoundaries } from '../utils/reviewUnits';
 import { buildSpeedSeries, SpeedSeries, TREND_WINDOW_MINUTES } from '../utils/speedGrowth';
 import { getPageLabel } from '../utils/pageLabel';
 import {
@@ -62,7 +63,8 @@ type TableRange = 'month' | 'all';
 interface TrendItem {
   id: string;
   label: string;
-  unitSize: number;
+  /** 복습과목이면 단위가 복습 한 번, 아니면 "복습에 넣기" 사이 */
+  isReview: boolean;
   pageLabel: string;
   /** 페이지 단위를 채울 때마다 한 점(첫 단위 대비 %) */
   unitPoints: Array<{ timestamp: number; date: string; speedIncrease: number; efficiency: number; complete: boolean }>;
@@ -147,7 +149,11 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
         ? subject?.followUpSubjects?.find(stage => stage.id === group.stageId)?.name
           || group.logs.find(log => log.subjectStageNameSnapshot)?.subjectStageNameSnapshot || '후행과목'
         : null;
-      const unitPoints = getUnitSpeedTrend(group.logs, subject?.growthPageUnit).map(point => {
+      // 단위: 학습과목은 "복습에 넣기" 사이, 복습과목(복습 세션 기록)은 복습 한 번
+      const parentId = group.logs.find(log => log.reviewParentSubjectId)?.reviewParentSubjectId;
+      const boundaries = parentId ? reviewCompletionBoundaries(logs, parentId, group.subjectId)
+        : registrationBoundaries(logs.filter(log => log.subjectId === group.subjectId));
+      const unitPoints = getUnitSpeedTrend(group.logs, boundaries).map(point => {
         const time = Date.parse(point.timestamp);
         return {
           timestamp: time,
@@ -160,7 +166,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
       const speed = buildSpeedSeries(group.logs, { timeAttack: true, windowMinutes: TREND_WINDOW_MINUTES });
       const latest = group.logs.reduce((max, log) => Math.max(max, Date.parse(log.timestamp) || 0), 0);
       return {
-        id: key, label: stageName ? `${subjectName} · ${stageName}` : subjectName, unitSize: subject?.growthPageUnit || 10,
+        id: key, label: stageName ? `${subjectName} · ${stageName}` : subjectName, isReview: Boolean(parentId),
         pageLabel: getPageLabel(subject), unitPoints, speed, latest
       };
     }).filter(item => item.unitPoints.length > 0 || item.speed.points.length > 0)
@@ -562,7 +568,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
                       </div>
                     </div>
                     <p className="mb-2 text-[13px] font-bold text-slate-400">
-                      효율 {unitFirst.efficiency.toFixed(1)} → {unitLast.efficiency.toFixed(1)} 분/{selectedTrend.pageLabel} · {selectedTrend.unitSize}{selectedTrend.pageLabel} 단위 {unitPoints.length}개
+                      효율 {unitFirst.efficiency.toFixed(1)} → {unitLast.efficiency.toFixed(1)} 분/{selectedTrend.pageLabel} · {selectedTrend.isReview ? '복습 한 번' : '복습에 넣기 사이'} 단위 {unitPoints.length}개
                     </p>
                     <div className="h-44">
                       <ResponsiveContainer width="100%" height="100%">

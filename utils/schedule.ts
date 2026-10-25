@@ -315,12 +315,8 @@ export const distributePagesByWeekdayWeights = (
   return plan;
 };
 
-/** 요일별 페이지를 한 번에 늘리고 줄이는 크기 = 과목의 페이지 단위. "단위 없음"(0)이면 1. 정해 두지 않았으면 기본 10. */
-export const getWeekdayPageStep = (subject: Pick<Subject, 'growthPageUnit'>) => {
-  const unit = Number(subject.growthPageUnit);
-  if (unit === 0) return 1;
-  return Number.isFinite(unit) && unit >= 1 ? Math.round(unit) : 10;
-};
+/** 요일별 페이지를 한 번에 늘리고 줄이는 크기: 1쪽(고정 페이지 단위는 없앴다 — 단위는 "복습에 넣기" 사이 구간이다) */
+export const getWeekdayPageStep = (_subject?: Pick<Subject, 'growthPageUnit'>) => 1;
 
 /**
  * 합계(total)를 요일들에 weights 비율대로 나눈다. 기존 페이지 비율과 최대한 같게, 페이지 하나씩 나누고

@@ -2460,8 +2460,9 @@ test('status cells are small: pending ones carry no done data, a finished subjec
 const reviewChainSubjects = [
   { id: 'parent', name: 'Parent', startPage: 1, totalPages: 100, completedPages: 10,
     targetDate: '2026-12-31', reviewSubjectIds: ['first', 'second'] },
-  { id: 'first', name: 'First', startPage: 20, totalPages: 200, completedPages: 19, targetDate: '2026-12-31' },
-  { id: 'second', name: 'Second', startPage: 30, totalPages: 300, completedPages: 29, targetDate: '2026-12-31' }
+  // 복습과목의 기본 성장 표시는 이제 단위(복습 한 번) 비교다. 이 묶음의 시험들은 '이번 복습' 비율 표시를 보므로 직접 골라 둔다
+  { id: 'first', name: 'First', startPage: 20, totalPages: 200, completedPages: 19, targetDate: '2026-12-31', reviewGrowthDisplay: 'review' },
+  { id: 'second', name: 'Second', startPage: 30, totalPages: 300, completedPages: 29, targetDate: '2026-12-31', reviewGrowthDisplay: 'review' }
 ];
 const chainLog = (id = 'source', overrides = {}) => ({
   id, subjectId: 'parent', pagesRead: 10, timeSpentMinutes: 30, reviewStep: 0,
@@ -2705,7 +2706,7 @@ test('today status list sits next to the detail, with compact pomodoro and both 
   assert.ok(empty.indexOf('aria-label="성장"') < empty.indexOf('학습 진척도'));
   assert.ok(empty.indexOf('학습 진척도') < empty.indexOf('전체 효율'));
   assert.ok(empty.indexOf('전체 효율') < empty.indexOf('타임어택 효율'));
-  assert.ok(empty.indexOf('타임어택 효율') < empty.indexOf('다음 단위까지'));
+  assert.ok(empty.indexOf('타임어택 효율') < empty.indexOf('이번 단위'));
   assert.ok(empty.includes('lg:grid-cols-2'), 'start cell and growth cell side by side');
   assert.ok((empty.match(/측정 필요/g) || []).length >= 2);
   const { recordReviewMeasurement } = loadSource('utils/review.ts');
@@ -3086,71 +3087,46 @@ test('invalid samples never enter a window and the oldest leftover under 25 minu
   assert.ok(mixed[0].standardDeviation > 0 && mixed[0].standardDeviation < 1);
 });
 
-test('the page unit counts SOLVED pages and compares with earlier growth: nothing is reset, a log spanning two units is split by pages', () => {
+test('a unit is the span between two "복습에 넣기" (the first from the start), and for a review subject one review; nothing resets the efficiency', () => {
   const { getEfficiencyScope, getEfficiencyView } = loadSource('utils/pageGrowth.ts');
-  const log = (id, pages, minutes, hour, extra = {}) => source({ id, pagesRead: pages, timeSpentMinutes: minutes, timestamp: `2026-10-12T0${hour}:00:00Z`, ...extra });
-  // 푼 장수로 센다: 페이지 번호가 어디든(1~5쪽, 41~45쪽) 10장을 풀면 한 단위가 찬다
-  const a = log('a', 5, 25, 1, { startPage: 1, endPage: 5 });
-  const b = log('b', 5, 25, 2, { startPage: 41, endPage: 45 });
-  const filled = getEfficiencyScope([a, b], 10, 1);
-  assert.deepEqual(filled.units.map(unit => [unit.pages, unit.complete]), [[10, true]]);
-  assert.deepEqual(filled.progress, { unitSize: 10, index: 2, done: 0, remaining: 10 });
-  // 단위를 채워도 효율은 새로 시작하지 않는다: 모든 기록을 그대로 쓰고, 보이는 값도 임시값이 아니다
-  assert.deepEqual(filled.current.map(item => item.id), ['a', 'b']);
-  assert.ok(!('provisional' in filled) && !('previous' in filled));
-  assert.equal(getEfficiencyView(filled).shown.averageTimePerPage, 5);
-  // 새 단위에 기록이 생기면 그 단위가 차기 시작하고, 앞 단위는 마친 단위로 남는다
-  const c = log('c', 3, 15, 3);
-  const growing = getEfficiencyScope([a, b, c], 10, 1);
-  assert.deepEqual(growing.units.map(unit => [unit.pages, unit.complete]), [[10, true], [3, false]]);
-  assert.deepEqual(growing.progress, { unitSize: 10, index: 2, done: 3, remaining: 7 });
-  assert.deepEqual(growing.current.map(item => item.id), ['a', 'b', 'c']);
-  // 한 기록이 두 단위에 걸치면 장수에 비례해 나눈다(5장 + 8장: 앞 단위가 5장을 더 받고 3장이 새 단위로 넘어간다)
-  const crossing = getEfficiencyScope([a, log('m', 8, 40, 5)], 10, 1);
-  assert.deepEqual(crossing.units.map(unit => [unit.pages, unit.minutes, unit.complete]), [[10, 50, true], [3, 15, false]]);
-  assert.deepEqual(crossing.progress, { unitSize: 10, index: 2, done: 3, remaining: 7 });
-  // 단위는 과목의 시작 페이지와 상관없다(20쪽에서 시작해도 푼 장수로 센다)
-  const late = getEfficiencyScope([log('p', 5, 25, 1, { startPage: 20, endPage: 24 }), log('q', 5, 25, 2, { startPage: 25, endPage: 29 })], 10, 20);
-  assert.deepEqual(late.progress, { unitSize: 10, index: 2, done: 0, remaining: 10 });
-  // 푼 장수가 기준이라 페이지를 건너뛰어도(1~5를 풀고 11~13을 풀기) 8장일 뿐이다
-  const skip = getEfficiencyScope([log('s1', 5, 25, 1, { startPage: 1, endPage: 5 }), log('s2', 3, 25, 2, { startPage: 11, endPage: 13 })], 10, 1);
-  assert.deepEqual(skip.progress, { unitSize: 10, index: 1, done: 8, remaining: 2 });
-  assert.deepEqual(skip.units.map(unit => unit.complete), [false]);
-});
-
-test('without a page unit there are no units to compare, and the gauge falls back to the pages reached when there are no records yet', () => {
-  const { getEfficiencyScope, getEfficiencyView, getGrowthUnitSize } = loadSource('utils/pageGrowth.ts');
-  assert.deepEqual([getGrowthUnitSize(0), getGrowthUnitSize(undefined), getGrowthUnitSize(25), getGrowthUnitSize(-3), getGrowthUnitSize(NaN)], [0, 10, 25, 10, 10]);
-  const log = (id, startPage, endPage, hour) => source({ id, startPage, endPage, pagesRead: endPage - startPage + 1,
-    timeSpentMinutes: 25, timestamp: `2026-10-12T0${hour}:00:00Z` });
-  // 같은 문제집을 반복해서 푼다: 페이지가 1~30 사이를 돌아도 효율은 이어진다
-  const logs = [log('a', 1, 30, 1), log('b', 1, 30, 2), log('c', 1, 30, 3)];
-  const scope = getEfficiencyScope(logs, 0, 1, 30);
-  assert.deepEqual(scope.current.map(item => item.id), ['a', 'b', 'c']);
-  assert.deepEqual([scope.units, scope.progress], [[], null]);
-  const view = getEfficiencyView(scope);
-  assert.equal(view.maxComparison, 2);
-  assert.equal(view.maxUnits, 0);
-  assert.ok(!view.options.some(option => option.kind === 'unit'), 'no unit to compare with');
-  assert.ok(view.options.some(option => option.kind === 'average'), 'the average is still there');
-  // 단위가 있으면 푼 장수(90장)로 단위가 찬다
-  const withUnit = getEfficiencyScope(logs, 10, 1, 30);
-  assert.equal(withUnit.units.length, 9);
-  assert.deepEqual(withUnit.progress, { unitSize: 10, index: 10, done: 0, remaining: 10 });
-  // 기록이 없어도 지금까지 푼 쪽수(끝 페이지 − 시작 페이지 + 1)로 게이지를 채운다
-  assert.deepEqual(getEfficiencyScope([], 10, 1, 0).progress, { unitSize: 10, index: 1, done: 0, remaining: 10 });
-  assert.deepEqual(getEfficiencyScope([], 10, 1, 4).progress, { unitSize: 10, index: 1, done: 4, remaining: 6 });
-  assert.deepEqual(getEfficiencyScope([], 10, 1, 10).progress, { unitSize: 10, index: 2, done: 0, remaining: 10 });
-  assert.equal(getEfficiencyScope([], 0, 1, 4).progress, null);
-  assert.equal(getEfficiencyView(getEfficiencyScope([], 10, 1)).shown, null);
+  const { registrationBoundaries, reviewCompletionBoundaries, unitIndexAt } = loadSource('utils/reviewUnits.ts');
+  const at = hour => `2026-10-12T${String(hour).padStart(2, '0')}:00:00Z`;
+  const log = (id, pages, minutes, hour, extra = {}) => source({ id, pagesRead: pages, timeSpentMinutes: minutes, timestamp: at(hour), ...extra });
+  // a · b를 공부하고 3시에 복습에 넣었고, c는 아직 넣지 않았다 → 단위 1(a·b, 마침) · 단위 2(c, 채우는 중)
+  const a = log('a', 5, 25, 1, { reviewRegisteredAt: at(3) });
+  const b = log('b', 5, 25, 2, { reviewRegisteredAt: at(3) });
+  const c = log('c', 3, 15, 4, { unitReviewPending: true });
+  const boundaries = registrationBoundaries([a, b, c]);
+  assert.deepEqual(boundaries, [Date.parse(at(3))], 'one boundary per press of 복습에 넣기 (pending logs are not a boundary)');
+  assert.deepEqual([unitIndexAt(Date.parse(at(1)), boundaries), unitIndexAt(Date.parse(at(3)), boundaries), unitIndexAt(Date.parse(at(4)), boundaries)], [0, 0, 1]);
+  const scope = getEfficiencyScope([a, b, c], boundaries);
+  assert.deepEqual(scope.units.map(unit => [unit.pages, unit.complete]), [[10, true], [3, false]]);
+  assert.deepEqual(scope.progress, { index: 2, done: 3 });
+  assert.deepEqual(scope.current.map(item => item.id), ['a', 'b', 'c'], 'the efficiency keeps every record');
+  // 막 복습에 넣었으면 다음 단위는 0장에서 시작하고, 넣은 적이 없으면 처음부터 지금까지가 첫 단위다
+  assert.deepEqual(getEfficiencyScope([a, b], boundaries).progress, { index: 2, done: 0 });
+  assert.deepEqual(getEfficiencyScope([log('x', 4, 20, 1)], []).progress, { index: 1, done: 4 });
+  assert.equal(getEfficiencyView(getEfficiencyScope([], [])).shown, null);
+  // 예전 기록(누른 시각이 없음)은 같은 범위로 함께 들어간 기록 중 가장 늦은 시각을 경계로 본다
+  assert.deepEqual(registrationBoundaries([log('o1', 5, 20, 1, { reviewUnitRange: { start: 1, end: 10 } }), log('o2', 5, 20, 2, { reviewUnitRange: { start: 1, end: 10 } })]), [Date.parse(at(2))]);
+  // 복습과목: 그 복습과목으로 복습을 마친 때가 경계(복습 한 번 = 한 단위)
+  const parent = source({ id: 'p', subjectId: 'main', reviewSubjectTimeRecords: [
+    { subjectId: 'R', completed: true, pages: 5, minutes: 15, timestamp: at(5) },
+    { subjectId: 'R', completed: false, pages: 2, minutes: 6, timestamp: at(6) },
+    { subjectId: 'R', completed: true, pages: 3, minutes: 9, timestamp: at(7) },
+    { subjectId: 'Q', completed: true, pages: 3, minutes: 9, timestamp: at(8) }
+  ] });
+  assert.deepEqual(reviewCompletionBoundaries([parent], 'main', 'R'), [Date.parse(at(5)), Date.parse(at(7))]);
 });
 
 test('the efficiency can be compared with the previous unit, the one before it and the average, in the order the button steps', () => {
   const { getEfficiencyScope, getEfficiencyView, nextEfficiencyComparison, sameComparison, MAX_COMPARISON_UNITS } = loadSource('utils/pageGrowth.ts');
   assert.equal(MAX_COMPARISON_UNITS, 2);
   const log = (id, pages, minutes, hour) => source({ id, pagesRead: pages, timeSpentMinutes: minutes, timestamp: `2026-10-12T0${hour}:00:00Z` });
-  // 20장 단위: 1단위 20장 100분(5분/P) · 2단위 20장 60분(3분/P) · 3단위는 10장 25분(2.5분/P)으로 채우는 중
-  const scope = getEfficiencyScope([log('u1', 20, 100, 1), log('u2', 20, 60, 2), log('u3', 10, 25, 3)], 20, 1);
+  // 단위(복습에 넣기 사이): 1단위 20장 100분(5분/P) · 2단위 20장 60분(3분/P) · 3단위는 10장 25분(2.5분/P)으로 채우는 중
+  // 1시 30분 · 2시 30분에 복습에 넣었다(단위 경계)
+  const cut = (...hours) => hours.map(hour => Date.parse(`2026-10-12T0${hour}:30:00Z`));
+  const scope = getEfficiencyScope([log('u1', 20, 100, 1), log('u2', 20, 60, 2), log('u3', 10, 25, 3)], cut(1, 2));
   assert.deepEqual(scope.units.map(unit => [unit.pages, unit.averageTimePerPage, unit.complete]), [[20, 5, true], [20, 3, true], [10, 2.5, false]]);
   const base = getEfficiencyView(scope);
   assert.equal(base.shown.averageTimePerPage, 2.5, 'the shown value is the latest 25 minutes, not reset by the unit');
@@ -3187,14 +3163,14 @@ test('the efficiency can be compared with the previous unit, the one before it a
   assert.deepEqual(seen, ['pomodoro1', 'pomodoro2', 'pomodoro3', 'pomodoro4', 'pomodoro5', 'unit1', 'unit2', '평균', 'pomodoro1']);
   assert.ok(sameComparison({ kind: 'unit', n: 1 }, { kind: 'unit', n: 1 }) && !sameComparison({ kind: 'unit', n: 1 }, { kind: 'pomodoro', n: 1 }));
   // 마친 단위가 셋이어도 이이전 단위까지만 견준다. 채우는 중인 단위는 기준이 되지 않는다.
-  const three = getEfficiencyScope([log('a', 20, 100, 1), log('b', 20, 80, 2), log('c', 20, 60, 3), log('d', 5, 10, 4)], 20, 1);
+  const three = getEfficiencyScope([log('a', 20, 100, 1), log('b', 20, 80, 2), log('c', 20, 60, 3), log('d', 5, 10, 4)], cut(1, 2, 3));
   const threeView = getEfficiencyView(three, { kind: 'unit', n: 9 });
   assert.deepEqual([threeView.maxUnits, threeView.choice.n, threeView.referenceUnit.averageTimePerPage], [2, 2, 4]);
   // 마친 단위가 아직 없으면 단위로는 견줄 수 없다(변화 없음). 평균은 보이는 25분 말고 다른 기록이 있어야 한다.
-  const none = getEfficiencyView(getEfficiencyScope([log('x', 5, 50, 1)], 20, 1), { kind: 'unit', n: 1 });
+  const none = getEfficiencyView(getEfficiencyScope([log('x', 5, 50, 1)], []), { kind: 'unit', n: 1 });
   assert.deepEqual([none.maxUnits, none.choice.n, none.referenceUnit, none.overall], [0, 0, null, null]);
-  assert.equal(getEfficiencyView(getEfficiencyScope([log('x', 5, 20, 1)], 20, 1), { kind: 'average' }).overall, null);
-  assert.equal(nextEfficiencyComparison(getEfficiencyView(getEfficiencyScope([], 20, 1))).kind, 'pomodoro');
+  assert.equal(getEfficiencyView(getEfficiencyScope([log('x', 5, 20, 1)], []), { kind: 'average' }).overall, null);
+  assert.equal(nextEfficiencyComparison(getEfficiencyView(getEfficiencyScope([], []))).kind, 'pomodoro');
 });
 
 test('review subjects respect the selected growth display without editing page units in execution', () => {
@@ -3212,8 +3188,8 @@ test('review subjects respect the selected growth display without editing page u
   const unit = renderToStaticMarkup(React.createElement(TodaySummary, { ...props,
     subjects: reviewChainSubjects.map(subject => subject.id === 'first' ? { ...subject, growthPageUnit: 20, reviewGrowthDisplay: 'unit' } : subject) }));
   assert.ok(!unit.includes('평균 증가율'));
-  // 푼 장수 15장(5장 + 10장)은 20장 단위에서 15장을 채웠다 → 5P 남음
-  assert.ok(unit.includes('unit-pages-remaining') && /unit-pages-remaining[\s\S]*?>5<span[^>]*>P<\/span><\/p>/.test(unit));
+  // 아직 복습을 마친 적이 없어 지금 단위(복습 한 번)에 15장(5장 + 10장)을 채우는 중
+  assert.ok(unit.includes('unit-pages-done') && /unit-pages-done[\s\S]*?>15<span[^>]*>P<\/span><\/p>/.test(unit) && unit.includes('복습을 마치면 단위가 끝나요'));
   // 최근 25분(2.5분/P, 1시간에 24장)을 1회 전(5분/P, 12장)과 견준다: 속도 +12.0P/h, 공부량 −2.5분/P
   assert.ok(unit.includes('뽀모도로 1회 전') && unit.includes('속도 +12.0P/h') && unit.includes('공부량 −2.5분/P') && !unit.includes('+150.0%'));
   assert.ok(!unit.includes('성장 설정'));
@@ -3269,7 +3245,9 @@ test('review growth display switches between completion speed gains and pomodoro
   assert.ok(!unit.includes('review-speed-growth'));
   // 최근 25분(6분/P의 새 측정 25분 = 4.2P)은 6.0분/P. 그 앞 25분(새 측정 나머지 5분 + 옛 측정 20분)은 4.3분/P(25 ÷ 5.83P).
   // 뽀모도로 1회 전 대비 속도 −4.0P/h(10.0 − 14.0), 공부량 +1.7분/P
-  assert.ok(unit.includes('뽀모도로 1회 전') && unit.includes('속도 −4.0P/h') && unit.includes('공부량 +1.7분/P'));
+  // 복습과목도 기본은 이전 단위(복습 한 번) 대비이고, 뽀모도로 1회 전 대비는 효율 숫자 옆에 붙는다
+  // 두 번의 복습(복습 한 번 = 한 단위)을 마쳤다: 마지막 복습(6분/P)을 그 전 복습(4분/P)과 견준다 → 속도 −5.0P/h, 공부량 +2.0분/P
+  assert.ok(unit.includes('이전 단위') && unit.includes('속도 −5.0P/h') && unit.includes('공부량 +2.0분/P'), unit.slice(unit.indexOf('efficiency-cell'), unit.indexOf('efficiency-cell') + 1500));
   assert.ok(unit.includes('>6.0</span>'));
   assert.equal((unit.match(/data-growth-kind="speed"/g) || []).length, 2);
   assert.equal((unit.match(/data-growth-kind="amount"/g) || []).length, 2);
@@ -3329,7 +3307,7 @@ test('growth configuration survives JSON save and subject normalization on reloa
   const saved = JSON.parse(JSON.stringify({ ...subjects[0], growthPageUnit: 20, pageLabel: '단원', reviewGrowthDisplay: 'unit' }));
   assert.deepEqual(normalizePageGrowthSettings(saved), { growthPageUnit: 20, pageLabel: '단원', reviewGrowthDisplay: 'unit' });
   // 저장된 값이 없으면 기본: 단위 10, 단위 이름 P
-  assert.deepEqual(normalizePageGrowthSettings({ ...subjects[0] }), { growthPageUnit: 10, pageLabel: 'P', reviewGrowthDisplay: 'review' });
+  assert.deepEqual(normalizePageGrowthSettings({ ...subjects[0] }), { growthPageUnit: 10, pageLabel: 'P', reviewGrowthDisplay: 'unit' }, 'review subjects compare units by default');
   // 0은 "단위 없음"이라 그대로 남고, 잘못된 값은 기본으로 돌아간다
   assert.equal(normalizePageGrowthSettings({ ...subjects[0], growthPageUnit: 0 }).growthPageUnit, 0);
   assert.equal(normalizePageGrowthSettings(JSON.parse(JSON.stringify({ ...subjects[0], growthPageUnit: 0 }))).growthPageUnit, 0);
@@ -3472,8 +3450,9 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   const { renderToStaticMarkup } = require('react-dom/server');
   const { UnitGrowthEfficiency } = loadSource('components/PageGrowth.tsx');
   const { getEfficiencyScope } = loadSource('utils/pageGrowth.ts');
-  const render = (logs, props = {}, unit = 20, reached) => renderToStaticMarkup(React.createElement(UnitGrowthEfficiency,
-    { scope: getEfficiencyScope(logs, unit, 1, reached), ...props }));
+  // 세 번째 값은 단위 경계("복습에 넣기"를 누른 시각들)
+  const render = (logs, props = {}, boundaries = []) => renderToStaticMarkup(React.createElement(UnitGrowthEfficiency,
+    { scope: getEfficiencyScope(logs, boundaries), ...props }));
   const logs = [
     source({ id: 'old', pagesRead: 5, startPage: 1, endPage: 5, timeSpentMinutes: 25, timeAttackMinutes: 10, timestamp: '2026-10-12T05:00:00Z' }),
     source({ id: 'new', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T09:00:00Z' })];
@@ -3482,7 +3461,7 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   // 제목 "효율" 다음에 비교 버튼, 그 아래 전체 효율 → 타임어택 효율, 맨 아래 다음 단위까지
   assert.match(html, /<h4[^>]*>효율<\/h4>[\s\S]*data-testid="unit-compare"/);
   assert.ok(html.indexOf('unit-compare') < html.indexOf('전체 효율') && html.indexOf('전체 효율') < html.indexOf('타임어택 효율')
-    && html.indexOf('타임어택 효율') < html.indexOf('다음 단위까지'));
+    && html.indexOf('타임어택 효율') < html.indexOf('이번 단위'));
   // 기본은 뽀모도로 1회 전. 시간(h)은 보이지 않는다.
   assert.match(html, /data-testid="unit-compare"[^>]*data-comparison="1"/);
   assert.ok(html.includes('뽀모도로 1회 전') && !html.includes('h 공부') && !html.includes('이후'));
@@ -3494,8 +3473,8 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   assert.equal((html.match(/data-growth-kind="speed"/g) || []).length, 2);
   assert.equal((html.match(/data-growth-kind="amount"/g) || []).length, 2);
   assert.ok(!/[+−-]\d+(\.\d+)?%/.test(html) && !html.includes('rose'), 'no percent growth anywhere');
-  // 끝 페이지 15 → 20쪽 단위(1~20)에서 5쪽 남았다
-  assert.ok(html.includes('unit-pages-remaining') && html.includes('>5<span') && html.includes('1번째 단위 · 20P씩'));
+  // 아직 복습에 넣지 않아 첫 단위를 채우는 중(고정 단위 크기가 없어 남은 장수 대신 지금까지 푼 장수)
+  assert.ok(html.includes('unit-pages-done') && html.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
   // 앞 25분이 하나뿐이어도 과목 평균이 있어 버튼이 눌린다(뽀모도로 1회 전 ↔ 평균). 마친 단위가 없으니 단위 기준은 없다.
   assert.ok(!/<button[^>]*data-testid="unit-compare"[^>]*disabled=""/.test(html) && html.includes('›'));
   // 25분 한 덩어리뿐이면 견줄 앞 뽀모도로도, 평균도, 마친 단위도 없어 버튼이 눌리지 않는다
@@ -3509,26 +3488,26 @@ test('the efficiency cell has a title with a pomodoro compare button next to it,
   assert.ok(!/<button[^>]*data-testid="unit-compare"[^>]*disabled=""/.test(three) && three.includes('›'));
   // 다른 글자를 단위 이름으로 쓰면 어디서나 그 글자가 나온다: n/h · 분/n · n.1~20 · 20n 단위
   const custom = render(logs, { label: 'n' });
-  assert.ok(custom.includes('속도 +12.0n/h') && custom.includes('공부량 −2.5분/n') && custom.includes('1번째 단위 · 20n씩'));
-  assert.ok(custom.includes('>5<span') && custom.includes('>n</span>') && !custom.includes('P/h') && !custom.includes('분/P'));
+  assert.ok(custom.includes('속도 +12.0n/h') && custom.includes('공부량 −2.5분/n') && /unit-pages-done[\s\S]*?n<\/span>/.test(custom));
+  assert.ok(custom.includes('>n</span>') && !custom.includes('P/h') && !custom.includes('분/P'));
   const word = render(logs, { label: '회' });
-  assert.ok(word.includes('속도 +12.0회/h') && word.includes('공부량 −2.5분/회') && word.includes('1번째 단위 · 20회씩'));
+  assert.ok(word.includes('속도 +12.0회/h') && word.includes('공부량 −2.5분/회') && word.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
   // 단위를 막 채웠다: 새 단위가 0장부터 채워지고, 효율 칸에는 이전 단위의 평균을 가져온다. 그 단위 자신과는 견주지 않는다(앞 단위가 없으면 견줄 것이 없다).
-  const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, 10);
+  const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, [Date.parse('2026-10-12T06:00:00Z')]);
   assert.ok(filled.includes('>5.0</span>') && !filled.includes('새 단위 시작 전'));
-  assert.ok(filled.includes('>10<span') && filled.includes('2번째 단위 · 10P씩'), 'a new unit needs the whole unit again');
+  assert.ok(/unit-pages-done[\s\S]*?>0<span/.test(filled) && filled.includes('2번째 단위 · 복습에 넣으면 단위가 끝나요'), 'a new unit starts from zero after 복습에 넣기');
   assert.ok(filled.includes('비교할 단위 없음') && !filled.includes('뽀모도로 1회 전'));
   assert.match(filled, /<button[^>]*data-testid="unit-compare"[^>]*disabled=""/);
   // 25분이 안 되는 기록뿐이면 견줄 앞 뽀모도로가 없다
   const alone = render([source({ pagesRead: 7, startPage: 1, endPage: 7, timeSpentMinutes: 20, timeAttackMinutes: 10 })]);
   assert.ok(alone.includes('비교할 뽀모도로 없음') && !alone.includes('data-growth-kind') && !alone.includes('측정 필요'));
-  // 기록이 하나도 없으면 넘겨받은 값(처음 추정값)을 쓰고, 게이지는 지금까지 푼 쪽수로 채운다
-  const empty = render([], { efficiency: 3.2, attackEfficiency: 0 }, 10, 0);
+  // 기록이 하나도 없으면 넘겨받은 값(처음 추정값)을 쓰고, 이번 단위는 0장이다
+  const empty = render([], { efficiency: 3.2, attackEfficiency: 0 });
   assert.ok(empty.includes('>3.2</span>') && empty.includes('측정 필요') && empty.includes('비교할 뽀모도로 없음'));
-  assert.ok(empty.includes('>10<span') && empty.includes('다음 단위까지'));
-  // 단위가 없는 과목: 다음 단위까지 게이지가 없고, 효율은 처음부터 이어진다
-  const none = render(logs, {}, 0, 15);
-  assert.ok(!none.includes('다음 단위까지') && !none.includes('unit-pages-remaining') && none.includes('뽀모도로 1회 전'));
+  assert.ok(/unit-pages-done[\s\S]*?>0<span/.test(empty) && empty.includes('이번 단위'));
+  // 복습에 넣은 적이 없으면 마친 단위가 없어 뽀모도로 1회 전과 견주고, 효율은 처음부터 이어진다
+  const none = render(logs);
+  assert.ok(none.includes('뽀모도로 1회 전') && none.includes('1번째 단위'));
 });
 
 test('speed and study amount are shown to one decimal place: pages per hour and minutes per page, with no percentages', () => {
@@ -3633,7 +3612,7 @@ test('page units are chosen when creating a plan and are not editable in its exe
   const { TodaySummary } = loadSource('components/TodaySummary.tsx');
   const plan = createNewStudyPlan('New', 1, 100, '2026-12-31', true, [1], 25);
   assert.equal(plan.growthPageUnit, 25);
-  assert.ok(renderToStaticMarkup(React.createElement(SubjectPlanner, { onAddSubject() {} })).includes('new-plan-page-unit'));
+  assert.ok(!renderToStaticMarkup(React.createElement(SubjectPlanner, { onAddSubject() {} })).includes('new-plan-page-unit'), 'no page unit input: units are spans between two 복습에 넣기');
   const html = renderToStaticMarkup(React.createElement(TodaySummary, { subjects: [plan], logs: [], detailSubjectId: plan.id,
     taskSelector: '오늘 할 일', activeWeekday: 1, activeStudyDate: '2026-10-12', onDetailSubjectChange() {},
     onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {}, onUpdateSubject() {}, pomodoroPlan: { subjectId: plan.id, pages: 5, minutes: 25, remainingTaskPages: 25 } }));
@@ -3661,7 +3640,7 @@ test('pomodoro and the efficiency cell share a compact strip with both growth va
   assert.match(html, /5<[^>]*>회/);
   assert.ok(html.includes('전체 효율') && html.includes('타임어택 효율'));
   assert.ok(html.includes('속도 +12.0P/h') && html.includes('공부량 −2.5분/P') && html.includes('속도 +90.0P/h'));
-  assert.ok(html.includes('unit-pages-remaining') && html.includes('>5<span'));
+  assert.ok(html.includes('unit-pages-done'));
   // 값은 가장 최근 25분(2.5 / 0.5)이고, 넘겨받은 5.1 / 2.3(처음 추정값)이 아니다
   assert.ok(html.includes('current-overall-efficiency') && html.includes('>2.5</span>'));
   assert.ok(html.includes('current-attack-efficiency') && html.includes('>0.5</span>'));
@@ -3792,22 +3771,22 @@ test('the organize clock continues from the solving time and shows the split', (
   assert.ok(html.includes('풀이 25:00') && html.includes('정리 01:05'));
 });
 
-test('trend analysis plots one point per page unit against the first unit', () => {
+test('trend analysis plots one point per unit (between two 복습에 넣기) against the first unit', () => {
   const { getUnitSpeedTrend } = loadSource('utils/pageGrowth.ts');
   const log = (id, pagesRead, timeSpentMinutes, timestamp) => ({ id, subjectId: 'main', pagesRead, timeSpentMinutes, timestamp });
   const trend = getUnitSpeedTrend([
     log('c', 5, 12.5, '2026-10-12T03:00:00Z'),
     log('a', 10, 50, '2026-10-10T03:00:00Z'),
     log('b', 10, 40, '2026-10-11T03:00:00Z')
-  ], 10);
+  ], [Date.parse('2026-10-10T12:00:00Z'), Date.parse('2026-10-11T12:00:00Z')]);
   assert.deepEqual(trend.map(point => point.speedIncrease), [0, 25, 100]);
   assert.deepEqual(trend.map(point => point.timestamp), ['2026-10-10T03:00:00Z', '2026-10-11T03:00:00Z', '2026-10-12T03:00:00Z']);
   assert.equal(trend[2].unit.complete, false);
-  // A single log spanning two units dates both units at that log.
-  const spanning = getUnitSpeedTrend([log('x', 20, 80, '2026-10-10T03:00:00Z')], 10);
-  assert.equal(spanning.length, 2);
-  assert.ok(spanning.every(point => point.timestamp === '2026-10-10T03:00:00Z' && point.speedIncrease === 0));
-  assert.deepEqual(getUnitSpeedTrend([], 10), []);
+  // 복습에 넣은 적이 없으면 한 단위(채우는 중)뿐이다
+  const single = getUnitSpeedTrend([log('x', 20, 80, '2026-10-10T03:00:00Z')], []);
+  assert.equal(single.length, 1);
+  assert.equal(single[0].unit.complete, false);
+  assert.deepEqual(getUnitSpeedTrend([], []), []);
 });
 
 test('today status rows mark one current row, keep the review accent separate and step with arrows', () => {
@@ -3994,8 +3973,8 @@ test('the note tab groups notes by subject, newest first, as one paged sheet wit
   const { NOTE_SYMBOLS } = loadSource('components/NoteSymbolBar.tsx');
   assert.deepEqual(NOTE_SYMBOLS.map(symbol => symbol.value), [':', ';', '<', ',', '=', '-', '( )', '//', '>']);
   const logs = [
-    { id: 'a', subjectId: 'main', pagesRead: 10, startPage: 21, endPage: 30, timeSpentMinutes: 20, timestamp: '2026-09-12T20:00:00.000Z', reviewMemo: '등차수열:차가 일정' },
-    { id: 'a2', subjectId: 'main', pagesRead: 10, startPage: 31, endPage: 40, timeSpentMinutes: 20, timestamp: '2026-09-13T20:00:00.000Z', reviewMemo: '등비수열;비가 일정' },
+    { id: 'a', subjectId: 'main', pagesRead: 10, startPage: 21, endPage: 30, timeSpentMinutes: 20, timestamp: '2026-09-12T20:00:00.000Z', reviewMemo: '등차수열:차가 일정', reviewRegisteredAt: '2026-09-12T22:00:00.000Z' },
+    { id: 'a2', subjectId: 'main', pagesRead: 10, startPage: 31, endPage: 40, timeSpentMinutes: 20, timestamp: '2026-09-13T20:00:00.000Z', reviewMemo: '등비수열;비가 일정', reviewRegisteredAt: '2026-09-13T22:00:00.000Z' },
     { id: 'b', subjectId: 'practice', pagesRead: 5, timestamp: '2026-09-14T20:00:00.000Z', reviewMemo: '   ' },
     { id: 'c', subjectId: 'gone', subjectNameSnapshot: '옛 과목', pagesRead: 3, startPage: 1, endPage: 3, timeSpentMinutes: 9, timestamp: '2026-09-10T20:00:00.000Z', reviewMemo: '가;나' }
   ];
@@ -4009,7 +3988,7 @@ test('the note tab groups notes by subject, newest first, as one paged sheet wit
   assert.ok(html.includes('aria-label="과목 선택"') && html.includes('Main · 2개') && html.includes('옛 과목 · 1개'));
   assert.ok(!html.includes('Practice'), 'a subject with only blank notes is not listed');
   assert.ok(html.includes('등비수열') && html.includes('등차수열') && html.indexOf('등차수열') < html.indexOf('등비수열'), 'two short units share one page, the older unit above the newer one');
-  assert.ok(html.includes('data-note-unit-number="3"') && html.includes('data-note-unit-number="4"') && html.includes('3번째 단위') && html.includes('4번째 단위') && html.includes('p.21~30') && html.includes('p.31~40') && !html.includes('작성') && !html.includes('data-testid="unit-bar"'), 'each unit has a bigger "N번째 단위" heading with its page range; no per-session headings, no unit stepper');
+  assert.ok(html.includes('data-note-unit-number="1"') && html.includes('data-note-unit-number="2"') && html.includes('1번째 단위') && html.includes('2번째 단위') && html.includes('p.21~30') && html.includes('p.31~40') && !html.includes('작성') && !html.includes('data-testid="unit-bar"'), 'each unit has a bigger "N번째 단위" heading with its page range; no per-session headings, no unit stepper');
   assert.equal((html.match(/aria-label="기호 입력"/g) || []).length, 1, 'one symbol bar for all stacked notes');
   assert.ok(html.includes('data-testid="note-pager"') && html.includes('1 / 1 쪽') && html.includes('다음 쪽'));
   assert.ok(html.includes('쓰는 법 보기') && html.includes('aria-pressed="true"'));
@@ -4442,7 +4421,8 @@ test('the study settings screen keeps its frame with larger text and a compact p
   const { renderToStaticMarkup } = require('react-dom/server');
   const { SubjectPlanner } = loadSource('components/SubjectPlanner.tsx');
   const form = renderToStaticMarkup(React.createElement(SubjectPlanner, { onAddSubject() {} }));
-  ['과목 명칭', '시작 페이지', '끝 페이지', '페이지 단위', '목표 완료 날짜', '학습 요일', '중요도', '계획 등록'].forEach(text => assert.ok(form.includes(text), text));
+  ['과목 명칭', '시작 페이지', '끝 페이지', '목표 완료 날짜', '학습 요일', '중요도', '계획 등록'].forEach(text => assert.ok(form.includes(text), text));
+  assert.ok(!form.includes('페이지 단위'), 'no fixed page unit any more: a unit is the span between two 복습에 넣기');
   // 입력칸은 가로로 나란히(넓은 화면 4칸 · 좁으면 2칸) 놓아 세로로 길어지지 않는다. 단원 범위 칸이 있고, 요일은 한 줄이다.
   assert.ok(form.includes('grid-cols-2') && form.includes('md:grid-cols-4') && form.includes('new-plan-chapters') && form.includes('단원 범위'));
   assert.ok(!form.includes('lg:grid-cols-3') && !form.includes('lg:grid-cols-1') && !form.includes('py-3.5'), 'no tall single-column layout');
@@ -4542,7 +4522,7 @@ test('a finished subject: one green growth cell holding the growth content plus 
   const doneAt = html.indexOf('data-testid="done-summary"');
   assert.ok(growthAt > 0 && growthAt < doneAt, 'the growth content comes first (left)');
   const growthPart = html.slice(growthAt, doneAt);
-  ['학습 진척도', '전체 효율', '타임어택 효율', '다음 단위까지'].forEach(text => assert.ok(growthPart.includes(text), text));
+  ['학습 진척도', '전체 효율', '타임어택 효율', '이번 단위'].forEach(text => assert.ok(growthPart.includes(text), text));
   // 오른쪽에는 세 가지만: 한 일(학습량 · 걸린 시간 · 페이지당) → 최근 하루 평균 공부 시간 → 추가 학습하기(맨 아래)
   const right = html.slice(doneAt);
   ['학습량', '걸린 시간', '페이지당'].forEach(text => assert.ok(right.includes(text), text));
@@ -4671,8 +4651,8 @@ test('pomodoro, next-unit and efficiency numbers are large, and the two cells ha
   assert.ok(summary.includes('text-[48px] font-black') && summary.includes('text-[44px] font-black leading-[1.1] tabular-nums text-indigo-900'));
   // 전체 효율 44~48px, 타임어택 30px, 알약 15px
   assert.ok(boxes.includes('md:text-[48px]') && boxes.includes('text-[30px]') && boxes.includes('text-[15px] font-black'));
-  // 다음 단위까지: 36px 숫자 + 게이지
-  assert.ok(growth.includes('text-[36px]') && growth.includes('text-base font-black text-slate-800') && growth.includes('<UnitGauge'));
+  // 이번 단위: 36px 숫자(단위 크기가 정해져 있지 않아 게이지는 없다)
+  assert.ok(growth.includes('text-[36px]') && growth.includes('text-base font-black text-slate-800') && !growth.includes('<UnitGauge'));
   // 복습과목의 두 공부량 증가율 칸: 라벨 16px / 숫자 30~36px
   const cell = growth.slice(growth.indexOf('const GrowthLines'), growth.indexOf('export const UnitGauge'));
   assert.ok(cell.includes('text-base font-black text-slate-700') && cell.includes('lg:text-4xl') && !cell.includes('text-xs'));
@@ -4693,7 +4673,7 @@ test('detail is two big cells: start things on the left, growth things on the ri
   const growthCell = html.slice(html.indexOf('aria-label="성장"'));
   assert.ok(startCell.includes('다음 시작') && startCell.includes('뽀모도로'));
   assert.ok(!startCell.includes('학습 진척도') && !startCell.includes('전체 효율') && !startCell.includes('다음 단위까지'));
-  assert.ok(growthCell.includes('학습 진척도') && growthCell.includes('전체 효율') && growthCell.includes('타임어택 효율') && growthCell.includes('다음 단위까지'));
+  assert.ok(growthCell.includes('학습 진척도') && growthCell.includes('전체 효율') && growthCell.includes('타임어택 효율') && growthCell.includes('이번 단위'));
   assert.ok(!growthCell.includes('필요 횟수') && !growthCell.includes('한 번에'), 'the pomodoro summary stays in the start cell');
   // 바깥 큰 칸과 안의 두 칸은 오늘 할 일·과목 셀처럼 2px 진한 테두리(slate-500), 칸 안 구분선은 그보다 연하다(slate-300)
   assert.equal((html.match(/rounded-2xl border-2 border-slate-500 bg-white/g) || []).length, 2);
@@ -4809,8 +4789,8 @@ test('a plan is created with its own unit name and can have no page unit at all'
   assert.equal(JSON.parse(JSON.stringify(endless)).growthPageUnit, 0);
   const html = renderToStaticMarkup(React.createElement(SubjectPlanner, { onAddSubject() {} }));
   assert.ok(html.includes('id="new-plan-page-label"') && html.includes('maxLength="6"') && html.includes('단위 이름'));
-  assert.ok(html.includes('id="new-plan-no-unit"') && html.includes('단위 없음') && html.includes('id="new-plan-page-unit"'));
-  assert.ok(html.includes('시작 페이지') && html.includes('끝 페이지') && html.includes('페이지 단위'));
+  assert.ok(!html.includes('id="new-plan-no-unit"') && !html.includes('id="new-plan-page-unit"'), 'no fixed page unit to choose');
+  assert.ok(html.includes('시작 페이지') && html.includes('끝 페이지') && !html.includes('페이지 단위'));
 });
 
 test('the unit name replaces P and p everywhere in the subject screen and the measuring screen', () => {
@@ -4826,13 +4806,13 @@ test('the unit name replaces P and p everywhere in the subject screen and the me
     taskSelector: '오늘 할 일', activeWeekday: 1, activeStudyDate: '2026-10-12', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {},
     pomodoroPlan: { subjectId: 'main', pages: 5, minutes: 25, remainingTaskPages: 25 } }));
   // 속도 n/h, 공부량 분/n, 위치 n.1~20, 단위 20n
-  assert.ok(html.includes('속도 +12.0n/h') && html.includes('공부량 −2.5분/n') && html.includes('1번째 단위 · 20n씩'));
+  assert.ok(html.includes('속도 +12.0n/h') && html.includes('공부량 −2.5분/n') && html.includes('1번째 단위 · 복습에 넣으면 단위가 끝나요'));
   assert.ok(html.includes('>분/n</span>'), 'the efficiency values carry the unit name');
   assert.ok(!html.includes('P/h') && !html.includes('분/P') && !/>P<\/span>/.test(html.replace(/<h[^>]*>[\s\S]*?<\/h\d>/g, '')), 'no default P is left in the subject screen');
   // 기본 과목은 그대로 P / p.
   const plain = renderToStaticMarkup(React.createElement(TodaySummary, { logs, subjects: [{ ...custom, pageLabel: undefined }], detailSubjectId: 'main',
     taskSelector: '오늘 할 일', activeWeekday: 1, activeStudyDate: '2026-10-12', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {} }));
-  assert.ok(plain.includes('속도 +12.0P/h') && plain.includes('1번째 단위 · 20P씩') && !plain.includes('n/h'));
+  assert.ok(plain.includes('속도 +12.0P/h') && plain.includes('1번째 단위 · 복습에 넣으면') && !plain.includes('n/h'));
   // 뽀모도로 요약의 "풀 장수"
   const pomodoro = renderToStaticMarkup(React.createElement(PomodoroSummary, { pages: 6, efficiency: 4.26, attackEfficiency: 1.93, remainingTaskPages: 13, label: '회' }));
   assert.match(pomodoro, /풀 회[\s\S]*6<[^>]*>회/);
@@ -4867,9 +4847,9 @@ test('single-subject screens in history and review management use the subject un
   const logs = [0, 1, 2, 3].map(index => source({ id: `h${index}`, subjectId: 'main', pagesRead: 10, startPage: index * 10 + 1, endPage: index * 10 + 10,
     timeSpentMinutes: 30 - index * 4, timestamp: new Date(Date.parse(todayKey) - (4 - index) * 3600e3).toISOString() }));
   const history = renderToStaticMarkup(React.createElement(HistoryCharts, { subjects: [custom], logs }));
-  assert.ok(history.includes('40 / 100 단원') && history.includes('20단원 단위') && /분\/단원/.test(history));
+  assert.ok(history.includes('40 / 100 단원') && history.includes('복습에 넣기 사이 단위') && /분\/단원/.test(history));
   const plain = renderToStaticMarkup(React.createElement(HistoryCharts, { subjects: [{ ...custom, pageLabel: undefined }], logs }));
-  assert.ok(plain.includes('40 / 100 P') && plain.includes('20P 단위'));
+  assert.ok(plain.includes('40 / 100 P') && plain.includes('복습에 넣기 사이 단위'));
   const review = renderToStaticMarkup(React.createElement(ReviewManager, { subjects: [custom],
     logs: [source({ id: 'r1', subjectId: 'main', pagesRead: 4, startPage: undefined, endPage: undefined, reviewEnabled: true, nextReviewDate: '2020-01-01T00:00:00.000Z' })],
     onReviewAction() {}, onUpdateReviewMemo() {} }));
@@ -5434,7 +5414,7 @@ test('speed panels: percent inside every ratio bar, progress bar, a folder total
   assert.ok(!panelSource.includes('forecast-groups') && !panelSource.includes('columnWeights') && !panelSource.includes('forecast-row'), 'the legend grid and the per-subject rows are gone');
 
   const facts = renderToStaticMarkup(React.createElement(panels.SpeedFacts, { series }));
-  assert.ok(facts.includes('속도 증가율 · 최근') && facts.includes('페이지당 가속도') && facts.includes('+0.37') && facts.includes('P/h · 1P마다') && facts.includes('+2.4P/h'));
+  assert.ok(facts.includes('속도 증가율 · 최근') && facts.includes('페이지당 가속도') && facts.includes('+0.37') && facts.includes('P/h씩 · 1P 풀 때마다') && facts.includes('+2.4P/h'));
   assert.ok(!facts.includes('학습시간 가속도') && !facts.includes('P/h²'), '학습 설정은 시간이 아니라 페이지당 가속도(P/h per P)를 보여 준다');
   assert.ok(renderToStaticMarkup(React.createElement(panels.SpeedFacts, { series: buildSpeedSeries([]) })).includes('측정 필요'));
   // 세부 설명 줄은 없다(튜토리얼로 옮김): 가속도 밑 설명, 그래프 위 값 줄, 범례 괄호
@@ -5544,7 +5524,7 @@ test('"과목·폴더 관리" subjects: weekday need in % under the weekly total
   assert.ok(progress.includes('학습 진척도') && progress.includes('role="progressbar"') && /data-testid="progress-percent"[^>]*>\d+%</.test(progress) && !/학습 진척도[^<]*\d+%/.test(progress), 'progress is the last block of the card, its % is inside the bar');
   assert.ok(!html.includes('누적 시간') && !html.includes('>효율<'), 'cumulative time and the old efficiency box are removed');
   assert.ok(html.includes('>전체 효율<') && !html.includes('타임어택 효율'), 'the subject card shows only the overall efficiency, next to the daily averages');
-  assert.ok(html.includes('속도 증가율 · 하루 평균') && html.includes('페이지당 가속도') && html.includes('P/h · 1P마다'), 'the subject growth box follows the chosen unit');
+  assert.ok(html.includes('속도 증가율 · 하루 평균') && html.includes('페이지당 가속도') && html.includes('P/h씩 · 1P 풀 때마다'), 'the subject growth box follows the chosen unit');
   assert.ok(html.includes('속도 그래프와 예측 펼치기') && !html.includes('data-testid="speed-chart"') && !html.includes('data-testid="forecast"'), 'graph and forecast stay behind ›');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
   assert.ok(source.includes('data-testid="subject-speed-detail"') && source.includes('<SpeedGainChart') && source.includes('<ForecastList') && source.includes('setSpeedOpenSubjectIds'));
@@ -6356,15 +6336,13 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   const base = withFreshWeekPlan({ ...weekSubjects()[0], targetDate: target, scheduledWeekdays: [1, 2, 3], growthPageUnit: 10 });
   const pagesOf = subject => getWeekdayPagePlan(subject, getSubjectRemainingPageCount(subject), getDiffDays(subject.targetDate));
   const sum = plan => Object.values(plan).reduce((a, b) => a + b, 0);
-  // 단위: 과목의 페이지 단위(기본 10, 단위 없음이면 1)
-  assert.equal(getWeekdayPageStep({ growthPageUnit: 10 }), 10);
-  assert.equal(getWeekdayPageStep({ growthPageUnit: 5 }), 5);
-  assert.equal(getWeekdayPageStep({ growthPageUnit: 0 }), 1);
-  assert.equal(getWeekdayPageStep({}), 10);
+  // 고정 페이지 단위를 없앴으므로 한 번에 1쪽씩
+  assert.equal(getWeekdayPageStep({ growthPageUnit: 10 }), 1);
+  assert.equal(getWeekdayPageStep({}), 1);
   // + / −: 그 요일만 단위만큼 바뀌고 0 아래로는 안 내려간다
   const before = pagesOf(base);
   const up = stepWeekdayPages(base, 2, 1);
-  assert.equal(pagesOf(up)[2], before[2] + 10);
+  assert.equal(pagesOf(up)[2], before[2] + 1);
   assert.equal(pagesOf(up)[1], before[1], 'the other days stay');
   let zero = base;
   for (let i = 0; i < 40; i += 1) zero = stepWeekdayPages(zero, 3, -1);
@@ -6434,7 +6412,7 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   // 작은 ▲▼는 단위와 상관없이 1쪽씩
   const unitTen = { ...base, growthPageUnit: 10, scheduledWeekdayPages: { 1: 30, 2: 24, 3: 10 } };
   assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1, 1))[1], 31); assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, -1, 1))[1], 29);
-  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1))[1], 40, 'the big button still steps by the page unit');
+  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1))[1], 31, 'the big button steps one page too (no fixed page unit)');
   let floor = unitTen; for (let i = 0; i < 40; i += 1) floor = stepWeekdayPages(floor, 3, -1, 1);
   assert.equal(pagesOf(floor)[3], 0, 'never below 0');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
@@ -6569,11 +6547,12 @@ test('note pages follow the subject page unit: one unit per page, and a study th
 
   // 화면: 짧은 두 단위가 한 쪽에 같이 들어가고, 각 단위 위에 "N번째 단위"가 조금 큰 글씨로 있다
   const unitSubjects = [{ id: 's', name: '수학', totalPages: 100, completedPages: 34, targetDate: '2026-10-31', growthPageUnit: 10 }];
-  const html = renderToStaticMarkup(React.createElement(NoteTab, { logs: [log('d', 28, 34, 13, { reviewMemo: '마지막:노트' }), log('c', 21, 27, 12, { reviewMemo: '앞쪽:노트' })], subjects: unitSubjects, onUpdateReviewMemo() {} }));
-  assert.ok(html.includes('data-note-unit-number="3"') && html.includes('data-note-unit-number="4"') && html.includes('3번째 단위') && html.includes('4번째 단위') && html.includes('p.21~30') && html.includes('p.31~40'), 'both units are on the one page, each with its number and page range');
+  // 단위는 "복습에 넣기" 사이: c를 12일에 복습에 넣고 d를 13일에 넣었다 → 1번째 단위(c, p.21~27) · 2번째 단위(d, p.28~34)
+  const html = renderToStaticMarkup(React.createElement(NoteTab, { logs: [log('d', 28, 34, 13, { reviewMemo: '마지막:노트', reviewRegisteredAt: '2026-09-13T22:00:00.000Z' }), log('c', 21, 27, 12, { reviewMemo: '앞쪽:노트', reviewRegisteredAt: '2026-09-12T22:00:00.000Z' })], subjects: unitSubjects, onUpdateReviewMemo() {} }));
+  assert.ok(html.includes('data-note-unit-number="1"') && html.includes('data-note-unit-number="2"') && html.includes('1번째 단위') && html.includes('2번째 단위') && html.includes('p.21~27') && html.includes('p.28~34'), 'both units are on the one page, each with its number and page range');
   assert.ok(html.indexOf('앞쪽') < html.indexOf('마지막'), 'the older unit is above the newer one');
   assert.ok(/data-note-heading="unit"[^>]*class="[^"]*"/.test(html) && html.includes('text-xl font-black text-indigo-900'), 'the unit number is a little bigger than the note text');
-  assert.ok(html.includes('data-unit-spanning-log="true"') && html.includes('앞 단위에서 이어짐 · p.28~34'), 'the study that started in the previous unit is marked');
+  assert.ok(!html.includes('data-unit-spanning-log="true"'), 'a unit is split by time, so no study crosses two units');
   assert.ok(!html.includes('data-testid="unit-bar"') && !html.includes('다음 단위 ▶') && html.includes('data-testid="note-pager"') && html.includes('1 / 1 쪽'), 'no unit stepper, only the page pager');
   assert.ok(!html.includes('data-note-day='), 'a unit page has no date tags');
   const noUnit = renderToStaticMarkup(React.createElement(NoteTab, { logs: [log('b', 11, 20, 11, { studyDate: '2026-09-11' }), log('a', 1, 10, 10, { studyDate: '2026-09-10' })], subjects: [{ ...unitSubjects[0], growthPageUnit: 0 }], onUpdateReviewMemo() {} }));
@@ -6588,7 +6567,7 @@ test('note pages follow the subject page unit: one unit per page, and a study th
   assert.ok(multi.includes('13일:') && !multi.includes('12일:') && multi.includes('4 / 4 쪽'), 'the last page opens first');
   assert.ok(!/ disabled=""/.test(pagerButton(multi, '◀ 이전 쪽')) && / disabled=""/.test(pagerButton(multi, '다음 쪽 ▶')), 'previous page is open, nothing after the last page');
   // 한 단위 안에서 여러 날에 걸쳐도 날짜는 달지 않고, 오래된 기록이 위
-  const order = renderToStaticMarkup(React.createElement(NoteTab, { logs: [log('p3', 17, 20, 13, { reviewMemo: '셋째:노트', studyDate: '2026-09-13' }), log('p1', 11, 14, 11, { reviewMemo: '첫째:노트', studyDate: '2026-09-11' }), log('p2', 14, 17, 12, { reviewMemo: '둘째:노트', studyDate: '2026-09-12' })], subjects: unitSubjects, onUpdateReviewMemo() {} }));
+  const order = renderToStaticMarkup(React.createElement(NoteTab, { logs: [log('p3', 17, 20, 13, { reviewMemo: '셋째:노트', studyDate: '2026-09-13', reviewRegisteredAt: '2026-09-14T00:00:00.000Z' }), log('p1', 11, 14, 11, { reviewMemo: '첫째:노트', studyDate: '2026-09-11', reviewRegisteredAt: '2026-09-14T00:00:00.000Z' }), log('p2', 14, 17, 12, { reviewMemo: '둘째:노트', studyDate: '2026-09-12', reviewRegisteredAt: '2026-09-14T00:00:00.000Z' })], subjects: unitSubjects, onUpdateReviewMemo() {} }));
   assert.ok(order.indexOf('첫째') < order.indexOf('둘째') && order.indexOf('둘째') < order.indexOf('셋째'), 'the newest record is last on the page');
   assert.equal((order.match(/data-note-day=/g) || []).length, 0, 'a unit that spans several days still shows only its unit number, no dates');
   assert.equal((order.match(/data-note-heading="unit"/g) || []).length, 1);
@@ -8923,8 +8902,9 @@ test('a new unit inherits the previous unit: with no pages in the new unit yet t
     source({ id: 'c', pagesRead: 10, timeSpentMinutes: 25, timestamp: '2026-10-12T05:00:00Z' }),
     source({ id: 'd', pagesRead: 10, timeSpentMinutes: 15, timestamp: '2026-10-12T07:00:00Z' })
   ];
-  // 20쪽 단위를 둘 마쳤고 셋째 단위에는 아직 푼 기록이 없다 → 둘째 단위(40분 ÷ 20쪽 = 2분/P)를 가져온다
-  const fresh = getEfficiencyView(getEfficiencyScope(unitLogs, 20, 1));
+  // 4시와 8시에 복습에 넣어 단위를 둘 마쳤고 셋째 단위에는 아직 푼 기록이 없다 → 둘째 단위(40분 ÷ 20쪽 = 2분/P)를 가져온다
+  const cuts = [Date.parse('2026-10-12T04:00:00Z'), Date.parse('2026-10-12T08:00:00Z')];
+  const fresh = getEfficiencyView(getEfficiencyScope(unitLogs, cuts));
   assert.equal(fresh.inherited, true);
   assert.equal(fresh.shown.averageTimePerPage, 2);
   // 자기 자신과 견주지 않는다: 이전 단위는 첫째 단위(45분 ÷ 20쪽 = 2.25분/P), 뽀모도로로는 견주지 않는다
@@ -8936,16 +8916,16 @@ test('a new unit inherits the previous unit: with no pages in the new unit yet t
   assert.equal(nextEfficiencyComparison(fresh).kind, 'average');
   // 새 단위에 한 장이라도 풀면 그 단위의 최근 25분으로 돌아온다
   const started = getEfficiencyView(getEfficiencyScope([...unitLogs,
-    source({ id: 'e', pagesRead: 5, timeSpentMinutes: 10, timestamp: '2026-10-12T09:00:00Z' })], 20, 1));
+    source({ id: 'e', pagesRead: 5, timeSpentMinutes: 10, timestamp: '2026-10-12T09:00:00Z' })], cuts));
   assert.equal(started.inherited, false);
   assert.ok(Math.abs(started.shown.averageTimePerPage - 25 / 15) < 1e-9);
   assert.equal(started.choice.kind, 'pomodoro');
   // 단위가 하나뿐이면 앞 단위가 없어 평균도 없고, 단위가 없는 과목은 늘 최근 25분이다
-  const one = getEfficiencyView(getEfficiencyScope(unitLogs.slice(0, 2), 20, 1));
+  const one = getEfficiencyView(getEfficiencyScope(unitLogs.slice(0, 2), cuts.slice(0, 1)));
   assert.equal(one.inherited, true);
   assert.equal(one.shown.averageTimePerPage, 2.25);
   assert.deepEqual(one.options, []);
-  assert.equal(getEfficiencyView(getEfficiencyScope(unitLogs, 0, 1)).inherited, false);
+  assert.equal(getEfficiencyView(getEfficiencyScope(unitLogs, [])).inherited, false, 'never put into review: one open unit');
 });
 
 test('writing a note cell recommends its position, and the recommendation puts [position] in front of the cell', () => {
@@ -9700,7 +9680,10 @@ test('speed graph x axis: each 25 minutes carries the page position where it end
     { ...at(0), pagesRead: 5, startPage: 1, endPage: 5 }, { ...at(30), pagesRead: 5, startPage: 6, endPage: 10 },
     { ...at(60), pagesRead: 5, startPage: 1, endPage: 5 }, { ...at(90), pagesRead: 5, startPage: 6, endPage: 10 }]);
   const backChart = require('react-dom/server').renderToStaticMarkup(require('react').createElement(panels.SpeedGainChart, { series: back }));
-  assert.equal((backChart.match(/data-testid="speed-trend"/g) || []).length, 2, 'one trend segment per pass over the pages');
+  // 같은 쪽을 다시 풀어 위치가 앞으로 되돌아가면 위치 대신 늘 앞으로만 가는 "푼 장수의 합"을 가로축으로 쓴다(한 줄, 한 위치에 한 값)
+  assert.equal((backChart.match(/data-testid="speed-trend"/g) || []).length, 1, 'one line on the pages-solved axis');
+  assert.equal(panels.speedAxisOf([{ page: 5, pagesDone: 5 }, { page: 2, pagesDone: 8 }]).position, false);
+  assert.equal(panels.speedAxisOf([{ page: 5, pagesDone: 5 }, { page: 9, pagesDone: 9 }]).position, true);
   // 설정 쪽 소스: 그래프 가로에 공부 시간을 쓰지 않는다
   const source = fs.readFileSync(path.resolve(__dirname, '..', 'components/SpeedPanels.tsx'), 'utf8');
   assert.ok(!source.includes('x(point.hours)') && !source.includes('시간</text>') && !source.includes('시간째'));

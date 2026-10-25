@@ -156,6 +156,8 @@ export interface StudyLog {
   unitReviewPending?: boolean;
   /** 단위 복습으로 등록됐을 때 그 단위의 페이지 범위(예: 1~8). 단위로 등록되지 않은 기록에는 없다. */
   reviewUnitRange?: { start: number; end: number };
+  /** "복습에 넣기"로 복습에 넣은 시각. 학습과목의 단위는 이 시각들로 나뉜다(이전 복습에 넣기 ~ 이번 복습에 넣기) */
+  reviewRegisteredAt?: string;
   reviewSubjectId?: string;
   reviewTimeSpentMinutes?: number;
   reviewCompletedPages?: number;
