@@ -10,7 +10,7 @@ import {
 } from '../utils/math';
 import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
-import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getPomodoroRemainingPages, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
+import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
 import { calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
@@ -152,24 +152,18 @@ const formatTime = (totalSeconds: number) => {
 
 export const MeasurementProgress: React.FC<{ pages: number; target: number | null; elapsed: string; label?: string }> = ({ pages, target, elapsed, label = DEFAULT_PAGE_LABEL }) => {
   const exceeded = isPomodoroGoalExceeded(pages, target);
-  const remaining = getPomodoroRemainingPages(target, pages);
   const labelClass = `mb-2 text-sm font-black ${exceeded ? 'text-amber-600' : 'text-slate-500'}`;
+  // 순서: 경과 시간(뽀모도로 바로 옆) → 이번 측정. 남은 페이지는 보이지 않는다
   return <>
     <span className="flex min-w-0 shrink-0 flex-col">
+      <span className={labelClass}>경과 시간</span>
+      <span data-testid="measurement-elapsed" className={`font-mono text-2xl font-black tabular-nums sm:text-3xl ${exceeded ? 'text-amber-600' : 'text-slate-900'}`}>{elapsed}</span>
+    </span>
+    <span className="flex min-w-0 shrink-0 flex-col border-l border-slate-200 pl-3 sm:pl-4">
       <span className={labelClass}>이번 측정</span>
-      <span data-testid="measurement-pages" className={`whitespace-nowrap font-mono text-3xl font-black tabular-nums ${exceeded ? 'text-amber-600' : 'text-indigo-700'}`}>
+      <span data-testid="measurement-pages" className={`whitespace-nowrap font-mono text-2xl font-black tabular-nums sm:text-3xl ${exceeded ? 'text-amber-600' : 'text-indigo-700'}`}>
         {formatPageNumber(pages)} / {target !== null ? formatPageNumber(target) : '-'}{label}
       </span>
-    </span>
-    <span className="flex shrink-0 flex-col border-l border-slate-200 pl-4">
-      <span className={labelClass}>남은 페이지</span>
-      <span data-testid="measurement-remaining" className={`whitespace-nowrap font-mono text-3xl font-black tabular-nums ${exceeded ? 'text-amber-600' : 'text-slate-900'}`}>
-        {remaining !== null ? `${formatPageNumber(remaining)}${label}` : '-'}
-      </span>
-    </span>
-    <span className="flex shrink-0 flex-col border-l border-slate-200 pl-4">
-      <span className={labelClass}>경과 시간</span>
-      <span data-testid="measurement-elapsed" className={`font-mono text-3xl font-black tabular-nums ${exceeded ? 'text-amber-600' : 'text-slate-900'}`}>{elapsed}</span>
     </span>
   </>;
 };
@@ -2847,7 +2841,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         </div>
       )}
 
-      <div className={`w-full ${isMeasuring ? 'my-auto max-w-[1440px]' : 'max-w-3xl'}`}>
+      <div className={`w-full ${isMeasuring ? 'max-w-[1440px]' : 'max-w-3xl'}`}>
         {(step === 'timer' || step === 'organize') && (
           <div className="flex w-full flex-col gap-4">
             <main className="order-2 w-full min-w-0" aria-label="학습 노트">
@@ -3019,13 +3013,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             {step === 'organize' ? <OrganizationTimer seconds={seconds} baseSeconds={studySeconds} running={isTimerRunning}
               onToggle={() => setIsTimerRunning(current => !current)} onComplete={handleTimerComplete} /> : (
             <div className="flex flex-wrap items-stretch gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div data-testid="measurement-group" className="flex min-w-[28rem] flex-[2] items-stretch gap-1.5">
-                <PomodoroLength />
-                <div className="flex min-w-0 flex-1 items-center gap-4 rounded-2xl bg-slate-50 px-4 py-3">
+                <div data-testid="measurement-group" className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-slate-50 px-3 py-3 sm:gap-x-4 sm:px-4 lg:w-auto lg:flex-[2] lg:flex-nowrap">
+                <PomodoroLength className="!bg-transparent !p-0" />
+                <div className="flex min-w-0 flex-1 items-center gap-3 border-l border-slate-200 pl-3 sm:gap-4 sm:pl-4">
                   <MeasurementProgress pages={timeTargetPages} target={pomodoroPageTarget} elapsed={formatTime(seconds)} label={pageLabel} />
                 </div>
                 </div>
-              <div className="flex min-w-[10rem] flex-1 items-center rounded-xl bg-slate-50 px-4 py-3">
+              <div className="flex w-full min-w-0 items-center rounded-xl bg-slate-50 px-4 py-3 sm:flex-1 sm:basis-48 lg:w-auto">
                 <div className="min-w-0 flex-1">
                   <p className="mb-2 text-sm font-black text-slate-500">학습 진척도</p>
                   <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
@@ -3060,7 +3054,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                   </div>
                 </div>
               </div>
-            <div className="flex min-w-[16.5rem] flex-1 items-center gap-2">
+            <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto lg:min-w-[16.5rem] lg:flex-1">
               <button
                 onClick={() => setIsTimerRunning(!isTimerRunning)}
                 className={`flex-1 rounded-xl px-3 py-3.5 text-sm font-black shadow-sm ${isTimerRunning ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}

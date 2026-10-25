@@ -63,13 +63,13 @@ export const NoteSymbolBar: React.FC<{ onInsert: (value: string) => void; classN
   return (
     <div role="group" aria-label="기호 입력" data-floating={floating ? 'true' : 'false'}
       style={floating ? { bottom: inset } : undefined}
-      className={`flex gap-2 border-[#D2D8F5] bg-white px-3 py-2.5 ${floating ? 'fixed inset-x-0 z-40 border-t shadow-[0_-4px_16px_rgba(30,40,90,0.12)]' : 'border-b'} ${className}`}>
+      className={`flex gap-1.5 border-[#D2D8F5] bg-white px-2 py-2.5 sm:gap-2 sm:px-3 ${floating ? 'fixed inset-x-0 z-40 border-t shadow-[0_-4px_16px_rgba(30,40,90,0.12)]' : 'border-b'} ${className}`}>
       {symbols.map(symbol => (
         <button key={symbol.value} type="button" aria-label={symbol.aria}
           onMouseDown={keepFocus} onPointerDown={keepFocus}
           onClick={() => onInsert(symbol.value)}
           style={{ flex: symbol.flex ?? 1 }}
-          className={`h-14 min-w-0 rounded-xl border-2 font-mono text-[26px] font-bold transition-transform active:scale-95 ${TONES[symbol.tone]}`}>
+          className={`h-14 min-w-0 whitespace-nowrap rounded-xl border-2 font-mono text-[22px] font-bold transition-transform sm:text-[26px] active:scale-95 ${TONES[symbol.tone]}`}>
           {symbol.label}
         </button>
       ))}

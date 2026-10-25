@@ -321,10 +321,10 @@ const STUDY_STEP_LABELS = ['타임어택 풀이', '막힌 부분 정리', '기�
 const REVIEW_STEP_LABELS = ['노트 확인', '복습 풀이', '막힌 부분 정리', '기록 저장'];
 
 const PomodoroStat: React.FC<{ label: string; value: string; unit: string; adjust?: React.ReactNode }> = ({ label, value, unit, adjust }) => (
-  <div className="flex min-w-0 flex-1 flex-col border-l border-slate-200 pl-4 first:border-l-0 first:pl-0">
+  <div className="flex min-w-0 flex-[1_1_auto] flex-col border-l border-slate-200 pl-4 first:border-l-0 first:pl-0">
     <span className="text-[15px] font-bold text-slate-600">{label}</span>
     <span className="flex items-center gap-2">
-      <span className="whitespace-nowrap font-mono text-[40px] font-black leading-[1.15] tabular-nums text-slate-900 md:text-[44px]">
+      <span className="whitespace-nowrap font-mono text-[34px] font-black leading-[1.15] tabular-nums text-slate-900 sm:text-[40px] md:text-[44px]">
         {value}<span className="ml-1 text-xl font-semibold text-slate-500">{unit}</span>
       </span>
       {adjust}
@@ -489,7 +489,7 @@ export const PomodoroSummary: React.FC<{
             <span>{pomodoroMinutes}분은 예측이에요. 끝 페이지까지 걸릴 예상 시간이 {pomodoroMinutes}분 이하가 되도록 장수를 정해요. 실제로는 몇 장을 풀었는지를 봐요. 옆의 ▲▼로 5분씩 바꾸면 다음 학습에도 그대로 써요.</span>
           </HelpPopover>
         </div>
-        <div className="mt-1 flex items-stretch gap-4">
+        <div className="mt-1 flex flex-wrap items-stretch gap-x-4 gap-y-2">
           <PomodoroStat label="한 번에" value={String(pomodoroMinutes)} unit="분" adjust={<PomodoroMinutesStepper />} />
           {pages !== null && pages > 0 && <PomodoroStat label={`풀 ${pageWord(label) === '페이지' ? '장수' : pageWord(label)}`} value={formatNumber(pages)} unit={label} />}
           {sessions !== null && <PomodoroStat label="필요 횟수" value={String(sessions)} unit="회" />}
@@ -756,7 +756,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         {summary.startPage > 0 && summary.endPage > 0 ? `${pagePos}.${formatNumber(summary.startPage)}~${formatNumber(summary.endPage)} · ` : ''}
         {formatNumber(summary.pages)}{pageLabel} · {formatDoneMinutes(summary.minutes)}
       </p>
-      <button type="button" onClick={() => openEditModal(summary)} title="합산 기록 수정" aria-label="합산 기록 수정"
+      <button type="button" onClick={() => { setChangingAmount(false); openEditModal(summary); }} title="합산 기록 수정" aria-label="합산 기록 수정"
         className="flex h-11 w-11 shrink-0 items-center justify-center text-slate-600 transition-colors hover:text-indigo-700">
         <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
       </button>
@@ -766,13 +766,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       </button>
     </div>
   ));
-  // 끝내지 않은(또는 다시 연) 과목의 기록 줄: 아래쪽 왼쪽 열 끝에 둔다.
-  const todayRecordsBlock = editableRecords.length > 0 ? (
-    <section aria-label="오늘 한 기록" className="flex flex-col gap-1.5 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
-      <h3 className="text-sm font-black text-slate-800">오늘 한 기록</h3>
-      {recordRows}
-    </section>
-  ) : null;
   // 시작 버튼 자리: 끝낸 과목을 열어 둔 동안은 눌러지지 않는 "오늘 학습 완료", 추가 학습을 연 뒤에는 그 과목의 "학습 시작".
   const startSlot = idle ? (showDoneCard ? <DoneStartButton />
     : reopened && canExtraStudy && idle.onExtraStudy ? <StartButton kind={doneRow?.kind === 'review' ? 'review' : 'study'} onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
@@ -800,6 +793,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 복습에 넣기를 기다리는 기록(학습을 저장해도 사용자가 "복습에 넣기"를 눌러 난도를 고를 때까지 복습에 들어가지 않는다)
   const pendingReviewCount = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.subjectId === detailData.subject.id).length : 0), [logs, detailData, detailIsReview]);
   const [choosingReview, setChoosingReview] = useState(false);
+  // "학습량 변경" 창: 학습량 추가와 오늘 한 기록(고치기 · 지우기)이 한곳에 모인다
+  const [changingAmount, setChangingAmount] = useState(false);
+  useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
   // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다
   useEffect(() => { if (pendingReviewCount === 0) setChoosingReview(false); }, [pendingReviewCount, detailData?.subject.id]);
   const canAddAmount = Boolean(detailData && !detailIsReview && getSubjectRemainingPageCount(detailData.subject) > 0);
@@ -808,6 +804,34 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const titleChain = hasSubjectChain(chainSegments) ? chainSegments : null;
   const headerButton = 'flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-indigo-400 bg-indigo-100 px-3.5 text-sm font-black text-indigo-900 transition-colors hover:bg-indigo-200 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400';
 
+  // "학습량 변경" 창의 내용: 위에 학습량 추가, 아래에 오늘 한 기록(고치기 · 지우기). 예전에는 성장 칸 밑에 늘 펼쳐져 있었다.
+  const amountDialog = changingAmount && detailData && !detailIsReview ? (
+    <div role="dialog" aria-modal="true" aria-label="학습량 변경" data-testid="amount-change-dialog" onClick={() => setChangingAmount(false)}
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+      <div onClick={event => event.stopPropagation()} className="flex max-h-[92vh] w-full max-w-md flex-col rounded-[2rem] bg-white shadow-2xl animate-fade-in">
+        <div className="flex items-start justify-between gap-3 px-6 pb-3 pt-6">
+          <div className="min-w-0">
+            <h4 className="text-xl font-black text-slate-900">학습량 변경</h4>
+            <p className="mt-1 truncate text-sm font-bold text-slate-600">{detailData.subject.name}</p>
+          </div>
+          <button type="button" onClick={() => setChangingAmount(false)} aria-label="학습량 변경 닫기"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-2xl text-slate-600 hover:bg-slate-100">×</button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
+          <button type="button" data-testid="amount-add" disabled={!canAddAmount} aria-label="학습량 추가"
+            onClick={() => { setChangingAmount(false); openAddModal(detailData.subject); }}
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-base font-black text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+            <span aria-hidden="true" className="text-xl leading-none">+</span>학습량 추가
+          </button>
+          {!canAddAmount && <p className="-mt-2 text-xs font-bold text-slate-600">남은 페이지가 없어서 더 추가할 수 없어요.</p>}
+          <section aria-label="오늘 한 기록" className="flex flex-col gap-1.5 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
+            <h3 className="text-sm font-black text-slate-800">오늘 한 기록</h3>
+            {editableRecords.length > 0 ? recordRows : <p data-testid="amount-empty" className="py-1 text-sm font-bold text-slate-600">오늘 한 기록이 없어요.</p>}
+          </section>
+        </div>
+      </div>
+    </div>
+  ) : null;
   const startBlock = detailData && !detailData.owner ? (
     <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
       <div className="flex items-baseline gap-2.5 whitespace-nowrap">
@@ -931,7 +955,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             {!badgesInStartCell && kindBadges}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {reopened && (
             <button type="button" onClick={() => setReopenedId('')} className={headerButton}>
               <span aria-hidden="true">✓</span>완료 기록 보기
@@ -950,8 +974,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </button>
           )}
           {!detailIsReview && (
-            <button type="button" onClick={() => openAddModal(detailData.subject)} disabled={!canAddAmount} aria-label="학습량 추가" className={headerButton}>
-              <span aria-hidden="true" className="text-base leading-none">+</span>학습량 추가
+            <button type="button" data-testid="amount-change" onClick={() => setChangingAmount(true)} disabled={!canAddAmount && editableRecords.length === 0} aria-label="학습량 변경" className={headerButton}>
+              <span aria-hidden="true" className="text-base leading-none">✎</span>학습량 변경
             </button>
           )}
         </div>
@@ -1007,7 +1031,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             start={startSlot}
             growth={growthNode}
             efficiencySlot={efficiencyNode} />
-          {todayRecordsBlock}
         </>
       )}
 
@@ -1031,6 +1054,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         <NoteSheet logs={logs} subjects={subjects} subjectId={noteSubjectId} subjectName={noteSubjectName}
           onUpdateReviewMemo={onUpdateReviewMemo} onRestoreReviewQuestion={onRestoreReviewQuestion} onSkipEditIntake={onSkipEditIntake} onClose={() => setShowNotes(false)} />
       )}
+
+      {amountDialog}
 
       {modalMode && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 z-[10000]">
@@ -1152,7 +1177,7 @@ export const BasicReviewPlan: React.FC<{ plan: ReviewPlanContext; label?: string
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2" /><path d="M9 2h6" /></svg>
           뽀모도로
         </span>
-        <div className="mt-1 flex items-stretch gap-4">
+        <div className="mt-1 flex flex-wrap items-stretch gap-x-4 gap-y-2">
           <PomodoroStat label="한 번에" value={String(pomodoroMinutes)} unit="분" adjust={<PomodoroMinutesStepper />} />
           {pomodoro.pages !== null && pomodoro.pages > 0 && <PomodoroStat label={`복습 ${word}`} value={formatNumber(pomodoro.pages)} unit={label} />}
           {pomodoro.sessions !== null && pomodoro.pages !== null && pomodoro.pages > 0 && <PomodoroStat label="필요 횟수" value={String(pomodoro.sessions)} unit="회" />}

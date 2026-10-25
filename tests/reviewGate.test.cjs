@@ -2418,14 +2418,21 @@ test('finished records are merged into the subject status rows and the separate 
     detailSubjectId: 'deadline', taskSelector: null, activeWeekday: 1, activeStudyDate: '2026-10-12',
     onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {}
   }));
-  // 예전의 "오늘 완료된 기록" 목록은 없다. 고치고 지우는 일만 상세 칸의 "오늘 한 기록"에서 한다.
+  // 예전의 "오늘 완료된 기록" 목록은 없다. 성장 칸 밑에 늘 펼쳐져 있던 "오늘 한 기록"도 없고,
+  // 위쪽의 "학습량 변경" 버튼을 눌러야 열리는 창 안으로 들어갔다(닫혀 있으면 기록 줄이 보이지 않는다).
   assert.ok(!html.includes('완료된 기록'));
-  assert.ok(html.includes('aria-label="오늘 한 기록"'));
-  assert.ok(html.includes('10P · 20분'));
-  assert.ok(html.includes('aria-label="합산 기록 수정"') && html.includes('aria-label="합산 기록 삭제"'));
-  // "직접 추가"는 없어지고, 지금 보는 과목에 더하는 "학습량 추가" 버튼이 상세 칸 위쪽에 있다.
+  assert.ok(!html.includes('aria-label="오늘 한 기록"') && !html.includes('aria-label="합산 기록 수정"') && !html.includes('data-testid="amount-change-dialog"'));
+  // "직접 추가"는 없어지고, 지금 보는 과목의 "학습량 변경" 버튼이 상세 칸 위쪽에 있다.
   assert.ok(!html.includes('직접 추가'));
-  assert.ok(html.includes('aria-label="학습량 추가"'));
+  assert.ok(html.includes('aria-label="학습량 변경"') && html.includes('data-testid="amount-change"') && !html.includes('aria-label="학습량 추가"'));
+  assert.ok(!/data-testid="amount-change"[^>]*disabled=""/.test(html), 'there is a record, so the change button is on');
+  const summarySource = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  const dialog = summarySource.slice(summarySource.indexOf('data-testid="amount-change-dialog"'), summarySource.indexOf('const startBlock'));
+  assert.ok(dialog.includes('학습량 변경') && dialog.includes('data-testid="amount-add"') && dialog.includes('aria-label="학습량 추가"') && dialog.includes('오늘 한 기록') && dialog.includes('? recordRows :'),
+    'the window holds the add button and today records');
+  assert.ok(dialog.indexOf('data-testid="amount-add"') < dialog.indexOf('오늘 한 기록'), 'add comes first, records below');
+  assert.ok(dialog.includes('setChangingAmount(false); openAddModal(detailData.subject)') && summarySource.includes('setChangingAmount(false); openEditModal(summary)'), 'add and edit close this window and open their own');
+  assert.ok(!summarySource.includes('todayRecordsBlock'), 'no records block under the growth cell');
   assert.ok(!html.includes('실시간 기록'));
   assert.ok(!html.includes('하루 평균 공부량'));
   assert.ok(!html.includes('최근 한 달'));
@@ -2841,7 +2848,7 @@ test('pomodoro sits below selected subject progress and uses the execution plan 
   assert.match(changed, /풀 장수[\s\S]*5<[^>]*>P/);
 });
 
-test('measurement bar shows this-time pages, remaining pages and elapsed time, and they turn amber together only above the goal', () => {
+test('measurement bar shows elapsed time then this-time pages (no remaining pages), and they turn amber together only above the goal', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { MeasurementProgress } = loadSource('components/SessionLogger.tsx');
@@ -2849,21 +2856,18 @@ test('measurement bar shows this-time pages, remaining pages and elapsed time, a
   assert.ok(normal.includes('10 / 10P'));
   assert.ok(!normal.includes('text-amber-600'));
   const exceeded = renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 11, target: 10, elapsed: '27:30' }));
-  assert.equal((exceeded.match(/text-amber-600/g) || []).length, 6);
+  assert.equal((exceeded.match(/text-amber-600/g) || []).length, 4);
   assert.ok(exceeded.includes('11 / 10P'));
   assert.ok(exceeded.includes('이번 측정'));
-  assert.ok(exceeded.includes('남은 페이지'));
+  assert.ok(!exceeded.includes('남은 페이지') && !exceeded.includes('measurement-remaining'), 'remaining pages are gone');
   assert.ok(exceeded.includes('경과 시간'));
   assert.ok(exceeded.includes('27:30'));
-  // 순서: 이번 측정 → 남은 페이지 → 경과 시간
-  const order = ['이번 측정', '남은 페이지', '경과 시간'].map(text => exceeded.indexOf(text));
-  assert.ok(order[0] < order[1] && order[1] < order[2], 'this-time pages, remaining pages, elapsed time from left to right');
+  // 순서: 경과 시간(뽀모도로 바로 옆) → 이번 측정
+  assert.ok(exceeded.indexOf('경과 시간') < exceeded.indexOf('이번 측정'), 'elapsed time sits next to the pomodoro, then this-time pages');
   // 타임어택 카운트다운은 더 이상 보이지 않는다
   assert.ok(!exceeded.includes('타임어택'));
-  // 남은 페이지는 목표에서 푼 만큼을 뺀 값, 목표가 없으면 '-'
-  const partial = renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 3, target: 5, elapsed: '10:00' }));
-  assert.match(partial, /data-testid="measurement-remaining"[^>]*>2P</);
-  assert.match(renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 3, target: null, elapsed: '10:00' })), /data-testid="measurement-remaining"[^>]*>-</);
+  // 목표가 없으면 이번 측정은 "3 / -"
+  assert.match(renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 3, target: null, elapsed: '10:00' })), /data-testid="measurement-pages"[^>]*>3 \/ -P</);
 });
 
 test('the pomodoro length sits at the far left of the measurement bar and can only be raised there', () => {
@@ -4810,12 +4814,11 @@ test('the unit name replaces P and p everywhere in the subject screen and the me
   const pomodoro = renderToStaticMarkup(React.createElement(PomodoroSummary, { pages: 6, efficiency: 4.26, attackEfficiency: 1.93, remainingTaskPages: 13, label: '회' }));
   assert.match(pomodoro, /풀 회[\s\S]*6<[^>]*>회/);
   assert.ok(!/6<[^>]*>P/.test(pomodoro) && !pomodoro.includes('분/P') && pomodoro.includes('분/회'));
-  // 측정 화면: 이번 측정 3 / 5회, 남은 장수 2회
+  // 측정 화면: 이번 측정 3 / 5회
   const progress = renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 3, target: 5, elapsed: '10:00', label: '단원' }));
   assert.ok(progress.includes('3 / 5단원') && !progress.includes('5P'));
   assert.ok(renderToStaticMarkup(React.createElement(MeasurementProgress, { pages: 3, target: 5, elapsed: '10:00' })).includes('3 / 5P'));
-  assert.match(progress, /data-testid="measurement-remaining"[^>]*>2단원</);
-  assert.ok(!progress.includes('2P'));
+  assert.ok(!progress.includes('measurement-remaining') && !progress.includes('2P'));
 });
 
 test('the two big cell titles (공부 시작 and 성장) are large and dark, not small grey labels', () => {
