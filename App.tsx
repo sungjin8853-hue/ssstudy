@@ -36,7 +36,6 @@ const getFolderSnapshots = (tagIds: string[], tags: TagDefinition[]) => {
   return Array.from(snapshots.values());
 };
 
-const SIDEBAR_COLLAPSED_KEY = 'swp_sidebar_collapsed';
 const TEST_REVIEW_DELAY_THRESHOLD_MS = 10 * 60 * 1000;
 const REVIEW_INTERVAL_POLICY_KEY = 'swp_review_interval_policy';
 const REVIEW_INTERVAL_POLICY_VERSION = 'power-of-two-v1';
@@ -79,14 +78,6 @@ const inheritReviewSubjectTargetDates = (sourceSubjects: Subject[]) => sourceSub
     ),
   };
 });
-
-const readSidebarCollapsed = () => {
-  return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
-};
-
-const writeSidebarCollapsed = (collapsed: boolean) => {
-  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
-};
 
 const repairTestReviewDate = (log: StudyLog) => {
   if (IS_FAST_REVIEW_TEST_MODE) {
@@ -157,7 +148,6 @@ const App: React.FC = () => {
   useEffect(() => { if (activeTab !== 'settings') setSettingsFocusSubjectId(''); }, [activeTab]);
   const [dashboardDate, setDashboardDate] = useState(() => getLocalDateKey());
   const [aiTip, setAiTip] = useState<string>('목표를 향한 오늘의 첫걸음을 응원합니다.');
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readSidebarCollapsed);
 
   // 커스텀 확인 모달 상태
   const [confirmModal, setConfirmModal] = useState<{
@@ -428,12 +418,6 @@ const App: React.FC = () => {
         subjectNameSnapshot: updatedSubject.name
       };
     }));
-  };
-
-  const toggleSidebar = () => {
-    const next = !isSidebarCollapsed;
-    setIsSidebarCollapsed(next);
-    writeSidebarCollapsed(next);
   };
 
   const handleDeleteSubject = (id: string) => {
@@ -823,7 +807,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className={`min-h-screen pb-20 md:pb-0 bg-slate-50 transition-all md:pl-24 ${isSidebarCollapsed ? 'xl:pl-20' : 'xl:pl-64'}`}>
+    <div className="min-h-screen bg-slate-50 pb-24">
       {/* 커스텀 확인 모달 */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
@@ -848,56 +832,25 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav aria-label="주 메뉴" className="hidden md:flex xl:hidden flex-col items-center gap-2 bg-white h-screen w-24 border-r border-slate-200 fixed left-0 top-0 z-40 px-2 py-5">
-        <div aria-hidden="true" className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-xl font-bold text-white">W</div>
-        {([
-          { tab: 'dashboard', icon: '⏱️', label: '학습 실행' },
-          { tab: 'settings', icon: '⚙️', label: '학습 설정' },
-          { tab: 'history', icon: '📈', label: '추이 분석' }
-        ] as const).map(item => (
-          <button
-            key={item.tab}
-            type="button"
-            onClick={() => setActiveTab(item.tab)}
-            aria-current={activeTab === item.tab ? 'page' : undefined}
-            className={`flex h-[76px] w-20 flex-col items-center justify-center gap-1.5 rounded-2xl text-[13px] font-bold transition-colors ${activeTab === item.tab ? 'bg-indigo-100 text-indigo-800' : 'text-slate-600 hover:bg-slate-100'}`}
-          >
-            <span className="text-2xl leading-none">{item.icon}</span>
-            {item.label}
-          </button>
-        ))}
-      </nav>
-
-      <nav className={`hidden xl:flex flex-col bg-white h-screen border-r border-slate-200 fixed left-0 top-0 z-40 transition-all ${isSidebarCollapsed ? 'w-20 p-4' : 'w-64 p-6'}`}>
-        <div className={`mb-10 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-xl font-bold">W</div>
-          {!isSidebarCollapsed && <h1 className="text-xl font-black text-slate-800 tracking-tight">StudyWise</h1>}
+      <nav aria-label="주 메뉴" data-testid="bottom-nav" className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white shadow-lg">
+        <div className="mx-auto flex max-w-3xl items-stretch justify-around gap-2 px-3 py-2">
+          {([
+            { tab: 'dashboard', icon: '⏱️', label: '학습 실행' },
+            { tab: 'settings', icon: '⚙️', label: '학습 설정' },
+            { tab: 'history', icon: '📈', label: '추이 분석' }
+          ] as const).map(item => (
+            <button
+              key={item.tab}
+              type="button"
+              onClick={() => setActiveTab(item.tab)}
+              aria-current={activeTab === item.tab ? 'page' : undefined}
+              className={`flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl text-[13px] font-bold transition-colors ${activeTab === item.tab ? 'bg-indigo-100 text-indigo-800' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <span className="text-xl leading-none">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
         </div>
-        
-        <div className="space-y-2 flex-grow">
-          <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="⏱️" label="학습 실행" collapsed={isSidebarCollapsed} />
-          <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon="⚙️" label="학습 설정" collapsed={isSidebarCollapsed} />
-          <NavButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon="📈" label="추이 분석" collapsed={isSidebarCollapsed} />
-        </div>
-
-        {!isSidebarCollapsed && <div className="mt-auto p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
-          <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">오늘의 AI 팁</p>
-          <p className="text-sm text-indigo-800 font-medium leading-tight">"{aiTip}"</p>
-        </div>}
-
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          className="mt-4 rounded-xl bg-slate-100 px-3 py-3 text-xs font-black text-slate-500 transition-all hover:bg-indigo-50 hover:text-indigo-600"
-        >
-          {isSidebarCollapsed ? '열기' : '접기'}
-        </button>
-      </nav>
-
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-lg">
-        <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl ${activeTab === 'dashboard' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>⏱️</button>
-        <button onClick={() => setActiveTab('settings')} className={`p-2 rounded-xl ${activeTab === 'settings' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>⚙️</button>
-        <button onClick={() => setActiveTab('history')} className={`p-2 rounded-xl ${activeTab === 'history' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400'}`}>📈</button>
       </nav>
 
       <main className="mx-auto max-w-6xl p-4 md:px-8 md:py-6 xl:p-10">
@@ -908,6 +861,7 @@ const App: React.FC = () => {
                activeTab === 'settings' ? '학습 설정' : '학습 추이 및 리포트'}
             </h2>
             <p className="text-sm font-bold text-slate-600 xl:mt-3 xl:text-2xl xl:font-black xl:tracking-wide xl:text-indigo-500">{todayStr}</p>
+            <p data-testid="ai-tip" className="hidden text-sm font-medium text-indigo-700 xl:mt-2 xl:block">"{aiTip}"</p>
           </div>
         </header>
 
@@ -989,15 +943,5 @@ const App: React.FC = () => {
     </div>
   );
 };
-
-const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: string; label: string; collapsed?: boolean }> = ({ active, onClick, icon, label, collapsed }) => (
-  <button 
-    onClick={onClick}
-    className={`w-full flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-4'} py-3 rounded-xl transition-all ${active ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-600 hover:bg-slate-100'}`}
-  >
-    <span className="text-xl">{icon}</span>
-    {!collapsed && <span className="font-bold text-sm">{label}</span>}
-  </button>
-);
 
 export default App;

@@ -1747,8 +1747,11 @@ export const Analytics: React.FC<Props> = ({
                         )}
 
                         {linkedReviewSubjects.length > 0 && !isInlineEditing && (
-                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div data-testid="linked-review-grid" data-single={linkedReviewSubjects.length === 1 ? 'true' : undefined}
+                            className={`mt-3 grid gap-2 ${linkedReviewSubjects.length > 1 ? 'sm:grid-cols-2' : ''}`}>
                             {linkedReviewSubjects.map(reviewSubject => {
+                              // 복습과목이 하나뿐이면 가로 전체를 쓰고 글자도 키운다(둘 이상이면 두 칸씩)
+                              const solo = linkedReviewSubjects.length === 1;
                               const reviewActiveStage = getActiveSubjectStage(reviewSubject);
                               const reviewMinutesPerPage = getReviewMinutesPerPage(reviewSubject.id);
                               // 같은 복습과목을 붙인 단계가 여럿이면(본 과목 · 후행과목) 모두의 기록으로 한 완료일을 낸다
@@ -1765,7 +1768,7 @@ export const Analytics: React.FC<Props> = ({
                               const reviewValueKey = `${sub.id}:${reviewSubject.id}`;
                               const reviewValueOpen = valueOpenKeys.has(reviewValueKey);
                               return (
-                                <div key={reviewSubject.id} className={`rounded-xl border border-rose-100 bg-rose-50/70 px-3 py-2.5 ${reviewValueOpen ? 'sm:col-span-2' : ''}`}>
+                                <div key={reviewSubject.id} className={`rounded-xl border border-rose-100 bg-rose-50/70 ${solo ? 'px-4 py-3.5' : 'px-3 py-2.5'} ${reviewValueOpen && !solo ? 'sm:col-span-2' : ''}`}>
                                   <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
                                     <div className="flex min-w-0 flex-1 basis-36 items-center gap-2">
                                       <button type="button" data-testid="row-values-toggle" aria-expanded={reviewValueOpen}
@@ -1775,7 +1778,7 @@ export const Analytics: React.FC<Props> = ({
                                         <span className={`transition-transform ${reviewValueOpen ? 'rotate-90' : ''}`}>›</span>
                                       </button>
                                       <div className="min-w-0">
-                                        <p className="truncate text-xs font-black text-slate-800">{reviewSubject.name}</p>
+                                        <p className={`truncate font-black text-slate-800 ${solo ? 'text-base' : 'text-xs'}`}>{reviewSubject.name}</p>
                                         {reviewBasisNote && <p data-testid="review-basis" className="break-keep text-[11px] font-black text-amber-700">{reviewBasisNote}</p>}
                                       </div>
                                     </div>
@@ -1798,7 +1801,7 @@ export const Analytics: React.FC<Props> = ({
                                       </button>
                                     </div>
                                   </div>
-                                  <p className="mt-1 text-xs font-bold text-slate-400">
+                                  <p className={`mt-1 font-bold ${solo ? 'text-sm text-slate-500' : 'text-xs text-slate-400'}`}>
                                     {reviewActiveStage
                                       ? `${pagePositionLabel(getPageLabel(reviewSubject))}.${formatPageValue(reviewActiveStage.currentPage)}~${formatPageValue(reviewActiveStage.endPage)}`
                                       : '완료'}

@@ -10526,3 +10526,19 @@ test('a new review subject can be made inside the stage editor and is linked to 
   assert.ok(analytics.includes("reviewSubjectIds: [...(owner.reviewSubjectIds || []), created.id]"));
   assert.ok(analytics.includes('data-testid="follow-up-page-label"') && analytics.includes('follow-up-required-'));
 });
+
+test('all-subjects panel: a single review subject takes the full width, several stay two to a row', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '..', 'components/Analytics.tsx'), 'utf8');
+  assert.ok(source.includes("linkedReviewSubjects.length > 1 ? 'sm:grid-cols-2' : ''"), 'two columns only when there are at least two review subjects');
+  assert.ok(source.includes('const solo = linkedReviewSubjects.length === 1;') && source.includes("reviewValueOpen && !solo ? 'sm:col-span-2' : ''"));
+  assert.ok(source.includes("solo ? 'text-base' : 'text-xs'"), 'the single card has a bigger name');
+});
+
+test('the three tabs live in one bottom bar at every screen size, with no side rail', () => {
+  const app = fs.readFileSync(path.resolve(__dirname, '..', 'App.tsx'), 'utf8');
+  const nav = app.slice(app.indexOf('data-testid="bottom-nav"'), app.indexOf('<main className="mx-auto max-w-6xl'));
+  assert.ok(nav.includes('fixed bottom-0 left-0 right-0') && !nav.includes('hidden') && !nav.includes('md:hidden'));
+  ['학습 실행', '학습 설정', '추이 분석'].forEach(label => assert.ok(nav.includes(label), label));
+  assert.ok(!app.includes('left-0 top-0') && !app.includes('md:pl-24') && !app.includes('xl:pl-64') && !app.includes('isSidebarCollapsed'), 'the side rails and their offsets are gone');
+  assert.ok(app.includes('pb-24'), 'the page leaves room so the bar never covers the content');
+});
