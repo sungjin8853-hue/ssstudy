@@ -10,7 +10,7 @@ export const ReviewGrowthSettings: React.FC<{ value: 'review' | 'unit'; onChange
     <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="복습과목 측정 방식">
       {([
         { value: 'review', label: '평균 속도 증가율', sub: '평균 · 이번 복습 두 값' },
-        { value: 'unit', label: '타임어택 포함', sub: '이전 복습과 견줌 · 25분 전보다 성장' }
+        { value: 'unit', label: '타임어택 포함', sub: '이전 복습과 견줌 · 이전보다 성장' }
       ] as const).map(option => (
         <button key={option.value} type="button" aria-pressed={value === option.value}
           onClick={event => { event.stopPropagation(); onChange(option.value); }}

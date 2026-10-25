@@ -40,53 +40,53 @@ export const GrowthChips: React.FC<{ change: GrowthChange | null | undefined; sp
   );
 };
 
-/** 오르면 초록, 내리면 빨강. 공부량(분/P)은 속도의 반대라서 색은 속도를 따른다 */
-const toneOf = (speed: number) => (speed > 0 ? 'text-green-700' : speed < 0 ? 'text-rose-700' : 'text-slate-700');
-const pillOf = (speed: number) => (speed > 0 ? 'bg-green-100 ring-green-300' : speed < 0 ? 'bg-rose-100 ring-rose-300' : 'bg-white ring-slate-300');
+/** 값마다 따로: 오르면 초록, 내리면 빨강, 그대로면 회색 (공부량도 늘었으면 초록) */
+const toneOf = (value: number) => (value > 0 ? 'text-green-700' : value < 0 ? 'text-rose-700' : 'text-slate-700');
+const pillOf = (value: number) => (value > 0 ? 'bg-green-100 ring-green-300' : value < 0 ? 'bg-rose-100 ring-rose-300' : 'bg-white ring-slate-300');
 
 /**
- * 효율 값 바로 아래 붙는 변화: 제목 옆 버튼으로 고른 기준(이전 단위 등)과 견준 속도 · 공부량 한 줄,
- * 그 아래 작은 줄에 그 성장이 25분 전보다 얼마나 늘었는지(속도). 기준 이름은 버튼에 이미 있어서 다시 적지 않는다.
+ * 효율 값 아래 가로 한 줄: 속도 · 공부량(각자 오르내림 색) · 이전보다(속도). 기준 이름은 제목 옆 버튼에 있어서 다시 적지 않는다.
+ * 칸을 같은 폭으로 나눠 빈 공간 없이 채운다.
  */
 const ChangeLine: React.FC<{ change: GrowthChange; label: string; recent?: GrowthChange | null }> = ({ change, label, recent }) => {
   const arrow = (value: number) => (value > 0 ? <Arrow direction="up" /> : value < 0 ? <Arrow direction="down" /> : null);
+  const pill = (value: number) => `flex items-center justify-center gap-0.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-[15px] font-black tabular-nums ring-1 ${pillOf(value)} ${toneOf(value)}`;
   return (
-    <div className="flex min-w-0 flex-col items-end gap-0.5">
-      <div data-testid="growth-chips" className={`flex flex-col items-end rounded-lg px-2.5 py-1 ring-1 ${pillOf(change.speedPages)} ${toneOf(change.speedPages)}`}>
-        <span data-growth-kind="speed" title={`${SPEED_REFERENCE_LABEL} 동안 푸는 ${pageWord(label)} 수의 차이`}
-          className="flex items-center gap-0.5 whitespace-nowrap text-[15px] font-black tabular-nums">{arrow(change.speedPages)}{describeSpeed(change, label)}</span>
-        <span data-growth-kind="amount" title={`${pageWord(label)} 하나에 쓴 시간(분)의 차이`}
-          className="flex items-center gap-0.5 whitespace-nowrap text-[15px] font-black tabular-nums">{arrow(change.studyMinutes)}{describeStudyAmount(change, label)}</span>
-      </div>
+    <div data-testid="growth-chips" className={`grid gap-2 ${recent ? 'grid-cols-[1fr_1fr_auto]' : 'grid-cols-2'}`}>
+      <span data-growth-kind="speed" title={`${SPEED_REFERENCE_LABEL} 동안 푸는 ${pageWord(label)} 수의 차이`} className={pill(change.speedPages)}>
+        {arrow(change.speedPages)}{describeSpeed(change, label)}
+      </span>
+      <span data-growth-kind="amount" title={`${pageWord(label)} 하나에 쓴 시간(분)의 차이`} className={pill(change.studyMinutes)}>
+        {arrow(change.studyMinutes)}{describeStudyAmount(change, label)}
+      </span>
       {recent && (
-        <p data-testid="growth-recent" className="whitespace-nowrap text-xs font-bold text-slate-600">
-          25분 전보다 <span className={`font-black tabular-nums ${toneOf(recent.speedPages)}`}>{describeSpeed(recent, label).replace(/^속도 /, '')}</span>
+        <p data-testid="growth-recent" className="flex flex-col justify-center whitespace-nowrap px-1 text-xs font-bold leading-tight text-slate-600">
+          이전보다
+          <span className={`text-[15px] font-black tabular-nums ${toneOf(recent.speedPages)}`}>{describeSpeed(recent, label).replace(/^속도 /, '')}</span>
         </p>
       )}
     </div>
   );
 };
 
-/** 효율 한 줄: 왼쪽에 이름, 오른쪽에 값과 그 바로 아래 변화 */
+/** 효율 한 줄: 이름과 값이 한 줄, 그 아래 가로로 꽉 찬 변화 줄 */
 const EfficiencyRow: React.FC<{
   testId: string; title: string; badge?: string; value: number | null; compare?: GrowthChange | null;
   recent?: GrowthChange | null; label: string; big?: boolean; emptyNote?: string;
 }> = ({ testId, title, badge, value, compare, recent, label, big = false, emptyNote }) => (
-  <div data-testid={testId} className={`flex min-w-0 flex-col gap-1 ${big ? '' : 'border-t border-slate-300 pt-2.5'}`}>
-    <div className="flex items-start justify-between gap-x-3">
-      <span className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 pt-1">
+  <div data-testid={testId} className={`flex min-w-0 flex-col gap-2 ${big ? '' : 'border-t border-slate-300 pt-2.5'}`}>
+    <div className="flex items-baseline justify-between gap-x-3">
+      <span className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-base font-black text-slate-800">{title}</span>
         {badge && <span className="rounded-md bg-indigo-600 px-2 py-0.5 text-xs font-black text-white">{badge}</span>}
       </span>
-      <div className="flex min-w-0 flex-col items-end gap-1">
-        <p className={`whitespace-nowrap font-black leading-none tabular-nums ${big ? 'text-indigo-900' : 'text-slate-900'}`}>
-          {value !== null
-            ? <><span className={`font-mono ${big ? 'text-[44px] md:text-[48px]' : 'text-[30px]'}`}>{value.toFixed(1)}</span><span className="ml-1 text-base text-slate-500">분/{label}</span></>
-            : <span className="text-base text-slate-600">측정 필요</span>}
-        </p>
-        {compare && <ChangeLine change={compare} label={label} recent={recent} />}
-      </div>
+      <p className={`whitespace-nowrap font-black leading-none tabular-nums ${big ? 'text-indigo-900' : 'text-slate-900'}`}>
+        {value !== null
+          ? <><span className={`font-mono ${big ? 'text-[44px] md:text-[48px]' : 'text-[30px]'}`}>{value.toFixed(1)}</span><span className="ml-1 text-base text-slate-500">분/{label}</span></>
+          : <span className="text-base text-slate-600">측정 필요</span>}
+      </p>
     </div>
+    {compare && <ChangeLine change={compare} label={label} recent={recent} />}
     {!compare && big && emptyNote && value !== null && <p data-testid="growth-empty" className="text-xs font-bold text-slate-600">{emptyNote}</p>}
   </div>
 );
@@ -104,7 +104,7 @@ export const EfficiencyBoxes: React.FC<{
   label?: string;
   /** 오늘 할 양을 끝낸 과목: 셀 전체가 초록 톤이라 이 칸도 같은 톤으로 맞춘다 */
   done?: boolean;
-  /** 그 성장이 25분 전보다 얼마나 늘었는지(지금 25분 − 직전 25분). 기준과 견줄 수 있을 때만 */
+  /** 그 성장이 이전보다 얼마나 늘었는지(지금 25분 − 직전 25분). 기준과 견줄 수 있을 때만 */
   recentOverall?: GrowthChange | null;
   /** 견줄 단위가 아직 없을 때 비교 칸 자리에 보이는 말 */
   emptyNote?: string;
@@ -124,7 +124,7 @@ export const EfficiencyBoxes: React.FC<{
           <span><b>효율</b>은 가장 최근 공부 25분의 평균이에요. 짧은 시간의 값은 믿기 어려워서 25분을 한 덩어리로 봐요.</span>
           <span><b>전체 효율</b>은 풀이와 정리 시간을 모두 합해서 푼 장수로 나눠요. 막힌 문제를 넘긴 만큼 정리에서 드러나서 성장을 재는 기준이 돼요.</span>
           <span><b>타임어택 효율</b>은 타임어택에서 한 장당 걸린 시간이에요. 막힌 문제는 바로 넘기니까 성장은 전체 효율로 봐요.</span>
-          <span>전체 효율 아래에 <b>속도</b>(1시간 동안 푸는 장수가 얼마나 늘었는지)와 <b>공부량</b>(한 페이지에 쓴 시간이 몇 분 늘었는지)이 붙어요. 제목 옆 버튼에 적힌 기준(<b>이전 단위</b>, 이이전 단위, 평균)과 견준 값이고, 오르면 초록, 내리면 빨강이에요. 그 아래 작은 줄은 그 성장이 25분 전보다 얼마나 늘었는지예요. 타임어택 효율은 값만 보여줘요.</span>
+          <span>전체 효율 아래에 <b>속도</b>(1시간 동안 푸는 장수가 얼마나 늘었는지)와 <b>공부량</b>(한 페이지에 쓴 시간이 몇 분 늘었는지)이 붙어요. 제목 옆 버튼에 적힌 기준(<b>이전 단위</b>, 이이전 단위, 평균)과 견준 값이고, 각각 오르면 초록, 내리면 빨강이에요. 오른쪽 "이전보다"는 그 성장이 직전 25분 때보다 얼마나 늘었는지예요. 타임어택 효율은 값만 보여줘요.</span>
           <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 효율은 단위를 넘어도 새로 시작하지 않고 계속 이어져요. 평균은 이 과목 전체의 장당 시간이에요.</span>
         </HelpPopover>
       </div>
