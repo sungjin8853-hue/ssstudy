@@ -10,7 +10,7 @@ export const ReviewGrowthSettings: React.FC<{ value: 'review' | 'unit'; onChange
     <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label="복습과목 측정 방식">
       {([
         { value: 'review', label: '평균 속도 증가율', sub: '평균 · 이번 복습 두 값' },
-        { value: 'unit', label: '타임어택 포함', sub: '이전 복습(단위) 대비 · 직전 25분보다 성장' }
+        { value: 'unit', label: '타임어택 포함', sub: '이전 복습과 견줌 · 25분 전보다 성장' }
       ] as const).map(option => (
         <button key={option.value} type="button" aria-pressed={value === option.value}
           onClick={event => { event.stopPropagation(); onChange(option.value); }}
@@ -163,7 +163,7 @@ const compareLabel = (view: ReturnType<typeof getEfficiencyView>) => {
  * "효율" 셀(전체·타임어택 효율 + 속도·공부량 변화)과 그 아래 "다음 단위까지" 게이지.
  *  - 효율 값은 과목의 가장 최근 25분(뽀모도로) 평균이다. 페이지 단위를 넘어도 새로 시작하지 않는다.
  *    새 단위가 막 시작돼 그 단위에 푼 기록이 아직 없으면 이전 단위의 평균을 가져와 보인다.
- *  - 이전 단위 대비 값만 보이고(제목 옆 버튼: 이전 단위 → 이이전 단위 → 평균), 그 아래 한 줄에 그 성장이 직전 25분보다 얼마나 늘었는지 보인다.
+ *  - 이전 단위 대비 값만 보이고(제목 옆 버튼: 이전 단위 → 이이전 단위 → 평균), 그 아래 한 줄에 그 성장이 25분 전보다 얼마나 늘었는지 보인다.
  *  - 페이지 단위는 푼 장수로 센다. 단위가 없는 과목에는 "다음 단위까지" 줄과 단위 비교가 없다(평균과는 견줄 수 있다).
  */
 export const UnitGrowthEfficiency: React.FC<{
@@ -173,7 +173,7 @@ export const UnitGrowthEfficiency: React.FC<{
   /** 단위가 끝나는 때: 학습과목은 "복습에 넣기", 복습과목은 복습을 마칠 때 */
   unitEnd?: 'register' | 'review';
 }> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false, unitEnd = 'register' }) => {
-  // 이전 단위 대비 값만 보인다(버튼으로 이전 단위 → 이이전 단위 → 평균). 그 아래 한 줄은 그 성장이 직전 25분보다 얼마나 늘었는지다.
+  // 이전 단위 대비 값만 보인다(버튼으로 이전 단위 → 이이전 단위 → 평균). 그 아래 한 줄은 그 성장이 25분 전보다 얼마나 늘었는지다.
   const [comparison, setComparison] = useState<EfficiencyComparison>({ kind: 'unit', n: 1 });
   const view = getEfficiencyView(scope, comparison);
   // 같은 기준과 견준 성장의 변화 = 지금 25분과 직전 25분의 차이(기준이 같아서 빼면 기준이 지워진다)
@@ -202,7 +202,6 @@ export const UnitGrowthEfficiency: React.FC<{
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
         overall={view.overall} attack={view.attack} headerAction={compare} label={label} done={done}
         recentOverall={view.overall && hasRecent ? recent.overall : null} recentAttack={view.attack && hasRecent ? recent.attack : null}
-        compareTitle={`${compareLabel(view)} 대비`}
         emptyNote={unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">
@@ -213,7 +212,7 @@ export const UnitGrowthEfficiency: React.FC<{
               </span>
               <p className="whitespace-nowrap font-black leading-none tabular-nums text-slate-900"><span className="font-mono text-[30px]">{Number(progress.done.toFixed(2))}</span><span className="ml-1 text-base text-slate-500">{label}</span></p>
             </div>
-            <p className="text-xs font-bold text-slate-600">{progress.index}번째 단위 · {unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</p>
+            <p className="text-xs font-bold text-slate-600">{unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</p>
           </div>
         ) : undefined} />
     </div>
