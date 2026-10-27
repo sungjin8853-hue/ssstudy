@@ -17,7 +17,7 @@ import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorth
 import { quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
-import { convertStatement, placeOf, proseOf } from './questionProse';
+import { convertStatement, OWNER_MARK, placeOf, proseOf } from './questionProse';
 import type { CellKind, CellPiece } from './questionStatement';
 
 /** generated: `#` 틀이 펼쳐 만든 줄의 글(노트에 쓴 글이 아니다). 글자 범위는 틀 줄을 가리킨다. */
@@ -202,7 +202,9 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
       classifications.push(label !== undefined ? label : index === 0 ? column : ++column);
       // 칸 전체가 `( )`인 칸(`X : (A:B)`)의 안쪽 `:`는 그 칸 번호부터 이어서 센다
       const placed = classifications[classifications.length - 1];
-      return parseExpression(text, nodeId, override?.end ?? start, end, inherited, typeof placed === 'number' ? placed : column);
+      const field = parseExpression(text, nodeId, override?.end ?? start, end, inherited, typeof placed === 'number' ? placed : column);
+      // 칸 전체가 `( )`인 칸(`A:(B:C)` · `(d:e):x`)의 안쪽 값들은 그 칸의 하위다(`[A.d]` `[A.e]`): 다른 분류기준을 쓰지 않았으면 그 칸의 이름을 쓴다
+      return field.type !== 'text' && hasGroupIn(field) ? underColumn(field, placed) : field;
     });
     return { type: 'relation', separators: relationCuts.map(i => text[i]), fields, classifications, ...(skips.some(Boolean) ? { skips } : {}) };
   }
@@ -228,6 +230,16 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   return value === shown ? { type: 'text', text: shown, span: { nodeId, start: from, end: to } }
     : { type: 'text', text: value, raw: shown, span: { nodeId, start: from, end: to } };
 }
+
+/** 칸이 `( )` 관계를 품었는가: 칸 전체가 `(B:C)`이거나 `(B:C),(d:f)`처럼 `,`로 이은 괄호들 */
+const hasGroupIn = (field: Expression): boolean => field.type === 'relation' || (field.type !== 'text' && field.items.some(item => item.type === 'relation'));
+/** 괄호 안(분리된 칸 번호)의 칸 이름을 괄호가 놓인 칸의 이름으로 바꾼다. 안쪽에 `{이름}`·`[ ]`로 직접 쓴 이름은 그대로 둔다. */
+const underColumn = (expression: Expression, column: QuestionColumn): Expression => {
+  if (expression.type === 'text') return expression;
+  if (expression.type !== 'relation') return { ...expression, items: expression.items.map(item => underColumn(item, column)) };
+  return { ...expression, fields: expression.fields.map(field => underColumn(field, column)),
+    classifications: expression.classifications.map(placed => (typeof placed === 'number' && placed >= DETACHED_COLUMN ? column : placed)) };
+};
 
 const head = (expression: Expression): Expression => {
   if (expression.type === 'relation') return head(expression.fields[0]);
@@ -286,9 +298,9 @@ const mapFirstLeaf = (expression: Expression, change: (text: string) => string):
   return { ...expression, items: [mapFirstLeaf(expression.items[0], change), ...expression.items.slice(1)] };
 };
 /**
- * 칸 앞의 `[A] k`는 점 없이도 그 칸 번호의 상위 속성과 `A`의 교집합이다: 분류기준 `개념:정의` 아래에서
- * `[A] k : j`는 `[개념.A] k : [정의] j`와 같다. 상위 토글이 여럿이면 바깥 것부터 모두 붙는다
- * (`[개념:정의]` > `[원인:결과]` 아래의 `[A] k`는 `[개념.원인.A] k`). 집합 기호(`.` `,` `%`)는 `[ ]` 안에서만 쓴다.
+ * 칸 앞에 `[A]`를 직접 쓴 칸은 그 칸의 분류기준을 새로 쓴 것이다(27일 요청): 분류기준 `개념:정의` 아래에서 `[A] k : j`는 `[A] k : [정의] j`이고
+ * k의 칸 이름도 A다(예전에는 `[개념.A] k`로 교집합이었다). 토글 밑 토글이 분류기준을 새로 쓰면 그 기준만 쓴다(`[개념:정의]` > `[원인:결과]` 아래의
+ * `k : [B] j`는 `[원인] k : [B] j`). 집합 기호(`.` `,` `%`)는 `[ ]` 안에서만 쓴다.
  * 줄에 집합(`[A]`)이 붙은 칸이 있으면 `[ ]`가 없는 다른 칸도 자기 칸 번호의 상위 속성을 집합으로 갖는다(풀어 쓴 꼴이 모든 칸에 집합을 쓴 줄이라서).
  * 집합이 붙은 칸이 하나도 없는 줄과, 앞에 분류기준(`[개념:정의]`)만 쓴 줄은 줄이지 않는다.
  * 위쪽 토글 제목이 이어 주는 집합(`convertFieldsOf`)은 이 뒤에 더해진다.
@@ -307,9 +319,16 @@ const spellOutColumnSets = (expression: Expression, criteria: readonly string[])
   };
   const hasSet = (field: Expression) => (readConvertCell(leavesOf(field)[0]?.text ?? '')?.sets ?? []).some(set => !looksLikeCriterion(set));
   if (!expression.fields.some((field, index) => namesOf(index).length > 0 && hasSet(field))) return expression;
-  return { ...expression, fields: expression.fields.map((field, index) => {
+  // `[V]`를 직접 쓴 칸은 칸 이름도 V다(위쪽 기준 이름 대신)
+  const classifications = expression.fields.map((field, index) => {
+    if (!namesOf(index).length || !hasSet(field)) return expression.classifications[index];
+    const own = (readConvertCell(leavesOf(field)[0]?.text ?? '')?.sets ?? []).filter(set => !looksLikeCriterion(set));
+    return own.length ? own.join('.') : expression.classifications[index];
+  });
+  return { ...expression, classifications, fields: expression.fields.map((field, index) => {
     const names = namesOf(index);
-    if (!names.length) return field;
+    // 칸 앞에 `[V]`를 직접 쓴 칸은 그 칸의 분류기준을 새로 쓴 것이라 위쪽 기준과 겹치지 않는다(27일 요청: `[A]:[B]` 아래 `M:[V] N`의 N은 B가 아니라 V)
+    if (!names.length || hasSet(field)) return field;
     const prefix = names.map(name => `[${name}]`).join('');
     return mapFirstLeaf(field, text => (text.startsWith('[') ? `${prefix}${text}` : `${prefix} ${text}`));
   }) };
@@ -691,8 +710,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const ownCriterion = block.type === 'toggle' ? splitTitleCriteria(written).criteria.at(-1) : undefined;
       const criterion = ownCriterion ?? scopedCriterion;
       if (criterion) criterionByNode.set(id, criterion);
-      /** `[A]`에 붙는 상위 속성: 노트 맨 위 줄부터 이 토글까지의 분류기준(바깥 → 안쪽) */
-      const criteria = ownCriterion ? [...upperCriteria, ownCriterion] : upperCriteria;
+      /**
+       * `[A]`에 붙는 상위 속성. 토글 제목에 분류기준을 새로 쓰면 그것만 쓴다: 위쪽 `[A]:[B]` 아래의 `[P]:[q]`는 `[A.P]:[B.q]`가 아니라 `[P:q]`다
+       * (27일 요청: 하위에 분류기준을 명시하면 하위 관계가 아니다). 쓰지 않은 토글은 위쪽 기준을 그대로 이어받는다.
+       */
+      const criteria = ownCriterion ? [ownCriterion] : upperCriteria;
       criteriaByNode.set(id, criteria);
       const value = block.type === 'toggle' ? blankTitle(written) : written;
       if (block.type === 'toggle') { const open = openTailOf(blankTitleCriteria(written)); if (open) tailByNode.set(id, open); }
@@ -1201,8 +1223,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (convertible && field.type !== 'relation') return;
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
+      // `A:(B:C)`는 "A의 B는 C"다: 괄호 칸 바로 앞 칸이 괄호 안 문제의 주인(`‘A’의 ‘B’에 이어지는 것은?`)이다. 그보다 앞 칸이 있으면 첫 칸은 전처럼 자리다.
+      const owner = hasGroupIn(field) && index > 0
+        ? [{ text: `${expressionLabel(columns[index - 1])}${OWNER_MARK}`, columns: [expression.classifications[index - 1]], spans: spans(columns[index - 1]) }] : [];
       visit(field, index > 0
-        ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
+        ? [...context, ...(owner.length && index === 1 ? [] : [{ text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]), ...owner]
         : context, expression.classifications[index], scores[index]);
     });
   };

@@ -4,7 +4,7 @@
  * 키워드는 줄글과 같은 순서다: 문제가 놓인 자리 → 주어진 값 → 이어 주는 말(관계) → 맞힐 칸. 줄글을 만드는 규칙(proseOf)을 그대로 따라가고,
  * 문장 대신 조각으로 돌려준다. 맞힐 칸은 정답을 확인할 때 같은 자리에서 정답으로 바뀐다.
  */
-import { AFTER, count as stepWords, operatorOf, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
+import { AFTER, count as stepWords, operatorOf, OWNER, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
 import { blankMark } from './questionStatement';
 import type { CellKind, CellPiece } from './questionStatement';
 
@@ -17,7 +17,7 @@ export type FlashPiece = { type: 'text'; value: string } | { type: 'blank'; mark
 
 export interface FlashCard {
   /** 문제가 놓인 자리(위쪽 토글 · 줄 앞 집합): 맨 바깥부터 */
-  place: Array<FlashChip & { role: 'place' | 'after' }>;
+  place: Array<FlashChip & { role: 'place' | 'owner' | 'after' }>;
   /** 주어진 값. 가린 줄 문제는 없다(줄 전체가 chain) */
   given: FlashChip | null;
   /** 이미 충족한 값(`남은 것` 문제): 문장의 "… 외에" */
@@ -43,7 +43,8 @@ const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly
   const entries = withoutAnswerPlace(conditions, answer);
   const chip = (text: string, index: number): FlashChip => ({ label: [...(labels?.[index] ?? [])], value: readableLabel(text) });
   const place = [
-    ...entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text)).map(item => ({ ...chip(item.text, item.index), role: 'place' as const })),
+    ...entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text)).map(item => ({ ...chip(item.text, item.index), role: 'place' as const })),
+    ...entries.filter(item => OWNER.test(item.text)).map(item => ({ ...chip(item.text.replace(OWNER, ''), item.index), role: 'owner' as const })),
     ...entries.filter(item => AFTER.test(item.text)).map(item => ({ ...chip(item.text.replace(AFTER, ''), item.index), role: 'after' as const }))
   ];
   const satisfied = entries.filter(item => SATISFIED.test(item.text));

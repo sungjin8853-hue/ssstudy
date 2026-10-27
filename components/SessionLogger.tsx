@@ -286,9 +286,15 @@ const unlockChime = () => {
 };
 
 const CHIME_NOTES = [659.25, 783.99, 1046.5];
+/** 뽀모도로가 끝났을 때의 알람: 세 음 차임을 이만큼 되풀이한다(한 번이면 놓치기 쉬워서, 27일 요청 "알람소리") */
+export const POMODORO_ALARM_REPEATS = 3;
+const ALARM_GAP_SECONDS = 1.7;
 
 const ringChime = (context: AudioContext) => {
-  const startAt = context.currentTime + 0.04;
+  const firstAt = context.currentTime + 0.04;
+  for (let repeat = 0; repeat < POMODORO_ALARM_REPEATS; repeat += 1) ringChimeOnce(context, firstAt + repeat * ALARM_GAP_SECONDS);
+};
+const ringChimeOnce = (context: AudioContext, startAt: number) => {
   CHIME_NOTES.forEach((frequency, index) => {
     const noteStart = startAt + index * 0.28;
     const oscillator = context.createOscillator();
@@ -1546,10 +1552,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
   // 공부(측정) 중에도 뽀모도로가 끝날 때마다 알린다: 소리 한 번과 닫을 수 있는 안내 띠. 타이머는 멈추지 않고 화면도 그대로다.
   // 새 측정이 시작되면(풀이 시간 0) 처음부터 다시 센다.
-  // 장당 시간을 알면 한 번에 풀 장수(뽀모도로 목표 장수 = 약 25분어치 이내)를 풀 때마다 한 회, 모르면 풀이 시간 25분마다 한 회.
-  const studyPomodoroByPages = pomodoroPageTarget !== null && pomodoroPageTarget > 0 && averageSecondsPerPage > 0;
-  const studyPomodoroRound = step !== 'timer' ? 0
-    : studyPomodoroByPages ? Math.floor(attackCompletedPages / pomodoroPageTarget!) : Math.floor(seconds / (pomodoroMinutes * 60));
+  // 뽀모도로 시간(기본 25분)이 지날 때마다 한 회다(27일 요청: ▲로 늘린 시간이 바로 반영되고, 시간이 끝나면 알람이 울린다).
+  // 예전에는 장당 시간을 알면 목표 장수를 풀 때마다 한 회라서 시간을 늘려도 끝나는 때가 그대로였다.
+  const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (pomodoroMinutes * 60));
   const studyPomodoroSeenRef = useRef(0);
   const [dismissedPomodoroRound, setDismissedPomodoroRound] = useState(0);
   useEffect(() => {

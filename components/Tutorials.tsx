@@ -165,12 +165,13 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '묶어서 써요', accent: 'teal', symbol: '( )', title: '묶어서 써요',
-    lead: '괄호(( ))로 묶으면, 묶음 하나를 한 덩어리로 보고 문제를 만들어요.',
+    lead: '괄호(( ))로 묶으면, 묶음 하나를 한 덩어리로 보고 문제를 만들어요. A:(B:C)는 "A의 B는 C"로 읽어요.',
     body: <>
       <NoteSample lines={[<><span>수열의 합</span><Mono tone="colon">:</Mono><Mono tone="logic">(</Mono><span>등차수열</span><Mono tone="colon">:</Mono><span>항의 개수와 첫항과 끝항</span><Mono tone="logic">)</Mono><Mono tone="logic">,</Mono><Mono tone="logic">(</Mono><span>등비수열</span><Mono tone="colon">:</Mono><span>첫항과 공비</span><Mono tone="logic">)</Mono></>]} />
       <QuestionSamples items={[
         { kind: '기본 관계', q: '수열의 합', a: '등차수열 그리고 등비수열' },
-        { kind: '전체 재구성', q: '수열의 합', a: '(등차수열 → 항의 개수와 첫항과 끝항) 그리고 (등비수열 → 첫항과 공비)' }
+        { kind: '전체 재구성', q: '수열의 합', a: '(등차수열 → 항의 개수와 첫항과 끝항) 그리고 (등비수열 → 첫항과 공비)' },
+        { kind: '괄호 안 관계', q: '‘수열의 합’의 ‘등차수열’에 이어지는 것은?', a: '항의 개수와 첫항과 끝항' }
       ]} />
     </>
   },

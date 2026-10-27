@@ -307,8 +307,8 @@ const markKey = (text: string) => canonicalMark(text).replace(/\s+/g, '');
  * 위치 표시가 둘 이상이면 앞의 것부터 바깥 묶음이 된다.
  */
 /**
- * 칸 앞의 `[A] k`는 점 없이도 그 칸 번호의 분류기준 안에서 `A`와의 교집합이다(`[A] k : j` = `[개념][A] k : [정의] j`):
- * 분류기준 이름(`labels`)을 칸 앞에 붙여 풀어 쓴 꼴로 바꾼다. 상위 토글이 여럿이면 바깥 기준부터 모두 붙는다(`chain`).
+ * 집합 `[ ]`를 쓰지 않은 칸은 그 칸 번호의 분류기준 이름을 칸 앞에 붙여 풀어 쓴 꼴로 바꾼다(`[A] k : j` = `[A] k : [정의] j`).
+ * 칸 앞에 `[A]`를 직접 쓴 칸은 그 칸의 분류기준을 새로 쓴 것이라 위쪽 기준을 붙이지 않는다(27일 요청: 예전에는 `[개념][A] k`로 교집합이었다).
  * 줄에 집합 `[A]`로 시작하는 칸이 없으면(위치 표시 `[A:C]`만 있는 줄 포함) 그대로 둔다.
  */
 const spellOutDots = (item: DiagramItem, labels: string[], chain: string[][]): DiagramItem => {
@@ -328,7 +328,8 @@ const spellOutDots = (item: DiagramItem, labels: string[], chain: string[][]): D
   return { ...item, fields: item.fields.map((field, index) => {
     const names = namesAt(index);
     const text = field.trim();
-    if (!names.length || !text) return field;
+    // 칸 앞에 `[V]`를 직접 쓴 칸은 분류기준을 새로 쓴 것이라 위쪽 기준과 겹치지 않는다(27일 요청)
+    if (!names.length || !text || setLed(field)) return field;
     const prefix = names.map(name => `[${name}]`).join('');
     return text.startsWith('[') ? `${prefix}${text}` : `${prefix} ${text}`;
   }) };
@@ -376,7 +377,8 @@ const walkBlocks = (memo: string, inherited: string[], chain: string[][], expans
   const head = (tail ? cleanTitle.slice(0, tail.index) : open?.logic ? cleanTitle.slice(0, open.start) : cleanTitle).trim();
   const labels = readGroupLabels(cleanTitle, criteria, inherited);
   const extra = { ...(criteria.length ? { criteria } : {}), ...(labels ? { labels } : {}) };
-  const children = walkDiagram(block.text, labels ?? inherited, criteria.length ? [...chain, parseCriterionLabels(criteria[criteria.length - 1])] : chain, expansions);
+  // 토글에 분류기준을 새로 쓰면 그것만 쓴다(위쪽 기준 아래로 쌓지 않는다: `[A]:[B]` 아래 `[P]:[q]`는 `[P:q]`)
+  const children = walkDiagram(block.text, labels ?? inherited, criteria.length ? [parseCriterionLabels(criteria[criteria.length - 1])] : chain, expansions);
   const headRelation = parseRelation(head);
   if (headRelation) {
     // `>A:C` 처럼 제목 자체가 관계이면, 그 아래에 B:D 같은 관계가 포함된다.

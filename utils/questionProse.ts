@@ -64,6 +64,9 @@ const solutionOf = (answer: string): string | undefined => {
 export const SATISFIED = / 충족$/;
 /** `p 이후`: 순서에서 p 다음 자리에 놓인 값이다 */
 export const AFTER = / 이후$/;
+/** `A:(B:C)`의 A처럼 괄호 칸의 주인: "‘A’의 ‘B’에 이어지는 것은?"으로 읽는다(27일 요청). 조건 글 끝에 붙는 표시다. */
+export const OWNER_MARK = ' 의';
+export const OWNER = / 의$/;
 
 /**
  * 줄글 안에서 값의 속성(세션 노트의 분류기준 `개념:정의:예시`)이 드러나게 하는 이름들. 이름이 있으면 값 앞에 붙는다:
@@ -79,15 +82,17 @@ export interface ProseAttrs { prompt: string[]; answer: string[]; conditions: st
 export const withoutAnswerPlace = (conditions: readonly string[], answer?: string) => {
   const hidden = answer === undefined ? '' : readableLabel(answer).trim();
   return conditions.map((text, index) => ({ text, index }))
-    .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '')).trim() !== hidden);
+    .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '').replace(OWNER, '')).trim() !== hidden);
 };
 
 /** 문제가 놓인 자리: `개념 ‘A’에서 ` · `‘p’ 다음 자리의 `. 속성 이름(labels)이 있으면 값 앞에 붙는다. "충족"이 붙은 조건은 여기 넣지 않는다. */
 export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string): string => {
   const entries = withoutAnswerPlace(conditions, answer);
   const afters = entries.filter(item => AFTER.test(item.text));
-  const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text));
-  return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
+  const owners = entries.filter(item => OWNER.test(item.text));
+  const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text));
+  return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text), labels?.[item.index])).join(', ')}에서 ` : ''}${owners.length
+    ? `${owners.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}의 ` : ''}${afters.length
     ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(', ')} 다음 자리의 ` : ''}`;
 };
 

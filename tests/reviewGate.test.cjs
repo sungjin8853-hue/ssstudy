@@ -1478,11 +1478,12 @@ test('equals is a higher-importance colon while periods, decimals and spaces sta
 
 test('nested relation columns restart their labels, keep the outer importance, and outer relations use only branch heads', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
-  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a']], ['b', 'd', 2, []], ['d', 'c', 3, ['a']]]);
+  // `x:(y:z)`는 "x의 y는 z"다: 괄호 칸 바로 앞 칸이 주인(조건 끝 ` 의`), 그보다 앞의 첫 칸은 전처럼 자리다
+  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a 의']], ['b', 'd', 2, []], ['d', 'c', 3, ['a', 'b 의']]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
-  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a']], ['d', 'c', 2, ['a']]]);
+  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a 의']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a 의']], ['d', 'c', 2, ['a 의']]]);
   const equalColored = memoColors.splitReviewMemoColonColors('a:(b:c)=(d:c):e // f:g');
   assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 0, 1, 0]);
 });
@@ -1502,7 +1503,7 @@ test('reverse questions with identical conditions collect valid alternatives ins
   const reversed = questionsFor('x:(b:c) // x:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(reversed.length, 1);
   assert.equal(reversed[0].answer, 'b OR d');
-  assert.deepEqual(reversed[0].conditions, ['x']);
+  assert.deepEqual(reversed[0].conditions, ['x 의']);
   const separate = questionsFor('x:(b:c) // y:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(separate.length, 2);
 });
@@ -2144,7 +2145,9 @@ test('today tasks put reviews first and sort each type by requirement and shorte
   assert.deepEqual(buildStudyRunQueue([], []), []);
 });
 
-test('today task list defaults to the highest priority review without starting a measurement', () => {
+test('today task list defaults to the highest priority review without starting a measurement', t => {
+  // 과목의 마감(10/31)과 오늘 날짜로 그날 할 일을 정하므로, 그 날짜(10/11)에 고정해서 본다
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-11T03:00:00.000Z') });
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const previousStorage = global.localStorage;
@@ -5826,10 +5829,11 @@ test('pomodoro rounds come from the estimated time: up to 25 min is one round, l
   const bare = renderToStaticMarkup(React.createElement(PomodoroNotice, { message: '안내', onDismiss() {} }));
   assert.ok(bare.includes('role="status"') && bare.includes('안내'));
 
-  // 공부 화면: 장당 시간을 알면 목표 장수를 풀 때마다 한 회, 모르면 풀이 시간 25분마다. 알림만 낸다
+  // 공부 화면: 뽀모도로 시간(▲로 늘린 값 그대로)이 지날 때마다 한 회이고, 끝나면 알람(차임 3번)이 울린다. 알림만 낸다
   const logger = fs.readFileSync(path.resolve(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
-  assert.ok(logger.includes('const studyPomodoroByPages = pomodoroPageTarget !== null && pomodoroPageTarget > 0 && averageSecondsPerPage > 0'));
-  assert.ok(logger.includes('Math.floor(attackCompletedPages / pomodoroPageTarget!)') && logger.includes('Math.floor(seconds / (pomodoroMinutes * 60))'));
+  assert.ok(!logger.includes('studyPomodoroByPages') && !logger.includes('Math.floor(attackCompletedPages / pomodoroPageTarget!)'), 'no page-count rounds any more');
+  assert.ok(logger.includes("const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (pomodoroMinutes * 60));"));
+  assert.equal(loadSource('components/SessionLogger.tsx').POMODORO_ALARM_REPEATS, 3);
   const studyStart = logger.indexOf('const studyPomodoroSeenRef');
   const studyEffect = logger.slice(studyStart, logger.indexOf('}, [step, seconds, studyPomodoroRound]);', studyStart));
   assert.ok(studyEffect.includes('playPomodoroEndSound()'));
@@ -6335,16 +6339,27 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   // 고정 페이지 단위를 없앴으므로 한 번에 1쪽씩
   assert.equal(getWeekdayPageStep({ growthPageUnit: 10 }), 1);
   assert.equal(getWeekdayPageStep({}), 1);
-  // + / −: 그 요일만 단위만큼 바뀌고 0 아래로는 안 내려간다
+  // + / −: 그 요일이 1쪽 바뀌고, 한 주 합계는 계획에 맞도록 다른 요일이 자동으로 맞춰진다(27일 "과목 설정 자동 합산")
   const before = pagesOf(base);
+  const weekly = sum(before);
   const up = stepWeekdayPages(base, 2, 1);
   assert.equal(pagesOf(up)[2], before[2] + 1);
-  assert.equal(pagesOf(up)[1], before[1], 'the other days stay');
+  assert.equal(sum(pagesOf(up)), weekly, 'the week still adds up to the plan');
+  assert.equal(pagesOf(up)[1] + pagesOf(up)[3], before[1] + before[3] - 1, 'one page moved away from another study day');
+  const down = stepWeekdayPages(base, 2, -1);
+  assert.equal(pagesOf(down)[2], before[2] - 1);
+  assert.equal(sum(pagesOf(down)), weekly);
   let zero = base;
-  for (let i = 0; i < 40; i += 1) zero = stepWeekdayPages(zero, 3, -1);
+  for (let i = 0; i < 400; i += 1) zero = stepWeekdayPages(zero, 3, -1);
   assert.equal(pagesOf(zero)[3], 0);
+  assert.equal(sum(pagesOf(zero)), weekly, 'what the day gave up went to the other days');
+  let all = base;
+  for (let i = 0; i < 400; i += 1) all = stepWeekdayPages(all, 1, 1);
+  // 한 주 합계(계획)는 요일 나눔과 상관없이 같다: 한 요일이 한 주 몫 전부까지 받고 넘지 않는다
+  assert.deepEqual([pagesOf(all)[1], pagesOf(all)[2], pagesOf(all)[3]], [weekly, 0, 0], 'one day can take the whole week, never more');
   assert.equal(stepWeekdayPages(base, 5, 1), base, 'a rest day cannot be stepped');
-  assert.equal(pagesOf(stepWeekdayPages({ ...base, growthPageUnit: 0 }, 1, 1))[1], before[1] + 1, 'no unit → one page at a time');
+  const single = withFreshWeekPlan({ ...base, scheduledWeekdays: [4] });
+  assert.equal(pagesOf(stepWeekdayPages(single, 4, 1))[4], pagesOf(single)[4], 'one study day holds the whole week');
   // 요일 켜고 끄기: 마지막 하나는 못 끄고, 끄면 남은 요일이 그 비율대로 한 주 몫을 나눠 갖고, 켜면 평균 몫으로 시작
   const lopsided = { ...base, scheduledWeekdayPages: { 1: 40, 2: 20, 3: 20 } };
   const off = toggleStudyWeekday(lopsided, 3);
@@ -6357,11 +6372,11 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   assert.ok(pagesOf(on)[5] > 0, 'a newly switched-on day gets a share');
   assert.equal(toggleStudyWeekday({ ...base, scheduledWeekdays: [4], scheduledWeekdayPages: { 4: 30 } }, 4).scheduledWeekdays.join(), '4');
   // 계획 갱신: 저장된 페이지 비율을 최대한 그대로 두고 다시 나눈다(과목의 페이지 단위 덩어리로)
-  const refreshed = calculateFreshWeekdayPagePlan({ ...base, scheduledWeekdayPages: { 1: 30, 2: 20, 3: 10 } }, 2870, 200);
+  const refreshed = calculateFreshWeekdayPagePlan({ ...base, scheduledWeekdayPages: { 1: 30, 2: 20, 3: 10 } }, 2870, 200, new Date(2026, 9, 25));
   assert.deepEqual([refreshed[1], refreshed[2], refreshed[3]], [50, 33, 17], '30:20:10 of 100 pages, as close as whole pages allow');
   assert.ok(Object.keys(refreshed).filter(day => refreshed[day] > 0).join() === '1,2,3');
   // 비율 재료가 없으면 전과 같이 같은 몫
-  const equal = calculateFreshWeekdayPagePlan({ ...base, scheduledWeekdayPages: undefined }, 2870, 200);
+  const equal = calculateFreshWeekdayPagePlan({ ...base, scheduledWeekdayPages: undefined }, 2870, 200, new Date(2026, 9, 25));
   assert.ok(Math.max(equal[1], equal[2], equal[3]) - Math.min(equal[1], equal[2], equal[3]) <= 1);
   // 나누기 자체: 합계 보존 · 비율을 최대한 그대로 · 0은 0
   const split = distributePagesProportionally(94, [1, 2, 3], { 1: 60, 2: 30, 3: 10 });
@@ -6406,9 +6421,13 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   assert.ok(editor.indexOf('weekday-pages-value') < editor.indexOf('weekday-pages-up'), 'the small buttons sit right beside the page value');
   assert.ok(!editor.includes('%'), 'no percent control');
   // 작은 ▲▼는 단위와 상관없이 1쪽씩
+  // 저장된 값의 합계가 계획과 다르면 먼저 그 비율대로 계획 합계에 맞춘 뒤 1쪽 움직인다
   const unitTen = { ...base, growthPageUnit: 10, scheduledWeekdayPages: { 1: 30, 2: 24, 3: 10 } };
-  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1, 1))[1], 31); assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, -1, 1))[1], 29);
-  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1))[1], 31, 'the big button steps one page too (no fixed page unit)');
+  const fitted = pagesOf(stepWeekdayPages(unitTen, 1, 1, 1));
+  const planned = calculateFreshWeekdayPagePlan(unitTen, getSubjectRemainingPageCount(unitTen), getDiffDays(unitTen.targetDate));
+  assert.equal(fitted[1], planned[1] + 1); assert.equal(sum(fitted), planned[1] + planned[2] + planned[3]);
+  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, -1, 1))[1], planned[1] - 1);
+  assert.equal(pagesOf(stepWeekdayPages(unitTen, 1, 1))[1], planned[1] + 1, 'the big button steps one page too (no fixed page unit)');
   let floor = unitTen; for (let i = 0; i < 40; i += 1) floor = stepWeekdayPages(floor, 3, -1, 1);
   assert.equal(pagesOf(floor)[3], 0, 'never below 0');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
@@ -6720,7 +6739,7 @@ test('far questions: one answer several steps away, the process is shown with th
   assert.ok(nested.some(q => q.prompt === 'A' && q.answer === 'D' && q.process === 'A → B → C → D'), 'a chain continues through a last-cell relation');
   assert.ok(!nested.some(q => q.prompt === 'D' && q.direction === 'reverse' && (q.answer === 'A' || q.answer === 'B')), 'a grouped relation can be entered but not walked back out of');
   assert.ok(nested.some(q => q.prompt === 'C' && q.answer === 'D') === false, 'a pair has nothing far away');
-  assert.ok(nested.filter(q => q.prompt === 'B' && q.answer === 'D').every(q => q.conditions.includes('A')), 'a chain inside carries the outer cell as a condition');
+  assert.ok(nested.filter(q => q.prompt === 'B' && q.answer === 'D').every(q => q.conditions.includes('A 의')), 'a chain inside carries the outer cell as a condition (A의 …)');
   const sequence = far('A-B-C-D', 2).filter(q => q.direction === 'forward');
   assert.deepEqual(sequence.map(q => q.process), ['A → B → C', 'B → C → D']);
   const group = far('A:(B,(K,F)):H');
@@ -8453,10 +8472,10 @@ test('( ) is detached from the upper criterion: an inner : gets no inherited cel
   const middle = pair('삼각형 : (세 변:세 각) 합', '세 변', '세 각');
   assert.ok(middle);
   assert.deepEqual([classify(middle).prompt, classify(middle).answer], [[], []]);
-  // the cell is only ( ): detached as well
+  // the cell is only ( ): its inner values are under that cell (27일: `(d:e)`가 A 칸이면 [A.d] [A.e]) → named after the cell when nothing else is written
   const whole = pair('A : x : (p:q:r)', 'p', 'q');
   assert.ok(whole);
-  assert.deepEqual([classify(whole).prompt, classify(whole).answer], [[], []]);
+  assert.deepEqual([classify(whole).prompt, classify(whole).answer], [['예시'], ['예시']]);
   // a leading ( ) on a plain line: detached too (the outer cell `p 합` keeps its own column)
   const plain = pair('(p:q) 합', 'p', 'q');
   assert.ok(plain);
@@ -8470,7 +8489,7 @@ test('( ) is detached from the upper criterion: an inner : gets no inherited cel
   // the outer condition keeps its name: 개념 ‘임진왜란’에서 ‘원인’에 이어지는 것은?
   const { getReviewQuestionSentence } = questionBuilder;
   const inner = questionBuilder.buildReviewQuestions(':::toggle [개념:정의;예시]\n임진왜란 : (원인 : 일본의 야욕) ; 1592년\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === '원인' && q.answer === '일본의 야욕');
-  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’에서 ‘원인’에 이어지는 것은?');
+  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’의 정의 ‘원인’에 이어지는 정의 값은?');
 });
 
 test('[집합(1)] : [집합(2)] connects the sub-values of the two sets: relation lines between them become ability-convert questions', () => {
@@ -9917,26 +9936,27 @@ test('# keeps working in many cases: every place where the cell sits (even after
   assert.ok(chained.has('direct|B+C|B*C') && chained.has('reconstruct|A|B-C → B+C → B*C'));
 });
 
-test('[A] k is intersected with the classification of its own column number by default (no dot): [개념:정의] above makes [A] k : j into [개념.A] k : [정의] j', () => {
+test('[A] written before a cell is that cell own criterion, not a sub-set of the column above (27일): [개념:정의] above makes [A] k : j into [A] k : [정의] j', () => {
   /** 풀어 쓴 꼴: 분류기준이 없는 노트에 집합을 모두 직접 쓴 줄과 같은 문제가 나온다 */
   const sets = memo => questionsFor(memo).filter(q => q.kind === 'convert' && q.convert.form === 'unit').map(q => q.convert.steps.map(step => `${step.set}=${step.cell}`).join('>'));
   const sameSets = (short, full) => {
     assert.deepEqual(sets(short), sets(full), short);
     assert.ok(sets(short).length > 0, `${short} makes ability-conversion questions`);
   };
-  // 분류기준 `개념:정의` 아래의 `[A] k : j`는 `[개념.A] k : [정의] j`다(점 없이 해당 번째의 분류기준과 교집합)
-  sameSets(':::toggle [개념:정의]\n[A] k : j\n:::end', '[개념.A] k : [정의] j');
-  sameSets(':::toggle [개념:정의:예시]\n[A] k : j : m\n:::end', '[개념.A] k : [정의] j : [예시] m');
-  // `:` 뒤의 칸에 써도 그 칸 번호의 분류기준이다
-  sameSets(':::toggle [개념:정의]\nx : [B] y\n:::end', '[개념] x : [정의.B] y');
-  // `::`로 건너뛴 칸은 번호를 세어 넘어간다(m은 3번째 칸이라 예시)
-  sameSets(':::toggle [개념:정의:예시]\n[A] k :: m\n:::end', '[개념.A] k :: [예시] m');
-  // 직접 쓴 `[ ]`가 있는 칸도 상위 분류와 교집합이다
-  sameSets(':::toggle [개념:정의]\n[A] k : [B] j\n:::end', '[개념.A] k : [정의.B] j');
-  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n[A] k : [B] j\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['개념.A', '정의.B'], ['정의.B', '개념.A']]);
+  // `[ ]`를 쓰지 않은 칸만 그 칸 번호의 분류기준을 받는다. `[A]`를 쓴 칸은 A만이다(예전의 `개념.A` 교집합이 아니다)
+  sameSets(':::toggle [개념:정의]\n[A] k : j\n:::end', '[A] k : [정의] j');
+  sameSets(':::toggle [개념:정의:예시]\n[A] k : j : m\n:::end', '[A] k : [정의] j : [예시] m');
+  sameSets(':::toggle [개념:정의]\nx : [B] y\n:::end', '[개념] x : [B] y');
+  sameSets(':::toggle [개념:정의:예시]\n[A] k :: m\n:::end', '[A] k :: [예시] m');
+  sameSets(':::toggle [개념:정의]\n[A] k : [B] j\n:::end', '[A] k : [B] j');
+  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n[A] k : [B] j\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['A', 'B'], ['B', 'A']]);
+  // `[A]:[B]` 아래 `M:[V] N`: M은 A에 있고, N은 V에만 있다(B가 아니다). 문제의 칸 이름도 V다
+  const mv = questionsFor(':::toggle [A]:[B]\nM:[V] N\n:::end').filter(q => q.kind === 'convert');
+  assert.deepEqual(mv.map(q => q.convert.steps.map(step => step.set)), [['A', 'V'], ['V', 'A']]);
+  assert.deepEqual(questionBuilder.getReviewQuestionClassification(mv[0].criterion, mv[0]).answer, ['V']);
   // 안쪽 토글 · 논리어가 든 칸
-  sameSets(':::toggle [개념:정의]\n:::toggle 산업\n[A] k : j\n:::end\n:::end', '[개념.A] k : [정의] j');
-  sameSets(':::toggle [개념:정의]\n[A] k-m : j\n:::end', '[개념.A] k-m : [정의] j');
+  sameSets(':::toggle [개념:정의]\n:::toggle 산업\n[A] k : j\n:::end\n:::end', '[A] k : [정의] j');
+  sameSets(':::toggle [개념:정의]\n[A] k-m : j\n:::end', '[A] k-m : [정의] j');
   // 집합이 붙은 칸이 하나도 없는 줄은 줄이지 않는다
   assert.ok(questionsFor(':::toggle [개념:정의]\nk : j\n:::end').every(q => q.kind !== 'convert'));
   // 상위 속성이 없으면 `[A]`는 쓴 그대로다(교집합할 것이 없음)
@@ -9944,13 +9964,15 @@ test('[A] k is intersected with the classification of its own column number by d
   assert.ok(questionsFor(':::toggle [개념]\n[A] k : j\n:::end').every(q => q.kind !== 'convert'));
   // 이름이 없는 칸(분류기준보다 칸이 많음)은 집합이 없어서 모든 칸에 집합이 있는 줄이 아니다
   assert.ok(questionsFor(':::toggle [개념:정의]\n[A] k : j : m\n:::end').every(q => q.kind !== 'convert'));
-  // 노트 맨 위(토글 밖)에 쓴 분류기준도 상위 속성이다. 상위가 여럿이면 바깥부터 모두 교집합이다(토글 밑 토글도 다시)
-  sameSets('[개념:정의]\n[A] k : j', '[개념.A] k : [정의] j');
-  sameSets('[개념:정의]\n:::toggle [원인:결과]\n[A] k : j\n:::end', '[개념.원인.A] k : [정의.결과] j');
-  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n:::toggle [원인:결과]\n[A] k : j\n:::end\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['개념.원인.A', '정의.결과'], ['정의.결과', '개념.원인.A']]);
-  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n:::toggle [원인:결과]\n:::toggle [가:나]\n[A] k : j\n:::end\n:::end\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['개념.원인.가.A', '정의.결과.나'], ['정의.결과.나', '개념.원인.가.A']]);
-  // 관계 토글 제목의 `[A]`도 상위 분류와 교집합이고, 그 아래 줄이 그대로 이어받는다
-  assert.deepEqual(questionsFor('[개념:정의]\n:::toggle [A] B: [C] D\nh:j\n:::end').filter(q => q.kind === 'convert' && q.prompt === 'h').map(q => q.convert.steps.map(step => step.set)), [['개념.A.B', '정의.C.D']]);
+  // 노트 맨 위(토글 밖)에 쓴 분류기준도 상위 속성이다. 토글이 분류기준을 새로 쓰면 그 기준만 쓴다(`[A]:[B]` 아래 `[P]:[q]`는 `[A.P]:[B.q]`가 아니라 `[P:q]`)
+  sameSets('[개념:정의]\nk : [B] j', '[개념] k : [B] j');
+  sameSets('[개념:정의]\n:::toggle [원인:결과]\nk : [B] j\n:::end', '[원인] k : [B] j');
+  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n:::toggle [원인:결과]\nk : [B] j\n:::end\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['원인', 'B'], ['B', '원인']]);
+  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n:::toggle [원인:결과]\n:::toggle [가:나]\nk : [B] j\n:::end\n:::end\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['가', 'B'], ['B', '가']]);
+  // 분류기준을 쓰지 않은 안쪽 토글은 위쪽 기준을 그대로 이어받는다
+  assert.deepEqual(questionsFor(':::toggle [개념:정의]\n:::toggle 산업\nk : [B] j\n:::end\n:::end').filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set)), [['개념', 'B'], ['B', '개념']]);
+  // 관계 토글 제목의 `[A]`도 직접 쓴 기준이라 위쪽과 겹치지 않고, 그 아래 줄이 그대로 이어받는다
+  assert.deepEqual(questionsFor('[개념:정의]\n:::toggle [A] B: [C] D\nh:j\n:::end').filter(q => q.kind === 'convert' && q.prompt === 'h').map(q => q.convert.steps.map(step => step.set)), [['A.B', 'C.D']]);
   // 줄 앞 분류기준(`[개념:정의;예시] 값:값`)과 위치 표시(`[A:C] 값`)만 쓴 줄은 집합이 붙은 칸이 아니라서 줄이지 않는다
   assert.ok(questionsFor('[개념:정의]\n[개념:정의;예시] 증기기관:열로 움직인다\n').every(q => q.kind !== 'convert'));
   assert.ok(questionsFor(':::toggle [개념:정의]\n[A:C] k : j\n:::end').every(q => q.kind !== 'convert'));
@@ -9961,12 +9983,12 @@ test('[A] k is intersected with the classification of its own column number by d
   assert.deepEqual(readConvertCell('[A].[B] k'), { sets: ['A'], cell: '.[B] k' });
   assert.deepEqual(readConvertCell('[A.B] k'), { sets: ['A.B'], cell: 'k' });
   assert.deepEqual(readConvertCell('[A:C].급수'), { sets: ['A:C'], cell: '.급수' }, 'a dot outside [ ] is a letter of the value (21:09: set words only inside [ ])');
-  // 관계도 그림도 풀어 쓴 꼴과 같다(개념 > A 안에 k). 토글 밑 토글이면 바깥 기준부터 쌓인다(개념 > 원인 > A)
+  // 관계도 그림도 풀어 쓴 꼴과 같다(A 안에 k). 토글 밑 토글이 기준을 새로 쓰면 그 기준만 쓴다(원인 · 결과)
   const { parseNoteDiagram } = loadSource('utils/noteDiagram.ts');
-  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의]\n[A] k : j\n:::end')[0].items, parseNoteDiagram('[개념][A] k : [정의] j'));
-  assert.deepEqual(parseNoteDiagram('[개념:정의]\n[A] k : j').slice(1), parseNoteDiagram('[개념][A] k : [정의] j'));
-  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의:예시]\n[A] k :: m\n:::end')[0].items, parseNoteDiagram('[개념][A] k :: [예시] m'));
-  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의]\n:::toggle [원인:결과]\n[A] k : j\n:::end\n:::end')[0].items[0].items, parseNoteDiagram('[개념][원인][A] k : [정의][결과] j'));
+  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의]\n[A] k : j\n:::end')[0].items, parseNoteDiagram('[A] k : [정의] j'));
+  assert.deepEqual(parseNoteDiagram('[개념:정의]\n[A] k : j').slice(1), parseNoteDiagram('[A] k : [정의] j'));
+  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의:예시]\n[A] k :: m\n:::end')[0].items, parseNoteDiagram('[A] k :: [예시] m'));
+  assert.deepEqual(parseNoteDiagram(':::toggle [개념:정의]\n:::toggle [원인:결과]\n[A] k : j\n:::end\n:::end')[0].items[0].items, parseNoteDiagram('[A] k : [결과] j'));
   // 분류기준이 없으면 쓴 그대로, 위치 표시만 쓴 줄(`[A:C] k`)도 줄이지 않는다
   assert.deepEqual(parseNoteDiagram('[A] k : j'), [{ kind: 'group', relation: 'hierarchy', title: 'A', items: [{ kind: 'relation', fields: ['k', 'j'], arrows: ['both'] }] }]);
   const marked = parseNoteDiagram(':::toggle [개념:정의]\n[A:C] k : j\n:::end')[0].items;
@@ -10090,7 +10112,8 @@ test('a lone [X] on a later cell (no criterion, not all cells set) names that ce
   const say = memo => questionsFor(memo).filter(q => q.kind === 'direct' || q.kind === 'reverse').map(q => getReviewQuestionSentence(q.criterion ?? null, q).statement);
   assert.deepEqual(say('임진왜란 : [원인] 일본의 야욕'), ['‘임진왜란’에 이어지는 원인 값은?', '원인 ‘일본의 야욕’에 앞서 이어진 것은?']);
   const inner = say('세포 : (막 : [기능] 보호)');
-  assert.ok(inner.includes('‘세포’에서 ‘막’에 이어지는 기능 값은?') && inner.includes('‘세포’에서 기능 ‘보호’에 앞서 이어진 것은?'), inner.join(' | '));
+  // `세포 : (막 : …)`는 "세포의 막": 바깥 칸은 "의"로 잇는다(27일)
+  assert.ok(inner.includes('‘세포’의 ‘막’에 이어지는 기능 값은?') && inner.includes('‘세포’의 기능 ‘보호’에 앞서 이어진 것은?'), inner.join(' | '));
   // 첫 칸만의 [a]는 전처럼 조건, 모든 칸의 [ ]는 전처럼 능력 변환
   assert.deepEqual(questionsFor('[a] X:y').map(q => q.conditions), [['a'], ['a']]);
   assert.ok(questionsFor('[사건] 임진왜란 : [원인] 일본의 야욕').every(q => q.convert));
@@ -10544,4 +10567,36 @@ test('the three tabs live in one bottom bar at every screen size, with no side r
   ['학습 실행', '학습 설정', '추이 분석'].forEach(label => assert.ok(nav.includes(label), label));
   assert.ok(!app.includes('left-0 top-0') && !app.includes('md:pl-24') && !app.includes('xl:pl-64') && !app.includes('isSidebarCollapsed'), 'the side rails and their offsets are gone');
   assert.ok(app.includes('pb-24'), 'the page leaves room so the bar never covers the content');
+});
+
+test('27일 노트 규칙: A:(B:C)는 "A의 B", 괄호 칸 안은 그 칸의 하위, 하위에 쓴 기준은 하위 관계가 아님, 기준보다 많은 칸의 [C]는 그 줄만', () => {
+  const { buildReviewQuestions, getReviewQuestionSentence, getReviewQuestionClassification } = questionBuilder;
+  const say = memo => buildReviewQuestions(memo).questions.map(q => ({ q, text: getReviewQuestionSentence(q.criterion ?? null, q)?.statement }));
+  // A:(B:C) = A의 B는 C. A → B 연결 문제도 그대로 있다
+  const owner = say('A값:(B값:C값)');
+  assert.ok(owner.some(item => item.text === '‘A값’의 ‘B값’에 이어지는 것은?' && item.q.answer === 'C값'));
+  assert.ok(owner.some(item => item.text === '‘A값’에 이어지는 것은?' && item.q.answer === 'B값'));
+  // (B:C),(d:f)도 둘 다 A의 것이다
+  const both = say(':::toggle [A:B] 바깥\nA값:(B값:C값),(d값:f값)\n:::end').map(item => item.text);
+  assert.ok(both.includes('‘바깥’에서 A ‘A값’의 B ‘B값’에 이어지는 B 값은?') && both.includes('‘바깥’에서 A ‘A값’의 B ‘d값’에 이어지는 B 값은?'), both.join(' | '));
+  // (d:e):x는 [A.d] [A.e] : [B] — 다른 기준이 없으면 괄호 안은 A로 표시하고, 괄호 뒤 칸은 B다
+  const first = buildReviewQuestions(':::toggle [A:B] 바깥\n(d값:e값):x값\n:::end').questions;
+  const inner = first.find(q => q.kind === 'direct' && q.prompt === 'd값' && q.answer === 'e값');
+  assert.deepEqual([getReviewQuestionClassification(inner.criterion, inner).prompt, getReviewQuestionClassification(inner.criterion, inner).answer], [['A'], ['A']]);
+  const outer = first.find(q => q.kind === 'direct' && q.answer === 'x값');
+  assert.deepEqual(getReviewQuestionClassification(outer.criterion, outer).answer, ['B']);
+  // 괄호 안에 이름을 직접 쓰면 그 이름
+  const named = buildReviewQuestions(':::toggle [A:B] 바깥\n(d값:{상세}e값):x값\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === 'd값' && q.answer === 'e값');
+  assert.deepEqual(getReviewQuestionClassification(named.criterion, named).answer, ['상세']);
+  // [A]:[B] 아래 [P]:[q] 토글: 아래 줄은 P · q만(A.P가 아니다)
+  const nested = buildReviewQuestions(':::toggle [A]:[B]\n:::toggle [P]:[q]\n[S] 가:나\n:::end\n:::end').questions.filter(q => q.convert);
+  assert.deepEqual(nested.map(q => q.convert.steps.map(step => step.set)), [['S', 'q'], ['q', 'S']]);
+  // [A]:[B] 아래 M:[V] N: M은 A, N은 V(B가 아니다)
+  const mv = buildReviewQuestions(':::toggle [A]:[B]\nM:[V] N\n:::end').questions.filter(q => q.convert);
+  assert.deepEqual(mv[0].convert.steps.map(step => step.set), ['A', 'V']);
+  // 기준(2개)보다 많은 칸: 이름이 없고, [C]로 쓰면 그 줄에서만 C다
+  const extra = buildReviewQuestions(':::toggle [A:B] 바깥\nx:y:[C] z\nx2:y2:z2\n:::end').questions.filter(q => q.kind === 'direct');
+  const label = (prompt) => { const q = extra.find(item => item.prompt === prompt); return getReviewQuestionClassification(q.criterion, q).answer; };
+  assert.deepEqual(label('y'), ['C']);
+  assert.deepEqual(label('y2'), []);
 });

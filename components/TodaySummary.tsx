@@ -486,7 +486,7 @@ export const PomodoroSummary: React.FC<{
             뽀모도로
           </span>
           <HelpPopover label="뽀모도로 설명" triggerClassName={TINTED_HELP_BUTTON}>
-            <span>{pomodoroMinutes}분은 예측이에요. 끝 페이지까지 걸릴 예상 시간이 {pomodoroMinutes}분 이하가 되도록 장수를 정해요. 실제로는 몇 장을 풀었는지를 봐요. 옆의 ▲▼로 5분씩 바꾸면 다음 학습에도 그대로 써요.</span>
+            <span>{pomodoroMinutes}분은 예측이에요. 끝 페이지까지 걸릴 예상 시간이 {pomodoroMinutes}분 이하가 되도록 장수를 정해요. 공부 중에는 {pomodoroMinutes}분이 지날 때마다 알람이 울려요. 옆의 ▲▼로 5분씩 바꾸면 바로 반영되고 다음 학습에도 그대로 써요.</span>
           </HelpPopover>
         </div>
         <div className="mt-1 flex flex-wrap items-stretch gap-x-4 gap-y-2">

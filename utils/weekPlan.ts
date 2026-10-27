@@ -237,15 +237,40 @@ export const resolveSavedWeekdayPages = (subject: Subject, next: Subject, edited
 const currentWeekdayPlan = (subject: Subject) => getWeekdayPagePlan(subject, getSubjectRemainingPageCount(subject), getDiffDays(subject.targetDate));
 
 /**
- * 한 요일의 페이지를 과목의 페이지 단위(없으면 1)만큼 늘이거나(direction 1) 줄인다(최소 0). amount를 주면 그만큼(예: 1쪽씩 미세 조정).
- * 그 요일만 바뀐다: 합계가 달라질 수 있고, 나중에 계획을 갱신하면 이 페이지 비율대로 다시 나뉜다. 쉬는 요일은 그대로.
+ * 한 요일의 페이지를 amount(기본 1)만큼 늘이거나(direction 1) 줄인다(최소 0). 쉬는 요일은 그대로.
+ * 한 주 합계는 계획(마감까지 끝내는 데 필요한 한 주 페이지)에 자동으로 맞춘다(27일 요청 "과목 설정 자동 합산"):
+ * 한 요일을 늘리면 다른 학습 요일 중 가장 많은 날부터 1쪽씩 줄이고, 줄이면 가장 적은 날부터 1쪽씩 더한다.
+ * 학습 요일이 하루뿐이면 그날이 한 주 몫 전부라 바뀌지 않는다.
  */
 export const stepWeekdayPages = (subject: Subject, dayId: number, direction: 1 | -1, amount: number = getWeekdayPageStep(subject)): Subject => {
   const days = normalizeWeekdays(subject.scheduledWeekdays);
   if (!days.includes(dayId)) return subject;
-  const plan = currentWeekdayPlan(subject);
-  const next = Math.max(0, Math.min(999, Math.round(plan[dayId] || 0) + direction * amount));
-  return { ...subject, scheduledWeekdayPages: cleanWeekdayPagePlan({ ...plan, [dayId]: next }, days) };
+  // 지금 요일별 페이지의 비율 그대로 계획 합계에 맞춘 값에서 시작한다(합계가 이미 맞으면 지금 값 그대로)
+  const plan = cleanWeekdayPagePlan(currentWeekdayPlan(subject), days);
+  const remaining = getSubjectRemainingPageCount(subject);
+  const diffDays = getDiffDays(subject.targetDate);
+  const fresh = cleanWeekdayPagePlan(calculateFreshWeekdayPagePlan(subject, remaining, diffDays), days);
+  // 한 주 합계(계획)는 요일 나눔과 상관없이 같은 값이어야 누를 때마다 흔들리지 않는다: 같은 몫으로 나눈 계획의 합계
+  const evenPlan = cleanWeekdayPagePlan(calculateFreshWeekdayPagePlan({ ...subject, scheduledWeekdayPages: undefined }, remaining, diffDays), days);
+  const target = days.reduce((sum, day) => sum + evenPlan[day], 0);
+  const next = days.reduce((sum, day) => sum + plan[day], 0) === target ? plan : fresh;
+  next[dayId] = Math.max(0, Math.min(target, (next[dayId] || 0) + direction * amount));
+  const others = days.filter(day => day !== dayId);
+  let diff = days.reduce((sum, day) => sum + next[day], 0) - target;
+  // 다른 요일로 맞춘다: 넘치면 많은 날부터 빼고, 모자라면 적은 날부터 더한다(같으면 바꾼 요일 다음 요일부터)
+  const order = (list: number[]) => list.sort((a, b) => ((a - dayId + 7) % 7) - ((b - dayId + 7) % 7));
+  for (let guard = 0; diff !== 0 && guard < 5000; guard += 1) {
+    if (diff > 0) {
+      const pick = order(others.filter(day => next[day] > 0)).sort((a, b) => next[b] - next[a])[0];
+      if (pick === undefined) break;
+      next[pick] -= 1; diff -= 1;
+    } else {
+      const pick = order([...others]).sort((a, b) => next[a] - next[b])[0];
+      if (pick === undefined) { next[dayId] += -diff; diff = 0; break; }
+      next[pick] += 1; diff += 1;
+    }
+  }
+  return { ...subject, scheduledWeekdayPages: next };
 };
 
 /**
