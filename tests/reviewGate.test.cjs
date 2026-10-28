@@ -8422,13 +8422,18 @@ test("quotes '…' are read the same way by the diagram, the editor colours, the
   assert.deepEqual(parseLogicText(diagram[0].fields[1]), { kind: 'op', operator: 'sequence', items: [text('가'), { kind: 'op', operator: 'equal', items: [text('나'), text('다')] }] });
   assert.deepEqual(parseLogicText("'다 < 나 : 가'"), { kind: 'op', operator: 'sequence', items: [{ kind: 'op', operator: 'equal', items: [text('나'), text('가')] }, text('다')] });
   assert.deepEqual(parseLogicText("'그냥 글'"), text('그냥 글'), 'the quote marks are not shown');
-  // editor colours: the marks inside a quote get the logic-word colours instead of the column (colon) colours; the text is unchanged
+  // editor colours: the marks inside a quote are no columns (no colon colours) and, since a quote means "no logic words inside" (29일), plain text colour; the text is unchanged
   const colors = loadSource('utils/reviewMemoColors.ts');
   const memo = "A : '가 ; 나 : 다 < 라' : 마";
   const parts = colors.markReviewMemoOperators(memo, colors.markReviewMemoLogicWords(memo, colors.splitReviewMemoColonColors(memo)));
   assert.equal(parts.map(part => part.text).join(''), memo);
   assert.deepEqual(parts.filter(part => part.colonIndex !== undefined).map(part => part.colonIndex), [0, 1], 'only the two outside : count as columns');
-  assert.deepEqual(parts.filter(part => part.operator).map(part => [part.text, part.operator]), [[';', 'sequence'], [':', 'equal'], ['<', 'sequence']]);
+  assert.deepEqual(parts.filter(part => part.operator || part.logic).map(part => part.text), ["'", "'"], 'only the quote marks keep the logic colour');
+  // a quote around a single mark (`':'`) is that logic word, so it keeps the colour; brackets and parentheses inside a quote are plain
+  const single = "a:f':'g";
+  assert.deepEqual(colors.markReviewMemoOperators(single, colors.markReviewMemoLogicWords(single, colors.splitReviewMemoColonColors(single))).filter(part => part.operator).map(part => part.text), [':']);
+  const inner = "x:'(f(x+h)-f(x))/h [c] d'";
+  assert.deepEqual(colors.markReviewMemoOperators(inner, colors.markReviewMemoLogicWords(inner, colors.splitReviewMemoColonColors(inner))).filter(part => part.operator || part.logic).map(part => part.text), ["'", "'"]);
   // syntax reader: a quoted ; is an order word, no column separator and no toggle-tail relation
   const { parseReviewMemoSyntax } = loadSource('utils/reviewMemoLogic.ts');
   const syntax = parseReviewMemoSyntax("A : '가 ; 나'");
@@ -10638,4 +10643,15 @@ test('28일 버그: 학습량 변경으로 넣은 기록은 과목을 다 끝내
   assert.equal(buildCompletedSubjectSummaries([{ ...manual, manualEntry: undefined }], [subject], [], '2026-10-28').length, 0);
   const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes('manualEntry: true,'), 'the add/edit window marks what it saves');
+});
+
+test('29일: 세션 메모의 [a]:[b]는 [a:b]와 같은 분류기준이고, 밑 노트 c;d의 문제에 a · b 이름으로 들어간다', () => {
+  const { createSessionMemoRecord } = loadSource('utils/sessionMemo.ts');
+  assert.equal(createSessionMemoRecord('[a]:[b] 세션').classificationCriterion, 'a:b');
+  assert.equal(createSessionMemoRecord('[a] : [b] ; [c] 세션').classificationCriterion, 'a:b;c');
+  assert.equal(createSessionMemoRecord('[a:b] 세션').classificationCriterion, 'a:b');
+  assert.equal(createSessionMemoRecord('[a] 세션 [b]').classificationCriterion, 'a', 'brackets not joined by : ; < stay apart');
+  const { buildReviewQuestions, getReviewQuestionSentence } = questionBuilder;
+  const q = buildReviewQuestions('c;d').questions.find(item => item.kind === 'direct');
+  assert.equal(getReviewQuestionSentence(createSessionMemoRecord('[a]:[b]').classificationCriterion, q).statement, 'a ‘c’에 이어지는 b 값은?');
 });

@@ -139,6 +139,8 @@ export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): 
     frame.quotes.forEach(at => mark(at, at + 1));
     frame.hashes.forEach(at => mark(at, at + 1));
   }
+  // 따옴표 `'…'`는 "안에 논리어가 없다"는 표시라서 안쪽의 괄호 · `[ ]` · `@` 등은 일반 글자 색이다(29일 요청). 따옴표 글자 자신은 논리어 색 그대로
+  quotedInterior(text).forEach(at => { inside[at] = 0; });
   if (!any) return parts;
   const result: MemoColorPart[] = [];
   let offset = 0;
@@ -155,6 +157,20 @@ export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): 
   return result;
 };
 
+/** 따옴표 `'…'` 안쪽 글자 위치(따옴표 글자 제외). 기호 하나만 감싼 `':'` `';'` `'<'`는 그 기호가 논리어라서 넣지 않는다. */
+export const quotedInterior = (text: string): Set<number> => {
+  const result = new Set<number>();
+  if (!text.includes("'")) return result;
+  const edges = [...reviewQuotes(text).edges].sort((a, b) => a - b);
+  for (let index = 0; index + 1 < edges.length; index += 2) {
+    const open = edges[index];
+    const close = edges[index + 1];
+    if (close - open === 2 && /[:;<]/.test(text[open + 1])) continue;
+    for (let at = open + 1; at < close; at += 1) result.add(at);
+  }
+  return result;
+};
+
 /** 논리어 색 하나: 기호 막대의 `, = - ( )`와 같은 청록. `:` `;` `<`는 칸 자리 색이라 따로 둔다. */
 export const getReviewMemoLogicColor = (dark: boolean) => (dark ? '#5eead4' : '#0f766e');
 
@@ -168,6 +184,7 @@ export const markReviewMemoOperators = (text: string, parts: MemoColorPart[]): M
   if (!/[,\-=]/.test(text) && !quoted.size) return parts;
   // 따옴표 안의 `,` `-` `=`와 `#` 틀의 따옴표 안 글자는 논리어가 아니라 글자다
   const literal = new Set<number>([...reviewQuotes(text).literal, ...frameQuotes(text).literal]);
+  const interior = quotedInterior(text);
   const kinds = new Map<number, MemoOperator>();
   let lineStart = 0;
   let lineEnd = text.indexOf('\n') < 0 ? text.length : text.indexOf('\n');
@@ -181,7 +198,8 @@ export const markReviewMemoOperators = (text: string, parts: MemoColorPart[]): M
     const role = quoted.get(index);
     if (role) {
       // 따옴표 안의 `:`는 `=`처럼(같음), `;`와 `<`는 `-`처럼(순서) 한 칸 안의 논리어다. 단축어가 켜진 때만 읽힌다.
-      if (isNoteShorthandOn()) kinds.set(index, role === 'equal' ? 'equal' : 'sequence');
+      // 색은 일반 글자 색이다(29일: 따옴표는 안에 논리어가 없다는 표시). 기호 하나만 감싼 `':'`만 논리어 색이다
+      if (isNoteShorthandOn() && !interior.has(index)) kinds.set(index, role === 'equal' ? 'equal' : 'sequence');
     } else if (isRelationMark(character)) {
       const override = readReviewFieldOverride(text, index + 1);
       if (override) index = override.end - 1;

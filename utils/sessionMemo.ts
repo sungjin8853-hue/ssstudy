@@ -22,7 +22,24 @@ export const createSessionMemoRecord = (text: string): SessionMemoRecord => {
       if (depth > 0) continue;
       const content = text.slice(start + 1, index).trim();
       if (!content) continue;
-      classificationCriterion = content;
+      // `[a]:[b];[c]`처럼 칸마다 괄호를 쓴 꼴도 `[a:b;c]`와 같다(29일: 세션의 `[a]:[b]`가 `a`만 읽히던 것)
+      let joined = content;
+      let at = index + 1;
+      for (;;) {
+        let next = at;
+        while (next < text.length && /[^\S\n]/.test(text[next])) next += 1;
+        if (!/[:;<]/.test(text[next] ?? '')) break;
+        const mark = text[next];
+        next += 1;
+        while (next < text.length && /[^\S\n]/.test(text[next])) next += 1;
+        if (text[next] !== '[') break;
+        const close = text.indexOf(']', next);
+        const inner = close > next ? text.slice(next + 1, close).trim() : '';
+        if (!inner || inner.includes('[') || inner.includes('\n')) break;
+        joined += `${mark}${inner}`;
+        at = close + 1;
+      }
+      classificationCriterion = joined;
       break;
     }
   }
