@@ -146,3 +146,16 @@ export const basicReviewFeedbackOf = (logs: readonly StudyLog[], subjectId: stri
   const speed = speedPerHour(pages, minutes);
   return { speed, averageSpeed, targetSpeed: averageSpeed === null ? null : averageSpeed * EASY_SPEED_RATIO, recommended: recommendSubjectGrade(speed, averageSpeed) };
 };
+
+/**
+ * 복습 문제들의 첫 답변(문제마다 처음 고른 등급) 중 가장 많이 나온 등급(28일 요청).
+ * 문제 말고 나머지 복습(기본 복습 · 복습과목)의 다음 주기는 이 등급으로 정한다: "어려움"이 가장 많으면 나머지도 어려움 주기다.
+ * 같은 수면 더 어려운 쪽(다시 > 어려움 > 보통 > 쉬움)을 고른다. 첫 답변이 하나도 없으면 null.
+ */
+export const mostCommonFirstGrade = (firstGrades: readonly (SubjectGrade | undefined)[]): SubjectGrade | null => {
+  const counts = new Map<SubjectGrade, number>();
+  firstGrades.forEach(grade => { if (grade && SUBJECT_GRADES.includes(grade)) counts.set(grade, (counts.get(grade) || 0) + 1); });
+  let best: SubjectGrade | null = null;
+  SUBJECT_GRADES.forEach(grade => { const count = counts.get(grade) || 0; if (count > 0 && (best === null || count > (counts.get(best) || 0))) best = grade; });
+  return best;
+};

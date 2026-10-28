@@ -48,6 +48,8 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [noPageUnit, setNoPageUnit] = useState(false);
   const [pageLabel, setPageLabel] = useState(DEFAULT_PAGE_LABEL);
   const [chapterText, setChapterText] = useState('');
+  // 측정 전 임시 장당 시간(분). 한 장이라도 재면 쓰지 않는다(재 둔 값이 있으면 언제나 그것이 먼저다)
+  const [initialMinutes, setInitialMinutes] = useState('');
   const [scheduledWeekdays, setScheduledWeekdays] = useState<number[]>(WEEKDAYS.map(day => day.id));
 
   const toggleWeekday = (weekday: number) => {
@@ -70,8 +72,10 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays,
       0, pageLabel, chapterParse.chapters);
 
+    const initial = Number(initialMinutes);
     onAddSubject({
       ...nextSubject,
+      ...(initialMinutes.trim() && Number.isFinite(initial) && initial > 0 ? { initialAverageTimePerPage: initial } : {}),
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         nextSubject,
         getSubjectRemainingPageCount(nextSubject),
@@ -87,6 +91,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     setNoPageUnit(false);
     setPageLabel(DEFAULT_PAGE_LABEL);
     setChapterText('');
+    setInitialMinutes('');
     setScheduledWeekdays(WEEKDAYS.map(day => day.id));
   };
 
@@ -139,6 +144,12 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               <label htmlFor="new-plan-page-label" className={labelClass}>단위 이름</label>
               <input id="new-plan-page-label" value={pageLabel} maxLength={MAX_PAGE_LABEL_LENGTH}
                 placeholder={DEFAULT_PAGE_LABEL} onChange={event => setPageLabel(event.target.value)} className={fieldClass} />
+            </div>
+            <div className="col-span-2 space-y-1 md:col-span-1">
+              <label htmlFor="new-plan-initial" className={labelClass}>한 {word}당 시간(분)</label>
+              <input id="new-plan-initial" data-testid="new-plan-initial" type="number" min="0" step="0.1" inputMode="decimal" value={initialMinutes}
+                placeholder="임시값 · 선택" onChange={event => setInitialMinutes(event.target.value)} className={fieldClass} />
+              <p className="ml-1 text-[12px] font-bold text-slate-500">한 {word}라도 재면 쓰지 않아요</p>
             </div>
             <div className="col-span-2 space-y-1 md:col-span-1">
               <p className={labelClass}>중요도</p>

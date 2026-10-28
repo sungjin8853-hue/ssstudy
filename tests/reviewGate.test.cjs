@@ -3860,7 +3860,7 @@ test('the basic review screen lists questions by number and type only and previe
   assert.ok(!graded.includes('정답 확인') && !graded.includes('머릿속으로'));
   const done = renderToStaticMarkup(React.createElement(ReviewPracticeScreen, { ...base, isComplete: true, canFinish: true, finishLabel: '복습 완료',
     firstTryCorrect: 4, firstTryTotal: 5, firstTryOk: 4, firstTryBad: 1, completion: React.createElement('div', null, '완료노트') }));
-  assert.ok(done.includes('기본 복습 완료') && done.includes('첫 시도 정답 4') && done.includes('오답 1') && done.includes('완료노트'));
+  assert.ok(done.includes('복습 문제 완료') && done.includes('extra-review-note') && done.includes('첫 시도 정답 4') && done.includes('오답 1') && done.includes('완료노트'));
   assert.ok(done.includes('4 / 5 · 80%') && !done.includes('문제전용문장'));
 });
 
@@ -5778,7 +5778,7 @@ test('basic review screen: the countdown is the pomodoro, shown large, and only 
   assert.ok(effect.includes('playPomodoroEndSound()') && effect.includes('reviewRoundsSeenRef'));
   ['clearPreSessionReview', 'setIsPreSessionReviewRunning', 'finishPreSessionReview', 'onFinish'].forEach(name => assert.ok(!effect.includes(name), `time up never calls ${name}`));
   assert.ok(logger.includes('timeUp={isReviewTimeUp}'));
-  assert.ok(logger.includes('const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !stopsAtGateCompletion'), 'a review without questions keeps timing until it is finished');
+  assert.ok(logger.includes('const isReviewTimeUp = Boolean(reviewPomodoro?.finished);') && !logger.includes('stopsAtGateCompletion'), 'the review keeps timing until it is finished, also after the questions (28일)');
   assert.ok(logger.includes('getPomodoroProgress(preSessionReviewTargetSeconds, preSessionReviewSeconds, pomodoroMinutes)'), 'the review countdown comes from the estimated time');
   assert.ok(logger.includes('formatTime(reviewPomodoro?.remainingSeconds ?? 0)'));
 });
@@ -6326,7 +6326,9 @@ test('one subject alone: 해당 과목 and 기본복습 efficiency side by side,
   assert.ok(source.includes('speedOfSubject ? { subjectName: stage.name || sub.name, unit: speedOfSubject.basicReview } : undefined') && source.indexOf('speedOfSubject ? { subjectName') > source.indexOf('ownValueOpen && renderValueBlock('), 'only the current stage row gets it');
 });
 
-test('weekday pages: set per day in steps of the subject\'s page unit right under 한 주 필요 시간; a later plan refresh keeps the page proportions', () => {
+test('weekday pages: set per day in steps of the subject\'s page unit right under 한 주 필요 시간; a later plan refresh keeps the page proportions', t => {
+  // 마감까지 요일이 몇 번 오는지로 계획을 채우므로 날짜를 고정한다
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 9, 25, 12).getTime() });
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { stepWeekdayPages, toggleStudyWeekday, withFreshWeekPlan } = loadSource('utils/weekPlan.ts');
@@ -10353,8 +10355,8 @@ test('real-use fixes (21:50): review subject shared by stages counts once, a fre
   assert.equal(rows[0].name, '수학 심화');
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   assert.ok(logger.includes('activeStage && activeStage.id !== item.studyItem.subject.id ? activeStage.name : item.name'));
-  // 복습 문제가 끝나면 복습과목을 바로 시작하고, 저장 완료가 남은 장수를 채우면 복습을 마친다
-  assert.ok(logger.includes('if (!gateLeadsToReviewSubject || preSessionReviewLogs.length === 0) return;') && logger.includes('finishPreSessionReview();\n  });'));
+  // 복습 문제가 끝나도 복습과목을 바로 시작하지 않는다(28일: 추가 복습 시간 뒤 "복습과목 시작"), 저장 완료가 남은 장수를 채우면 복습을 마친다
+  assert.ok(!logger.includes('gateLeadsToReviewSubject') && logger.includes('startReviewSubjectMeasurementRun(reviewGroup, gateQuestionGrade);'));
   assert.ok(logger.includes('created.pagesRead >= activeReviewTiming.remainingPages') && logger.includes('handleSwitchToNextReviewSubject();\n      return;'));
   // 난도 버튼의 다음 복습 = 문제 일정과 과목 난도 중 이른 쪽
   const { previewReviewCompletionIntervals } = loadSource('utils/reviewGate.ts');
@@ -10436,7 +10438,8 @@ test('one review is graded once: the last review subject sets the subject memory
   assert.ok(app.includes('feedbackGrade && !nextReviewSubjectId ? { ...source, reviewFsrs: gradeSubjectCard(source, feedbackGrade, nowMs) } : source'));
   assert.ok(app.includes('const reviewFsrs = feedbackGrade ? gradeSubjectCard(log, feedbackGrade, nowMs) : log.reviewFsrs;'));
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
-  assert.ok(logger.includes("onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined);"));
+  // 복습 문제가 있었으면 문제 첫 답변 중 가장 많은 등급, 없으면 전처럼 속도로 권한 값 · 고른 값(28일)
+  assert.ok(logger.includes("onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, gateQuestionGrade\n      ?? (basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined));"));
   assert.ok(logger.includes('data-basic-feedback="true"') && logger.includes('data-feedback-later="true"'));
   const { basicReviewFeedbackOf } = loadSource('utils/subjectFeedback.ts');
   const past = [{ id: 'a', subjectId: 'E', pagesRead: 10, timeSpentMinutes: 30, timestamp: '2026-10-01T00:00:00Z',
@@ -10462,8 +10465,8 @@ test('a toggle named like the answer is left out of the question, and a basic re
   const other = buildReviewQuestions(memo).questions.find(q => q.answer === '조선을 세운 왕');
   assert.ok(other && other.statement.includes('‘태조’'), 'other questions keep the toggle as their place');
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
-  assert.ok(logger.includes('const stopsAtGateCompletion = isGateReviewComplete && gateReviewQuestions.length > 0;'));
-  assert.ok(logger.includes('feedback={basicFeedback && isGateReviewComplete ?'));
+  assert.ok(logger.includes("if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0) return;"), 'the basic review timer runs until 복습 완료, questions or not');
+  assert.ok(logger.includes('feedback={basicFeedback && isGateReviewComplete && gateQuestionGrade ?') && logger.includes(': basicFeedback && isGateReviewComplete ? (() => {'));
 });
 
 test('note practice leaves out the questions removed from review', () => {
@@ -10599,4 +10602,40 @@ test('27일 노트 규칙: A:(B:C)는 "A의 B", 괄호 칸 안은 그 칸의 하
   const label = (prompt) => { const q = extra.find(item => item.prompt === prompt); return getReviewQuestionClassification(q.criterion, q).answer; };
   assert.deepEqual(label('y'), ['C']);
   assert.deepEqual(label('y2'), []);
+});
+
+test('28일: 문제 첫 답변 중 가장 많은 등급이 나머지 복습의 등급, 복습과목은 추천만, 과목 만들 때 장당 임시 시간', () => {
+  const { mostCommonFirstGrade } = loadSource('utils/subjectFeedback.ts');
+  assert.equal(mostCommonFirstGrade(['hard', 'good', 'hard', 'easy']), 'hard');
+  assert.equal(mostCommonFirstGrade(['good', 'hard']), 'hard', 'a tie goes to the harder grade');
+  assert.equal(mostCommonFirstGrade(['easy', 'easy', 'again']), 'easy');
+  assert.equal(mostCommonFirstGrade([undefined]), null);
+  assert.equal(mostCommonFirstGrade([]), null);
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  // 첫 답변 = 문제마다 처음 고른 등급(푼 문제만)
+  assert.ok(logger.includes('.map(question => gatePractice?.grades[question.id]?.[0])'));
+  // 복습과목의 난도 피드백 추천은 문제에서 온 등급이 먼저, 고르는 것은 사용자
+  assert.ok(logger.includes('recommended: fromQuestions ?? recommendSubjectGrade(speed, summary.averageSpeed), fromQuestions'));
+  assert.ok(logger.includes('data-feedback-from-questions="true"') && logger.includes('onClick={() => setFeedbackChoice(grade)}'));
+  // 과목 만들기: 한 장당 시간(분) 임시값
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { SubjectPlanner } = loadSource('components/SubjectPlanner.tsx');
+  const html = renderToStaticMarkup(React.createElement(SubjectPlanner, { onAddSubject() {} }));
+  assert.ok(html.includes('data-testid="new-plan-initial"') && html.includes('한 페이지당 시간(분)') && html.includes('재면 쓰지 않아요'));
+  const planner = fs.readFileSync(path.resolve(__dirname, '../components/SubjectPlanner.tsx'), 'utf8');
+  assert.ok(planner.includes('{ initialAverageTimePerPage: initial }'));
+});
+
+test('28일 버그: 학습량 변경으로 넣은 기록은 과목을 다 끝내지 않았어도 오늘 한 기록 · 오늘 완료에 보인다', () => {
+  const { buildCompletedSubjectSummaries } = loadSource('components/TodaySummary.tsx');
+  const subject = { id: 'S', name: '과목', startPage: 1, totalPages: 50, completedPages: 3, targetDate: '2026-12-31' };
+  const manual = { id: 'm', subjectId: 'S', pagesRead: 3, timeSpentMinutes: 9, startPage: 1, endPage: 3, timestamp: '2026-10-28T03:00:00Z', studyDate: '2026-10-28', manualEntry: true };
+  const rows = buildCompletedSubjectSummaries([manual], [subject], [], '2026-10-28');
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].detailId, rows[0].kind, rows[0].pages, rows[0].minutes], ['S', 'study', 3, 9]);
+  // 표시가 없는 예전 기록(측정 세션도 아님)은 전처럼 과목을 끝낸 날에만 보인다
+  assert.equal(buildCompletedSubjectSummaries([{ ...manual, manualEntry: undefined }], [subject], [], '2026-10-28').length, 0);
+  const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('manualEntry: true,'), 'the add/edit window marks what it saves');
 });

@@ -166,10 +166,11 @@ export const buildCompletedSubjectSummaries = (
   };
 
   logs.forEach(log => {
-    if (!log.reviewParentSubjectId && (completedIds.has(log.subjectId) || log.pomodoroSession)
+    // 직접 넣은 기록(manualEntry)은 과목을 다 끝내지 않았어도 보인다(28일 버그: 학습량 변경으로 추가한 기록이 창에 안 보이던 것)
+    if (!log.reviewParentSubjectId && (completedIds.has(log.subjectId) || log.pomodoroSession || log.manualEntry)
       && getLogStudyDate(log) === studyDate && log.pagesRead > 0) {
       add(log.subjectId, 'study', log.subjectId, studyNameOf(log), log.pagesRead, log.timeSpentMinutes, log.timestamp, log,
-        log.pomodoroSession ? `${log.subjectId}:pomodoro:${log.id}` : log.subjectId,
+        log.pomodoroSession ? `${log.subjectId}:pomodoro:${log.id}` : completedIds.has(log.subjectId) ? log.subjectId : `${log.subjectId}:manual:${log.id}`,
         undefined, log.subjectStageId || log.subjectId);
     }
     if (log.pomodoroSession && log.reviewParentSubjectId && !aggregateReviewIds.has(log.id)
@@ -679,6 +680,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     const replacementLog: StudyLog = {
       id: editingSummary?.logs[0]?.id || Math.random().toString(36).substr(2, 9),
       subjectId,
+      // 이 창에서 넣거나 고친 기록: 과목을 다 끝내지 않은 날에도 오늘 한 기록에 남는다
+      manualEntry: true,
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,

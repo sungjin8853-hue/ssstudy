@@ -21,7 +21,7 @@ import { readEditIntake } from '../utils/reviewEditIntake';
 import { convertLabel, foldConvertUnit, isConvertUnitKey, planConvertReview } from '../utils/abilityConvert';
 import { planPairReview } from '../utils/pairReview';
 import { formatResponseSeconds, recommendReviewGrade } from '../utils/gradeRecommendation';
-import { basicReviewFeedbackOf, formatSpeed, gradeSubjectCard, pastSessions, previewSubjectIntervals, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_LABELS, SUBJECT_GRADES, summarizeSpeedFeedback } from '../utils/subjectFeedback';
+import { basicReviewFeedbackOf, formatSpeed, gradeSubjectCard, mostCommonFirstGrade, pastSessions, previewSubjectIntervals, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_LABELS, SUBJECT_GRADES, summarizeSpeedFeedback } from '../utils/subjectFeedback';
 import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
@@ -197,6 +197,8 @@ interface ActiveReviewRun {
   sourceName: string;
   startPage?: number;
   stageId?: string;
+  /** 앞서 푼 복습 문제들의 첫 답변 중 가장 많은 등급: 복습과목 난도 피드백의 추천이 된다(고르는 것은 사용자) */
+  questionGrade?: SubjectGrade | null;
 }
 
 interface GateReviewQuestion {
@@ -1256,8 +1258,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const measurement = createPageMeasurement(parseFloat(startPage), parseFloat(readAmount), Number(solvedPageCount), remainingSubjectPages, stageChapters);
     const speed = speedPerHour(measurement?.pagesRead ?? 0, getSessionTimes(studySeconds, organizationSeconds).timeSpentMinutes);
     const summary = summarizeSpeedFeedback(pastSessions(logs, subjectId, feedbackKind));
-    return { speed, summary, recommended: recommendSubjectGrade(speed, summary.averageSpeed) };
-  }, [step, subjectId, startPage, readAmount, solvedPageCount, remainingSubjectPages, stageChapters, studySeconds, organizationSeconds, logs, feedbackKind]);
+    // 복습과목은 앞서 푼 복습 문제들의 첫 답변 중 가장 많은 등급을 추천한다(28일 요청). 문제가 없었으면 전처럼 속도로 권한다
+    const fromQuestions = activeReviewRun?.questionGrade ?? null;
+    return { speed, summary, recommended: fromQuestions ?? recommendSubjectGrade(speed, summary.averageSpeed), fromQuestions };
+  }, [step, subjectId, startPage, readAmount, solvedPageCount, remainingSubjectPages, stageChapters, studySeconds, organizationSeconds, logs, feedbackKind, activeReviewRun]);
   const activeDaySubjectPages = useMemo(
     () => logs
       .filter(log => log.subjectId === subjectId && getLogStudyDate(log) === activeStudyDate)
@@ -1518,24 +1522,23 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     }
   }, [activePageAttackTargetSeconds, attackCompletedPages, isTimerRunning, pageAttackRemainingSeconds, step, timerMode]);
 
-  // 기본 복습 시간: 문제가 있으면 문제를 다 풀 때까지, 문제가 없는 기본 복습(페이지만 다시 보기)은 "복습 완료"를 누를 때까지 잰다.
-  // (문제가 없으면 처음부터 "다 푼" 상태라 시간이 00:00에서 멈춰, 복습 시간 · 회차별 효율이 남지 않았다)
-  const stopsAtGateCompletion = isGateReviewComplete && gateReviewQuestions.length > 0;
+  // 기본 복습 시간: "복습 완료"를 누를 때까지 잰다. 복습 문제를 다 풀어도 멈추지 않는다(28일 요청: 문제가 복습의 전부가 아니라서,
+  // 문제를 맞힌 뒤에도 노트·페이지를 더 보는 추가 복습 시간을 준다).
   useEffect(() => {
-    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0 || stopsAtGateCompletion) return;
+    if (!isPreSessionReviewRunning || preSessionReviewLogs.length === 0) return;
 
     const interval = window.setInterval(() => {
       setPreSessionReviewSeconds(prev => prev + 1);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isPreSessionReviewRunning, preSessionReviewLogs.length, stopsAtGateCompletion]);
+  }, [isPreSessionReviewRunning, preSessionReviewLogs.length]);
 
   // 기본 복습의 뽀모도로: 예상 시간이 25분 이하면 그 시간이 한 회, 넘으면 25분씩 나눠 회차로 센다(마지막 회차는 남는 시간).
   // 회차가 끝나거나 예상 시간이 모두 지나도 화면은 닫지 않는다. 시간 글자, 닫을 수 있는 안내 띠, 짧은 소리 한 번으로만 알리고 복습은 계속된다.
   const reviewPomodoro = getPomodoroProgress(preSessionReviewTargetSeconds, preSessionReviewSeconds, pomodoroMinutes);
-  const isReviewTimeUp = Boolean(reviewPomodoro?.finished) && !stopsAtGateCompletion;
-  const reviewCompletedRounds = isGateReviewComplete ? 0 : reviewPomodoro?.completedRounds ?? 0;
+  const isReviewTimeUp = Boolean(reviewPomodoro?.finished);
+  const reviewCompletedRounds = reviewPomodoro?.completedRounds ?? 0;
   const reviewRoundsSeenRef = useRef(0);
   const [dismissedReviewRound, setDismissedReviewRound] = useState(0);
   useEffect(() => {
@@ -1877,7 +1880,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setPendingImmediateStartSubjectId(item.subject.id);
   };
 
-  const startReviewSubjectMeasurementRun = (group: ReviewQueueGroup) => {
+  const startReviewSubjectMeasurementRun = (group: ReviewQueueGroup, questionGrade: SubjectGrade | null = null) => {
     const parentSubjectId = group.parentSubjectId || group.logs[0]?.subjectId || group.subjectId;
     const parentSubject = subjects.find(subject => subject.id === parentSubjectId);
     const repeatedLog = group.logs.find(log => log.isRepeatReview);
@@ -1900,7 +1903,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       currentIndex,
       sourceName: parentSubject?.name || group.subjectName,
       startPage: repeatedLog ? getRepeatedReviewRange(repeatedLog, currentReviewSubject).startPage : undefined,
-      stageId: repeatedLog ? getRepeatedReviewRange(repeatedLog, currentReviewSubject).stageId : undefined
+      stageId: repeatedLog ? getRepeatedReviewRange(repeatedLog, currentReviewSubject).stageId : undefined,
+      questionGrade
     });
     selectSubjectForMeasurement(currentReviewSubject);
     setPostSaveNextSubjectId(null);
@@ -2094,6 +2098,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     });
   };
 
+  // 이번에 푼 복습 문제들의 첫 답변 중 가장 많은 등급. 문제가 있었으면 나머지 복습의 다음 주기는 이것으로 정한다(28일 요청)
+  const gateQuestionGrade = useMemo(() => mostCommonFirstGrade(gateReviewQuestions
+    .filter(question => gatePractice?.completed.includes(question.id))
+    .map(question => gatePractice?.grades[question.id]?.[0])), [gatePractice, gateReviewQuestions]);
+
   // 기본 복습을 마칠 때의 난도 피드백: 복습과목이 이어지지 않는 기본 복습만(복습과목이 있으면 마지막 복습과목에서 고른다, 오답 다시 풀기는 묻지 않는다)
   const basicFeedback = useMemo(() => {
     if (preSessionReviewLogs.length === 0 || !preSessionReviewGroup || preSessionReviewGroup.isGateRetry) return null;
@@ -2130,12 +2139,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
     if (reviewGroup && reviewSubjectIds.length > 0) {
       clearPreSessionReview();
-      startReviewSubjectMeasurementRun(reviewGroup);
+      startReviewSubjectMeasurementRun(reviewGroup, gateQuestionGrade);
       return;
     }
 
     setHandledReviewLogIds(prev => Array.from(new Set([...prev, ...finishedLogIds])));
-    onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined);
+    // 복습 문제가 있었으면 나머지 복습의 등급은 문제 첫 답변 중 가장 많은 값이다(고르지 않는다). 없으면 전처럼 속도로 권한 값 · 고른 값
+    onReviewAction(finishedLogIds, 'complete', preSessionReviewSeconds / 60, gateQuestionGrade
+      ?? (basicFeedback ? basicFeedbackChoice ?? basicFeedback.recommended ?? 'good' : undefined));
     clearPreSessionReview();
     setSelectedTaskKey('');
     setInspectedRecordDetailId('');
@@ -2153,19 +2164,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setSubjectId('');
   };
 
-  // 복습 문제를 다 풀면(이번 묶음의 문제가 모두 끝나면) 이어서 할 복습과목을 바로 시작한다(21:52 "복습 문제가 끝나면 자동으로 복습 과목이 시작되도록").
-  // 결과는 이때 저장된다(완료 화면에서 "복습과목 시작"을 누르기 전에 화면을 닫아 결과가 사라지는 일이 없다). 오답 다시 풀기는 복습과목이 없어 해당하지 않는다.
-  const gateLeadsToReviewSubject = Boolean(preSessionReviewGroup && !preSessionReviewGroup.isGateRetry && getAvailableReviewSubjectIds(
-    preSessionReviewGroup.reviewSubjectIds, subjects.find(subject => subject.id === preSessionReviewGroup.parentSubjectId), subjects).length > 0);
-  const autoStartedGateRef = useRef<string>('');
-  useEffect(() => {
-    if (!isGateReviewComplete) { autoStartedGateRef.current = ''; return; }
-    if (!gateLeadsToReviewSubject || preSessionReviewLogs.length === 0) return;
-    const signature = getReviewGroupSignature(preSessionReviewLogs);
-    if (autoStartedGateRef.current === signature) return;
-    autoStartedGateRef.current = signature;
-    finishPreSessionReview();
-  });
+  // 복습 문제를 다 풀어도 복습과목을 바로 시작하지 않는다(28일 요청): 추가 복습 시간을 가진 뒤 "복습과목 시작"을 눌러 이어 간다.
+  // 문제 결과는 그 버튼을 누를 때 저장된다.
 
   const condenseFirstPreSessionReview = () => {
     if (preSessionReviewLogs.length === 0) return;
@@ -2502,7 +2502,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               : `뽀모도로 ${reviewCompletedRounds}/${reviewPomodoro.rounds}회가 끝났어요`} · 잠깐 쉬어가도 좋고, 이어서 복습해도 돼요`}
             onDismiss={() => setDismissedReviewRound(reviewCompletedRounds)} /> : undefined}
         isRunning={isPreSessionReviewRunning}
-        canPause={!isGateReviewComplete}
+        canPause
         pauseLabel={isPreSessionReviewRunning ? '잠시 중단' : '계속 복습'}
         onTogglePause={() => setIsPreSessionReviewRunning(prev => !prev)}
         onClose={closePreSessionReview}
@@ -2560,7 +2560,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             ))}
           </div>
         )}
-        feedback={basicFeedback && isGateReviewComplete ? (() => {
+        feedback={basicFeedback && isGateReviewComplete && gateQuestionGrade ? (() => {
+              // 복습 문제가 있었으면 나머지 복습의 등급은 문제 첫 답변 중 가장 많은 값으로 정해진다(고르지 않는다)
+              const firstLog = preSessionReviewLogs[0];
+              const nowMs = Date.now();
+              const withResults = firstLog ? applyReviewGateOutcomes([firstLog], buildGateOutcomes(), false, nowMs)[0] : null;
+              const intervals = previewReviewCompletionIntervals(withResults, nowMs);
+              return <section aria-label="다음 복습" data-question-grade={gateQuestionGrade} className="w-full rounded-2xl border border-indigo-100 bg-white p-4">
+                <h4 className="text-base font-black text-indigo-800">다음 복습</h4>
+                <p className="mt-1 text-sm font-bold text-slate-700">복습 문제 첫 답변 중 가장 많았던 <b className="text-indigo-800">{SUBJECT_GRADE_LABELS[gateQuestionGrade]}</b>으로 나머지 복습 주기를 정해요 · 다음 복습 {formatReviewInterval(intervals[gateQuestionGrade])} 뒤</p>
+                <p className="mt-1 text-[13px] font-bold text-slate-600">문제는 문제마다 첫 답변대로 따로 주기가 정해져요. 시간은 계속 재고 있으니 노트와 페이지를 더 복습한 뒤 마치세요.</p>
+              </section>;
+            })() : basicFeedback && isGateReviewComplete ? (() => {
               const selected = basicFeedbackChoice ?? basicFeedback.recommended ?? 'good';
               const firstLog = preSessionReviewLogs[0];
               const nowMs = Date.now();
@@ -3175,7 +3186,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             </div>
 
             {feedbackInfo && activeReviewRun && (() => {
-              const { speed, summary, recommended } = feedbackInfo;
+              const { speed, summary, recommended, fromQuestions } = feedbackInfo;
               const selected = chosenFeedbackGrade();
               const parentLog = activeReviewRun ? logs.find(log => log.id === activeReviewRun.logIds[0]) ?? null : null;
               // 이번이 마지막 복습과목이면 마칠 때 실제로 다음 복습이 열리는 때(풀린 문제들의 다음 복습과 과목 난도 중 이른 쪽)를 보여 준다
@@ -3186,6 +3197,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                   <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
                   <p data-feedback-current="true" className="text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(speed, pageLabel)}</span></p>
                 </div>
+                {fromQuestions && <p data-feedback-from-questions="true" className="mt-1 text-[13px] font-bold text-indigo-800">추천은 복습 문제 첫 답변 중 가장 많았던 {SUBJECT_GRADE_LABELS[fromQuestions]}이에요. 직접 골라도 돼요.</p>}
                 <ul className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">
                   <li data-feedback-average="true">평균 속도 {formatSpeed(summary.averageSpeed, pageLabel)}{summary.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</li>
                   {summary.byGrade.map(item => <li key={item.grade} data-feedback-history={item.grade} className="text-slate-600">

@@ -134,6 +134,8 @@ export interface StudyLog {
   /** 단원이 있는 과목의 기록: 시작~끝 페이지 사이에서 단원 안에 든 페이지 수(단원 사이를 건너뛴 만큼 빠진다). 진척으로 센다. */
   progressPages?: number;
   pomodoroSession?: boolean;
+  /** "학습량 변경" 창에서 직접 넣거나 고친 기록. 과목을 다 끝내지 않은 날에도 오늘 한 기록 · 오늘 완료에 보인다 */
+  manualEntry?: boolean;
   startPage?: number;
   endPage?: number;
   timeSpentMinutes: number;

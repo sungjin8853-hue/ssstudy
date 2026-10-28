@@ -214,7 +214,8 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
                   <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5 9-10" /></svg>
                 </span>
                 <div className="flex flex-col gap-1.5">
-                  <h2 id="gate-done-title" className="text-2xl font-black text-slate-900">기본 복습 완료</h2>
+                  <h2 id="gate-done-title" className="text-2xl font-black text-slate-900">복습 문제 완료</h2>
+                  <p data-testid="extra-review-note" className="text-sm font-bold text-slate-700">시간은 계속 재고 있어요. 노트와 페이지를 더 복습한 뒤 아래 버튼으로 마치세요.</p>
                   <div className="flex flex-wrap gap-2">
                     <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-black text-green-900">첫 시도 정답 {props.firstTryOk}</span>
                     <span className="rounded-full bg-rose-100 px-3 py-1 text-sm font-black text-rose-900">오답 {props.firstTryBad}</span>
