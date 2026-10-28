@@ -10655,3 +10655,25 @@ test('29일: 세션 메모의 [a]:[b]는 [a:b]와 같은 분류기준이고, 밑
   const q = buildReviewQuestions('c;d').questions.find(item => item.kind === 'direct');
   assert.equal(getReviewQuestionSentence(createSessionMemoRecord('[a]:[b]').classificationCriterion, q).statement, 'a ‘c’에 이어지는 b 값은?');
 });
+
+test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽는다(A: # · A: # :B · A;(#) · A;[#]), 제목 자신은 문제도 자리도 아니다', () => {
+  const { buildReviewQuestions, toggleFrameOf } = questionBuilder;
+  const pairs = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => `${q.conditions.join('/')}|${q.prompt}>${q.answer}`);
+  assert.deepEqual(pairs(':::toggle A: #\nx\ny:z\n:::end'), ['|A>x', '|A>y', '|y>z']);
+  assert.deepEqual(pairs(':::toggle A: # :B\nx\n:::end'), ['|A>x', '|x>B']);
+  // 괄호 안에 넣으면 "A의 x"
+  assert.deepEqual(pairs(':::toggle A;(#)\nx:y\n:::end'), ['|A>x', 'A 의|x>y']);
+  assert.ok(pairs(':::toggle A;[#]\nx\n:::end').includes('|A>x'));
+  // 제목의 #은 문제 글에 나오지 않는다
+  assert.ok(buildReviewQuestions(':::toggle A: #\nx\n:::end').questions.every(q => !`${q.prompt}${q.answer}${q.conditions.join('')}`.includes('#')));
+  // 펼친 줄은 아래 줄의 글자 범위를 가리키고 펼친 글을 남긴다
+  const q = buildReviewQuestions(':::toggle A: #\nx\n:::end').questions.find(item => item.answer === 'x');
+  assert.equal(q.answerSpans[0].generated, 'A: x');
+  // 형식이 아닌 것: #이 둘 이상(틀 줄), 단어에 붙은 #, 앞에 아무것도 없음
+  assert.equal(toggleFrameOf('#-#: #+#'), null);
+  assert.equal(toggleFrameOf('C# 문법'), null);
+  assert.equal(toggleFrameOf('#'), null);
+  assert.equal(toggleFrameOf('A: #'), 'A: #');
+  // #이 없는 끝이 열린 제목은 전처럼(그대로 이어짐)
+  assert.deepEqual(pairs(':::toggle A:\nx\n:::end'), ['|A>x']);
+});

@@ -231,6 +231,25 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
     : { type: 'text', text: value, raw: shown, span: { nodeId, start: from, end: to } };
 }
 
+/**
+ * 토글 제목의 형식 `#`(29일 요청): 아래 줄 값이 들어갈 자리다. `> A: #` · `> A: # :B` · `> A;(#)` · `> A;[#]`처럼 쓰면
+ * 아래 줄마다 `#` 자리에 그 줄을 넣은 줄(`A: x` · `A: x :B` · `A;(x)` · `A;[x]`)로 읽는다. 제목 자신은 문제가 아니다.
+ * `#`이 하나만, 홀로(앞뒤가 빈칸·관계 기호·괄호) 있을 때만 형식이다(`#-#`처럼 칸을 만드는 틀 줄과 다르다).
+ */
+export const toggleFrameOf = (title: string): string | null => {
+  const hashes = [...title.matchAll(/#/g)].map(match => match.index!);
+  if (hashes.length !== 1) return null;
+  const at = hashes[0];
+  const before = title[at - 1];
+  const after = title[at + 1];
+  const edge = (character: string | undefined) => character === undefined || /[\s:;<>()[\]]/.test(character);
+  return edge(before) && edge(after) && title.slice(0, at).trim() ? title : null;
+};
+/** 펼친 줄의 모든 글자 범위를 원래 줄 하나로 모은다 */
+const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (expression.type === 'text' ? { ...expression, span }
+  : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
+    : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
+
 /** 칸이 `( )` 관계를 품었는가: 칸 전체가 `(B:C)`이거나 `(B:C),(d:f)`처럼 `,`로 이은 괄호들 */
 const hasGroupIn = (field: Expression): boolean => field.type === 'relation' || (field.type !== 'text' && field.items.some(item => item.type === 'relation'));
 /** 괄호 안(분리된 칸 번호)의 칸 이름을 괄호가 놓인 칸의 이름으로 바꾼다. 안쪽에 `{이름}`·`[ ]`로 직접 쓴 이름은 그대로 둔다. */
@@ -700,7 +719,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
    */
   const slotIndex = memo.includes('{') ? buildNoteSetIndex([memo]) : null;
   const slotLines: Array<{ id: string; start: number; end: number; text: string; slots: NoteSlot[]; inherited: ReadonlyMap<number, string>; offset: number; previous: AtReference | null }> = [];
-  const walkBlocks = (text: string, parentId: string | null, inherited: ReadonlyMap<number, string> = new Map(), previous: AtReference | null = null, offset = 0, scopedCriterion?: string, blocked = false, upperCriteria: readonly string[] = noteCriterion ? [noteCriterion] : []) => {
+  /** 제목에 형식 `#`을 쓴 토글: 제목은 문제도 자리(조건)도 아니고, 아래 줄을 그 형식으로 펼친다 */
+  const frameNodes = new Set<string>();
+  const walkBlocks = (text: string, parentId: string | null, inherited: ReadonlyMap<number, string> = new Map(), previous: AtReference | null = null, offset = 0, scopedCriterion?: string, blocked = false, upperCriteria: readonly string[] = noteCriterion ? [noteCriterion] : [],
+    frame?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }) => {
     parseReviewMemoBlocks(text).forEach((block, index) => {
       const id = `${parentId || 'root'}.${index}`;
       const written = block.type === 'toggle' ? block.title : block.text;
@@ -736,7 +758,16 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         const written = value.slice(segment.start, segment.end);
         if (slots.length && !readNoteSetLine(written) && !hasLogicMark(written) && !templateOf(segment)) slotLines.push({ id, ...segment, text: written, slots, inherited, offset, previous });
       });
-      const parsed = blockedHere ? [] : segments.map(segment => spellOutColumnSets(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), criteria)).filter(nonempty);
+      const ownFrame = block.type === 'toggle' ? toggleFrameOf(blankTitleCriteria(written)) : null;
+      if (ownFrame) frameNodes.add(id);
+      const framedLine = (segment: { start: number; end: number }) => frame!.text.replace('#', value.slice(segment.start, segment.end).trim());
+      const parsed = blockedHere || ownFrame ? [] : frame && block.type === 'text'
+        ? segments.filter(segment => value.slice(segment.start, segment.end).trim()).map(segment => {
+          const line = framedLine(segment);
+          return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),
+            { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
+        }).filter(nonempty)
+        : segments.map(segment => spellOutColumnSets(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), criteria)).filter(nonempty);
       expressions.set(id, parsed);
       if (!blockedHere) segments.forEach(segment => {
         const lineCriterion = leadingCriterionOf(value.slice(segment.start, segment.end));
@@ -744,8 +775,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       });
       // 토글 아래 줄의 `@`는 제목의 마지막 칸을 가리킨다
       if (block.type === 'toggle') {
-        walkBlocks(block.text, id, getReviewFieldOverrides(value, inherited, offset), (parsed.length ? lastCellOf(parsed[parsed.length - 1]) : null) ?? previous,
-          childOffsetOf(parsed, offset), criterion, blockedHere, criteria);
+        walkBlocks(block.text, id, ownFrame ? inherited : getReviewFieldOverrides(value, inherited, offset), (parsed.length ? lastCellOf(parsed[parsed.length - 1]) : null) ?? previous,
+          ownFrame ? offset : childOffsetOf(parsed, offset), criterion, blockedHere, criteria, ownFrame ? { text: ownFrame, inherited, offset } : undefined);
       }
     });
   };
@@ -942,6 +973,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     let parentId = node.parentId;
     while (parentId) {
       const parent = byId.get(parentId)!;
+      // 형식 `#` 토글의 제목은 아래 줄에 이미 들어가 있어서 자리(조건)로 다시 주지 않는다
+      if (frameNodes.has(parent.id)) { parentId = parent.parentId; continue; }
       const rawTitle = titleSource(parent).replace(trailingRelation(), '');
       const title = stripReviewFieldOverrides(rawTitle).trim().replace(trailingRelation(), '');
       const parsed = parseExpression(rawTitle, parent.id, 0, rawTitle.length, inheritedByNode.get(parent.id), offsetByNode.get(parent.id) ?? 0);
@@ -962,6 +995,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
    */
   const titleParts = new Map<string, string[][] | null>();
   const titlePartsOf = (parent: QuestionNoteNode): string[][] | null => {
+    if (frameNodes.has(parent.id)) return null;
     if (titleParts.has(parent.id)) return titleParts.get(parent.id)!;
     let result: string[][] | null = null;
     if (!trailingRelation().test(parent.text)) {
