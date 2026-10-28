@@ -10677,3 +10677,18 @@ test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽�
   // #이 없는 끝이 열린 제목은 전처럼(그대로 이어짐)
   assert.deepEqual(pairs(':::toggle A:\nx\n:::end'), ['|A>x']);
 });
+
+test('29일: 첨가 연결 — 하위 토글 기준의 칸이 상위 기준의 칸과 같으면 그 칸에 첨가된다([A]:[B] 밑 [A];[C] = ([A];[C]):[B]), 아니면 따로', () => {
+  const { buildReviewQuestions, getReviewQuestionClassification, attachCriterion } = questionBuilder;
+  assert.deepEqual(attachCriterion('A:B', 'A;C'), { column: 0, parentColumns: ['A', 'B'], childColumns: ['A', 'C'] });
+  assert.equal(attachCriterion('A:B', 'B;C').column, 1);
+  assert.equal(attachCriterion('A:B', 'P;C'), null, 'no shared cell: separate');
+  const labels = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct')
+    .map(q => { const c = getReviewQuestionClassification(q.criterion, q); return `${q.prompt}(${c.prompt})>${q.answer}(${c.answer})`; });
+  // 괄호로 쓴 줄만 합친 기준: 괄호 안은 A · C, 바깥은 B. 괄호 없는 줄은 하위 기준(A · C)만
+  assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [A];[C]\n(x;y):z\nx2;y2\n:::end\n:::end'), ['x(A)>z(B)', 'x(A)>y(C)', 'x2(A)>y2(C)']);
+  // 상위의 둘째 칸에 첨가: [A]:([B];[C])
+  assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [B];[C]\nw:(p;q)\n:::end\n:::end'), ['w(A)>p(B)', 'p(B)>q(C)']);
+  // 따로 분리된 기준은 전처럼 하위 기준만
+  assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [P];[C]\nx;y\n:::end\n:::end'), ['x(P)>y(C)']);
+});

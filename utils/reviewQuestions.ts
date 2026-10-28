@@ -245,6 +245,38 @@ export const toggleFrameOf = (title: string): string | null => {
   const edge = (character: string | undefined) => character === undefined || /[\s:;<>()[\]]/.test(character);
   return edge(before) && edge(after) && title.slice(0, at).trim() ? title : null;
 };
+/** 분류기준 글(`A:B;C`)의 칸 이름들 */
+const criterionColumns = (criterion: string): string[] => {
+  const boundaries = [-1, ...splitAt(criterion, 0, criterion.length, ':;<'), criterion.length];
+  return boundaries.slice(1).map((end, index) => criterion.slice(boundaries[index] + 1, end).trim());
+};
+/**
+ * 첨가 연결(29일 요청): 하위 토글의 분류기준 칸 하나가 상위 토글 기준의 어느 칸과 이름(위치)이 같으면, 하위는 그 칸에 첨가된다.
+ * 상위 `[A]:[B]` 밑 하위 `[A];[C]`는 `([A];[C]):[B]`다. 같은 칸이 없으면 따로 분리된 기준이다(null).
+ */
+export interface CriterionAttach { column: number; parentColumns: string[]; childColumns: string[] }
+export const attachCriterion = (parent: string | undefined, child: string): CriterionAttach | null => {
+  if (!parent) return null;
+  const parentColumns = criterionColumns(parent);
+  const childColumns = criterionColumns(child);
+  if (childColumns.length < 2) return null;
+  const column = parentColumns.findIndex(name => name && childColumns.includes(name));
+  return column >= 0 ? { column, parentColumns, childColumns } : null;
+};
+/**
+ * 첨가된 하위 토글 밑 줄: 그 칸 자리를 괄호로 쓴 줄(`(x;y):z`)만 합친 기준 `([A];[C]):[B]`으로 읽는다 — 괄호 안은 하위 기준(A · C),
+ * 바깥 칸은 상위 기준(…:B). 괄호 없이 쓴 줄(`x;y`)은 하위 기준(A · C)만이다.
+ */
+const attachedLine = (expression: Expression, attach: CriterionAttach | undefined): Expression => {
+  if (!attach || expression.type !== 'relation') return expression;
+  const group = expression.fields[attach.column];
+  if (!group || group.type !== 'relation') return expression;
+  return { ...expression,
+    classifications: expression.fields.map((_, index) => attach.parentColumns[index] ?? ''),
+    fields: expression.fields.map((field, index) => (index === attach.column && field.type === 'relation'
+      ? { ...field, classifications: field.fields.map((_, inner) => attach.childColumns[inner] ?? '') } : field)) };
+};
+
 /** 펼친 줄의 모든 글자 범위를 원래 줄 하나로 모은다 */
 const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (expression.type === 'text' ? { ...expression, span }
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
@@ -722,7 +754,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   /** 제목에 형식 `#`을 쓴 토글: 제목은 문제도 자리(조건)도 아니고, 아래 줄을 그 형식으로 펼친다 */
   const frameNodes = new Set<string>();
   const walkBlocks = (text: string, parentId: string | null, inherited: ReadonlyMap<number, string> = new Map(), previous: AtReference | null = null, offset = 0, scopedCriterion?: string, blocked = false, upperCriteria: readonly string[] = noteCriterion ? [noteCriterion] : [],
-    frame?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }) => {
+    frame?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }, upperAttach?: CriterionAttach) => {
     parseReviewMemoBlocks(text).forEach((block, index) => {
       const id = `${parentId || 'root'}.${index}`;
       const written = block.type === 'toggle' ? block.title : block.text;
@@ -732,6 +764,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const ownCriterion = block.type === 'toggle' ? splitTitleCriteria(written).criteria.at(-1) : undefined;
       const criterion = ownCriterion ?? scopedCriterion;
       if (criterion) criterionByNode.set(id, criterion);
+      // 하위 토글이 상위 기준의 한 칸에 첨가되면(같은 이름의 칸) 밑 줄의 괄호 칸은 합친 기준으로 읽는다. 새 기준을 쓰지 않은 토글은 위의 것을 잇는다
+      const attach = ownCriterion ? attachCriterion(scopedCriterion, ownCriterion) ?? undefined : upperAttach;
       /**
        * `[A]`에 붙는 상위 속성. 토글 제목에 분류기준을 새로 쓰면 그것만 쓴다: 위쪽 `[A]:[B]` 아래의 `[P]:[q]`는 `[A.P]:[B.q]`가 아니라 `[P:q]`다
        * (27일 요청: 하위에 분류기준을 명시하면 하위 관계가 아니다). 쓰지 않은 토글은 위쪽 기준을 그대로 이어받는다.
@@ -767,7 +801,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),
             { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
         }).filter(nonempty)
-        : segments.map(segment => spellOutColumnSets(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), criteria)).filter(nonempty);
+        : segments.map(segment => spellOutColumnSets(attachedLine(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), block.type === 'text' ? upperAttach : undefined), criteria)).filter(nonempty);
       expressions.set(id, parsed);
       if (!blockedHere) segments.forEach(segment => {
         const lineCriterion = leadingCriterionOf(value.slice(segment.start, segment.end));
@@ -776,7 +810,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 토글 아래 줄의 `@`는 제목의 마지막 칸을 가리킨다
       if (block.type === 'toggle') {
         walkBlocks(block.text, id, ownFrame ? inherited : getReviewFieldOverrides(value, inherited, offset), (parsed.length ? lastCellOf(parsed[parsed.length - 1]) : null) ?? previous,
-          ownFrame ? offset : childOffsetOf(parsed, offset), criterion, blockedHere, criteria, ownFrame ? { text: ownFrame, inherited, offset } : undefined);
+          ownFrame ? offset : childOffsetOf(parsed, offset), criterion, blockedHere, criteria, ownFrame ? { text: ownFrame, inherited, offset } : undefined, attach);
       }
     });
   };
