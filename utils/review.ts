@@ -191,6 +191,12 @@ const registerPendingLog = (log: StudyLog, nowMs: number, range?: { start: numbe
   nextReviewDate: new Date(log.reviewFsrs ? log.reviewFsrs.lastReviewMs + fsrsIntervalMs(log.reviewFsrs) : nowMs + INITIAL_REVIEW_DELAY_MS).toISOString()
 });
 
+/** 이 공부 기록은 저장할 때 "복습에 넣기"를 기다리게 되는가(applyUnitReviewRegistration과 같은 조건) */
+export const willWaitForReview = (log: StudyLog): boolean => (
+  !log.isRepeatReview && !log.reviewParentSubjectId && Number.isInteger(log.startPage) && Number.isInteger(log.endPage)
+  && log.endPage! >= log.startPage! && log.reviewEnabled !== false && !log.isCondensed
+);
+
 export const applyUnitReviewRegistration = (
   subject: Subject | undefined, existingLogs: StudyLog[], incoming: StudyLog, nowMs = Date.now()
 ): UnitReviewResult => {

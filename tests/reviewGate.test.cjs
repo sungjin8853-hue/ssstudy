@@ -5696,7 +5696,7 @@ test('page unit review registration: exceptions keep the old behaviour', () => {
   // App 연결: 세션 저장과 오늘 화면 고쳐 저장은 대기 규칙을 쓰고, "복습에 넣기"는 과목 카드 버튼이 누른다
   const app = fs.readFileSync(path.resolve(__dirname, '..', 'App.tsx'), 'utf8');
   assert.ok(app.includes('applyUnitReviewRegistration(subject, prev, newLog)') && app.includes('applyUnitReviewRegistration(subject, rest, enrichedLog)') && app.includes('keepsUnitReviewPending'));
-  assert.ok(app.includes('registerPendingReviews(subjectId, gradePendingReviews(prev, subjectId, grade, now), now)') && app.includes('onRegisterReview={handleRegisterReview}'));
+  assert.ok(app.includes('registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now)') && app.includes('onRegisterReview={handleRegisterReview}'));
   const today = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.equal((today.match(/\|\| log\.unitReviewPending/g) || []).length, 2, 'a waiting record counts as a review-included record in the edit modal');
   assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('onRegisterReview(detailData.subject.id, grade)') && today.includes('<RegisterReviewDialog'), '복습에 넣기는 난도 창을 열고, 난도를 고르면 등록한다');
@@ -10777,4 +10777,18 @@ test('29일: 한 번에 나오는 복습 문제들의 순서는 기본이 랜덤
   assert.deepEqual(practice.getPracticeBatch(shuffled, catalog).slice(0, 6).map(q => q.id), shuffled.queue, 'the side list shows the same order');
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   assert.ok(logger.includes('startReviewPractice(gateReviewQuestions, unlocked, Math.floor(Math.random() * 2 ** 31))'));
+});
+
+test('29일 버그: 복습에 넣기를 기다리는 기록의 새 노트는 저장할 때 이전 쪽 노트에 합치지 않고, 복습에 넣을 때 합친다', () => {
+  const { willWaitForReview } = loadSource('utils/review.ts');
+  const study = { id: 'n', subjectId: 'S', startPage: 5, endPage: 8, pagesRead: 4, timeSpentMinutes: 10, timestamp: '2026-10-29T03:00:00Z', reviewMemo: '세종:1398년' };
+  assert.equal(willWaitForReview(study), true);
+  assert.equal(willWaitForReview({ ...study, reviewEnabled: false, isCondensed: true }), false, 'a session saved without review merges right away as before');
+  assert.equal(willWaitForReview({ ...study, reviewParentSubjectId: 'P' }), false, 'review measurements are not waiting');
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('if (activeReviewRun || !willWaitForReview(nextLog)) mergeNewNoteIntoEarlierPages(nextLog);'));
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  const register = app.slice(app.indexOf('const handleRegisterReview'), app.indexOf('const handleUpdateReviewMemo'));
+  assert.ok(register.includes('getPendingReviewLogs(logs, subjectId)') && register.includes('mergeNoteIntoEarlier(memo, earlier)') && register.includes('recordNoteMerges(pending.id, updates)'));
+  assert.ok(register.indexOf('mergeNoteIntoEarlier') < register.indexOf('registerPendingReviews'), 'merge first, then register');
 });

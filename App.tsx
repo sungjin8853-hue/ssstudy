@@ -9,7 +9,7 @@ import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
 import { breakFolderCycles } from './utils/listOrder';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, withPlanRestart } from './utils/schedule';
-import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, applyUnitReviewRegistration, registerPendingReviews, completeRepeatedSubjectReview } from './utils/review';
+import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, applyUnitReviewRegistration, registerPendingReviews, completeRepeatedSubjectReview, getPendingReviewLogs } from './utils/review';
 import { normalizePageGrowthSettings } from './utils/pageGrowth';
 import { resizeSessionTimes } from './utils/measurement';
 import { getLogProgressPages } from './utils/measurement';
@@ -18,6 +18,9 @@ import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
 import type { SubjectGrade } from './utils/subjectFeedback';
 import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, skipEditIntake, updateReviewGateMemo } from './utils/reviewGate';
 import { readEditIntake } from './utils/reviewEditIntake';
+import { mergeNoteIntoEarlier } from './utils/noteMerge';
+import { recordNoteMerges } from './utils/noteMergeLog';
+import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
 import type { RemovalUpdate } from './utils/reviewRemoval';
@@ -722,11 +725,24 @@ const App: React.FC = () => {
 
   // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
   const handleRegisterReview = (subjectId: string, grade: SubjectGrade) => {
-    // 난도는 이때 고른다: 대기 기록 모두에 그 난도를 매기고(첫 복습 날짜는 FSRS-6가 정한다) 한꺼번에 복습에 넣는다
-    setLogs(prev => {
-      const now = Date.now();
-      return registerPendingReviews(subjectId, gradePendingReviews(prev, subjectId, grade, now), now).logs;
+    // 대기 기록의 새 노트는 이때 이전 쪽 노트에 연결·첨가로 합친다(저장할 때가 아니라, 29일 버그). 오래된 대기 기록부터 차례로
+    let merged = logs;
+    getPendingReviewLogs(logs, subjectId).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(pending => {
+      const memo = pending.reviewMemo ?? '';
+      if (!memo.trim()) return;
+      const earlier = merged
+        .filter(log => log.subjectId === pending.subjectId && !log.reviewParentSubjectId && log.timestamp < pending.timestamp && (log.reviewMemo ?? '').trim().length > 0)
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+        .map(log => ({ id: log.id, memo: log.reviewMemo ?? '' }));
+      const updates = withLogShorthand(pending, () => mergeNoteIntoEarlier(memo, earlier));
+      if (!updates.length) return;
+      try { recordNoteMerges(pending.id, updates); } catch { /* 되돌리기 기록 실패는 합치기를 막지 않는다 */ }
+      const after = new Map(updates.map(update => [update.logId, update.after]));
+      merged = merged.map(log => (after.has(log.id) ? updateReviewGateMemo(log, after.get(log.id)!, undefined, { intake: readEditIntake() }) : log));
     });
+    // 난도는 이때 고른다: 대기 기록 모두에 그 난도를 매기고(첫 복습 날짜는 FSRS-6가 정한다) 한꺼번에 복습에 넣는다
+    const now = Date.now();
+    setLogs(registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now).logs);
   };
 
   const handleUpdateReviewMemo = (logId: string, memo: string, document?: ReviewMemoDocument) => {

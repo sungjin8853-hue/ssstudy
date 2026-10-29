@@ -8,7 +8,7 @@ import {
   calculateTimeAttackAverage,
   calculateReviewSubjectTiming
 } from '../utils/math';
-import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage } from '../utils/review';
+import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage, willWaitForReview } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
@@ -2375,7 +2375,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const nextLog: StudyLog = activeReviewRun ? { ...created, feedbackGrade: chosenFeedbackGrade() } : created;
 
     setPendingAutoAdvanceLogId(null);
-    mergeNewNoteIntoEarlierPages(nextLog);
+    // 복습에 넣기를 기다리는 기록의 새 노트는 이전 쪽 노트에 아직 합치지 않는다(29일 버그: 누르지 않아도 이전 노트가 바뀌었다).
+    // "복습에 넣기"를 누를 때 합친다(App.handleRegisterReview). 기다리지 않는 기록(복습 측정 등)은 전처럼 바로 합친다.
+    if (activeReviewRun || !willWaitForReview(nextLog)) mergeNewNoteIntoEarlierPages(nextLog);
     applyCarriedSheetEdits();
     onLogSession(nextLog);
     if (activeReviewRun) onRecordReviewSubjectTime(activeReviewRun.logIds, subjectId, nextLog.timeSpentMinutes, getReviewMeasurement(nextLog));
