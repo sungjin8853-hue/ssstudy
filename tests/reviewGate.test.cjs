@@ -10792,3 +10792,14 @@ test('29일 버그: 복습에 넣기를 기다리는 기록의 새 노트는 저
   assert.ok(register.includes('getPendingReviewLogs(logs, subjectId)') && register.includes('mergeNoteIntoEarlier(memo, earlier)') && register.includes('recordNoteMerges(pending.id, updates)'));
   assert.ok(register.indexOf('mergeNoteIntoEarlier') < register.indexOf('registerPendingReviews'), 'merge first, then register');
 });
+
+test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 단위로 돌아올 수 있다(견줄 단위가 없어도)', () => {
+  const { efficiencyCycle } = loadSource('components/PageGrowth.tsx');
+  const average = { kind: 'average' };
+  assert.deepEqual(efficiencyCycle([average]), [{ kind: 'unit', n: 1 }, average], 'no previous unit yet: 이전 단위 ↔ 평균');
+  assert.deepEqual(efficiencyCycle([{ kind: 'unit', n: 1 }, { kind: 'unit', n: 2 }, average]), [{ kind: 'unit', n: 1 }, { kind: 'unit', n: 2 }, average]);
+  assert.deepEqual(efficiencyCycle([]), [{ kind: 'unit', n: 1 }], 'nothing to compare: the button stays off');
+  const source = fs.readFileSync(path.resolve(__dirname, '../components/PageGrowth.tsx'), 'utf8');
+  assert.ok(source.includes('const unitOptions = efficiencyCycle(view.options);') && source.includes('const canCompare = unitOptions.length > 1;')
+    && source.includes('unitOptions.findIndex(option => sameComparison(option, comparison))'));
+});

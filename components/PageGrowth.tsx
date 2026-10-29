@@ -152,6 +152,13 @@ export const UnitGauge: React.FC<{ done: number; total: number }> = ({ done, tot
 };
 
 /** 비교 버튼의 글자: "이전 단위 ›" · "이이전 단위 ›" · "평균 ›". 견줄 수 없는 때는 이유를 적는다. */
+/** 비교 버튼이 도는 기준: 이전 단위(견줄 단위가 아직 없어도 늘 돌아올 수 있게, 29일 버그: 평균으로 가면 못 돌아왔다) → 이이전 단위 … → 평균 */
+export const efficiencyCycle = (options: readonly EfficiencyComparison[]): EfficiencyComparison[] => {
+  const firstUnit: EfficiencyComparison = { kind: 'unit', n: 1 };
+  const available = options.filter(option => option.kind !== 'pomodoro');
+  return available.some(option => sameComparison(option, firstUnit)) ? [...available] : [firstUnit, ...available];
+};
+
 const compareLabel = (view: ReturnType<typeof getEfficiencyView>) => {
   const { choice } = view;
   if (choice.kind === 'average') return view.average ? '평균' : '평균 없음';
@@ -180,11 +187,10 @@ export const UnitGrowthEfficiency: React.FC<{
   const recent = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
   const hasRecent = recent.choice.kind === 'pomodoro' && recent.choice.n === 1;
   const progress = scope.progress;
-  const unitOptions = view.options.filter(option => option.kind !== 'pomodoro');
-  const canCompare = unitOptions.length > 1 || (unitOptions.length === 1 && !sameComparison(unitOptions[0], view.choice));
+  const unitOptions = efficiencyCycle(view.options);
+  const canCompare = unitOptions.length > 1;
   const nextUnitComparison = (): EfficiencyComparison => {
-    if (!unitOptions.length) return view.choice;
-    const at = unitOptions.findIndex(option => sameComparison(option, view.choice));
+    const at = unitOptions.findIndex(option => sameComparison(option, comparison));
     return unitOptions[(at + 1) % unitOptions.length];
   };
   const compare = (
