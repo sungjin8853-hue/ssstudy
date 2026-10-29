@@ -2435,7 +2435,7 @@ test('finished records are merged into the subject status rows and the separate 
   const order = ['data-testid="amount-subject"', 'data-testid="amount-minutes"', 'data-testid="amount-pages"', 'data-testid="amount-end"', 'data-testid="amount-review-on"',
     'data-testid="amount-session-memo"', 'data-testid="amount-note"', 'data-testid="amount-save"', '오늘 추가한 기록 · 모든 과목'].map(text => dialog.indexOf(text));
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order));
-  assert.ok(dialog.includes('placeholder="비우면 자동"') && dialog.includes('minHeight={320}') && dialog.includes('symbolBar'));
+  assert.ok(dialog.includes("'비우면 자동'") && dialog.includes('amount-needs-minutes') && dialog.includes('minHeight={320}') && dialog.includes('symbolBar'));
   assert.ok(summarySource.includes("buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)"), 'every subject');
   assert.ok(summarySource.includes('setChangingAmount(false); openEditModal(summary)') && summarySource.includes('{modalMode && !addingInline && ('), 'adding happens inside the window; editing still opens its own');
   assert.ok(!summarySource.includes('todayRecordsBlock'), 'no records block under the growth cell');
@@ -10677,6 +10677,8 @@ test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽�
   assert.equal(toggleFrameOf('C# 문법'), null);
   assert.equal(toggleFrameOf('#'), null);
   assert.equal(toggleFrameOf('A: #'), 'A: #');
+  // 형식 토글 바로 아래의 토글 제목도 # 자리에 들어간다(그 아래 줄은 전처럼 그 토글 안)
+  assert.deepEqual(pairs(':::toggle A: #\nx\n:::toggle y\nz:w\n:::end\n:::end'), ['|A>x', '|A>y', 'y|z>w']);
   // #이 없는 끝이 열린 제목은 전처럼(그대로 이어짐)
   assert.deepEqual(pairs(':::toggle A:\nx\n:::end'), ['|A>x']);
 });
@@ -10712,4 +10714,67 @@ test('29일: 계획보다 미리 한 양은 다음 날부터 할 양에서 빠�
   // 하나도 안 하면 쌓인다: 목 · 금에 밀린 8쪽 + 토요일 4쪽 = 12쪽
   assert.equal(left(0, '2026-10-31', 6, new Date(2026, 9, 31, 9)), 12, 'three days of 4 pages pile up');
   assert.equal(schedule.getPastPlanBalance({ ...subject, completedPages: 12 }, did(12), '2026-10-30', '2026-10-30'), -8);
+});
+
+test('29일: 계획을 고치면 그날부터 새 계획이고, 계획대로 하면 여러 경우에도 마감까지 끝난다', () => {
+  const schedule = loadSource('utils/schedule.ts');
+  const weekPlan = loadSource('utils/weekPlan.ts');
+  const subject = { id: 'S', name: 'S', startPage: 1, totalPages: 100, completedPages: 0, targetDate: '2026-11-28', scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], planResetDate: '2026-10-29', scheduledWeekdayPages: { 0: 3, 1: 3, 2: 3, 3: 3, 4: 3, 5: 3, 6: 5 } };
+  assert.equal(schedule.withPlanRestart(subject, { ...subject, name: '새 이름' }, '2026-11-05').planResetDate, '2026-10-29', 'a name change keeps the plan');
+  assert.equal(schedule.withPlanRestart(subject, { ...subject, completedPages: 9 }, '2026-11-05').planResetDate, '2026-10-29', 'progress keeps the plan');
+  for (const next of [{ ...subject, scheduledWeekdayPages: { ...subject.scheduledWeekdayPages, 1: 4 } }, { ...subject, scheduledWeekdays: [1, 2, 3] }, { ...subject, targetDate: '2026-11-20' }, { ...subject, totalPages: 120 }]) {
+    assert.equal(schedule.withPlanRestart(subject, next, '2026-11-05').planResetDate, '2026-11-05');
+  }
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  assert.ok(app.includes('withPlanRestart(s, updatedSubject)') && app.includes('withPlanRestart(subject, updatedMap.get(subject.id)!)'));
+  // 오늘 할 일대로 매일 하면 마감 날까지 끝난다(여러 요일 · 기간 · 건너뛰기 · 중간에 계획 고치기)
+  const key = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const finishes = ({ pages, days, weekdays, act = (i, todo) => todo, edit }) => {
+    const start = new Date(2026, 9, 29, 9);
+    const target = new Date(start); target.setDate(target.getDate() + days);
+    let s = { id: 'S', name: 'S', startPage: 1, totalPages: pages, completedPages: 0, targetDate: key(target), scheduledWeekdays: weekdays, planResetDate: key(start) };
+    s.scheduledWeekdayPages = schedule.calculateFreshWeekdayPagePlan(s, pages, schedule.getDiffDays(s.targetDate, start), start);
+    const logs = [];
+    for (let i = 0; i <= days; i += 1) {
+      const d = new Date(start); d.setDate(d.getDate() + i);
+      if (schedule.getSubjectRemainingPageCount(s) <= 0) return true;
+      if (edit && edit.day === i) s = schedule.withPlanRestart(s, edit.apply(s), key(d));
+      const todo = buildStudyOrderForDate([s], logs, d.getDay(), key(d), d)[0]?.remainingDayPages ?? 0;
+      const done = Math.min(schedule.getSubjectRemainingPageCount(s), Math.max(0, act(i, todo)));
+      if (done > 0) {
+        const at = schedule.getActiveSubjectStage(s).currentPage;
+        logs.push({ id: `l${i}`, subjectId: 'S', pagesRead: done, progressPages: done, timeSpentMinutes: done, startPage: at, endPage: at + done - 1, timestamp: d.toISOString(), studyDate: key(d) });
+        s = schedule.adjustSubjectProgress(s, done);
+      }
+    }
+    return schedule.getSubjectRemainingPageCount(s) <= 0;
+  };
+  const all = [0, 1, 2, 3, 4, 5, 6];
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: all }));
+  assert.ok(finishes({ pages: 20, days: 12, weekdays: all }));
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: [1, 3, 5] }));
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: [6] }));
+  assert.ok(finishes({ pages: 300, days: 10, weekdays: all }));
+  assert.ok(finishes({ pages: 100, days: 60, weekdays: [1, 2, 3, 4, 5] }));
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: all, act: (i, todo) => (i % 3 === 2 ? 0 : todo) }), 'skipped days pile up and are still caught up');
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: all, act: (i, todo) => (i === 0 ? todo * 3 : todo) }), 'pages done ahead');
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: all, edit: { day: 10, apply: s => weekPlan.stepWeekdayPages(s, 1, 1, 1) } }));
+  assert.ok(finishes({ pages: 100, days: 30, weekdays: all, edit: { day: 7, apply: s => weekPlan.toggleStudyWeekday(s, 2) } }));
+});
+
+test('29일: 한 번에 나오는 복습 문제들의 순서는 기본이 랜덤이고(중요한 묶음 먼저는 그대로), 푸는 동안 순서가 흔들리지 않는다', () => {
+  const practice = loadSource('utils/reviewPractice.ts');
+  const catalog = Array.from({ length: 8 }, (_, index) => ({ id: `q${index}`, logId: 'L', level: 1, priority: index < 6 ? 1 : 2, importance: index, kind: 'direct' }));
+  const plain = practice.startReviewPractice(catalog);
+  assert.deepEqual(plain.queue, ['q0', 'q1', 'q2', 'q3', 'q4', 'q5'], 'without a seed the old order stays');
+  const orders = new Set([1, 2, 3, 4, 5, 6, 7, 8].map(seed => practice.startReviewPractice(catalog, {}, seed).queue.join()));
+  assert.ok(orders.size > 1, 'different seeds give different orders');
+  const shuffled = practice.startReviewPractice(catalog, {}, 12345);
+  assert.deepEqual([...shuffled.queue].sort(), ['q0', 'q1', 'q2', 'q3', 'q4', 'q5'], 'only the first (most important) group, shuffled');
+  // 한 문제를 풀어도 남은 순서는 그대로
+  const next = practice.gradeReviewPractice(shuffled, catalog, 'good');
+  assert.deepEqual(next.queue, shuffled.queue.slice(1));
+  assert.deepEqual(practice.getPracticeBatch(shuffled, catalog).slice(0, 6).map(q => q.id), shuffled.queue, 'the side list shows the same order');
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('startReviewPractice(gateReviewQuestions, unlocked, Math.floor(Math.random() * 2 ** 31))'));
 });

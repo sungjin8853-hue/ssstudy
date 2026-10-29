@@ -8,7 +8,7 @@ import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
 import { GoogleGenAI } from '@google/genai';
 import { breakFolderCycles } from './utils/listOrder';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds } from './utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getStudyDateForWeekday, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, withPlanRestart } from './utils/schedule';
 import { INITIAL_REVIEW_DELAY_MS, IS_FAST_REVIEW_TEST_MODE, recordReviewMeasurement, applyReviewPageCursor, applySessionEndPage, applyUnitReviewRegistration, registerPendingReviews, completeRepeatedSubjectReview } from './utils/review';
 import { normalizePageGrowthSettings } from './utils/pageGrowth';
 import { resizeSessionTimes } from './utils/measurement';
@@ -393,8 +393,9 @@ const App: React.FC = () => {
   };
 
   const handleUpdateSubject = (updatedSubject: Subject) => {
+    // 계획(요일별 페이지 · 요일 · 마감 · 범위)을 고치면 그날부터 새 계획이다(29일)
     setSubjects(prev => inheritReviewSubjectTargetDates(
-      prev.map(s => s.id === updatedSubject.id ? updatedSubject : s)
+      prev.map(s => s.id === updatedSubject.id ? withPlanRestart(s, updatedSubject) : s)
     ));
     setLogs(prev => prev.map(log => {
       if (log.subjectId !== updatedSubject.id) return log;
@@ -408,7 +409,7 @@ const App: React.FC = () => {
   const handleUpdateSubjects = (updatedSubjects: Subject[]) => {
     const updatedMap = new Map(updatedSubjects.map(subject => [subject.id, subject]));
     setSubjects(prev => inheritReviewSubjectTargetDates(
-      prev.map(subject => updatedMap.get(subject.id) || subject)
+      prev.map(subject => (updatedMap.has(subject.id) ? withPlanRestart(subject, updatedMap.get(subject.id)!) : subject))
     ));
     setLogs(prev => prev.map(log => {
       const updatedSubject = updatedMap.get(log.subjectId);

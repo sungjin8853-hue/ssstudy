@@ -47,7 +47,7 @@ const PracticeRun: React.FC<{
   const entryById = useMemo(() => new Map(entries.map(entry => [entry.id, entry])), [entries]);
   // 범위를 직접 골랐으므로 처음에는 모든 단계를 열어 두고, 난도는 위의 선택으로 직접 바꾼다.
   const open = useMemo(() => Object.fromEntries(logs.map(log => [log.id, 3])), [logs]);
-  const [practice, setPractice] = useState(() => startReviewPractice(catalog, open));
+  const [practice, setPractice] = useState(() => startReviewPractice(catalog, open, Math.floor(Math.random() * 2 ** 31)));
   const [revealed, setRevealed] = useState(false);
   const shownAt = useRef(Date.now());
   const current = practice.queue[0] ? entryById.get(practice.queue[0]) : undefined;
@@ -63,7 +63,7 @@ const PracticeRun: React.FC<{
     setRevealed(false);
     shownAt.current = Date.now();
   };
-  const restart = () => { setPractice(startReviewPractice(catalog, open)); setRevealed(false); shownAt.current = Date.now(); };
+  const restart = () => { setPractice(startReviewPractice(catalog, open, Math.floor(Math.random() * 2 ** 31))); setRevealed(false); shownAt.current = Date.now(); };
 
   return (
     <Overlay><div role="dialog" aria-modal="true" aria-label="정리노트 문제 풀기" data-testid="note-practice"

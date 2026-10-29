@@ -573,3 +573,16 @@ export const getPastCarryoverPages = (
   targetStudyDate: string,
   todayDateKey = getLocalDateKey()
 ) => Math.max(0, getPastPlanBalance(subject, logs, targetStudyDate, todayDateKey));
+
+/**
+ * 계획을 고치면 그날부터 새 계획이다(29일 요청): 요일별 페이지 · 학습 요일 · 마감일 · 범위(시작 · 끝 · 단원)가 바뀌면 계획 시작일을 오늘로 옮긴다.
+ * 지난날은 그때의 계획대로 둔다(새 값으로 지난날을 다시 따지면 밀린 양 · 미리 한 양이 갑자기 생긴다). 밀린 양 · 미리 한 양은 남은 페이지에 들어 있어 새 계획에 나뉜다.
+ */
+export const withPlanRestart = (previous: Subject | undefined, next: Subject, todayKey = getLocalDateKey()): Subject => {
+  if (!previous) return next;
+  const key = (subject: Subject) => JSON.stringify([
+    normalizeWeekdays(subject.scheduledWeekdays), cleanWeekdayPagePlan(subject.scheduledWeekdayPages || {}, subject.scheduledWeekdays),
+    subject.targetDate, subject.startPage, subject.totalPages, subject.chapters ?? null, subject.followUpSubjects?.map(item => [item.id, item.startPage, item.endPage]) ?? null
+  ]);
+  return key(previous) === key(next) || next.planResetDate === todayKey ? next : { ...next, planResetDate: todayKey };
+};

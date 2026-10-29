@@ -795,7 +795,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const ownFrame = block.type === 'toggle' ? toggleFrameOf(blankTitleCriteria(written)) : null;
       if (ownFrame) frameNodes.add(id);
       const framedLine = (segment: { start: number; end: number }) => frame!.text.replace('#', value.slice(segment.start, segment.end).trim());
-      const parsed = blockedHere || ownFrame ? [] : frame && block.type === 'text'
+      // 형식 토글 바로 아래의 토글 제목도 # 자리에 넣어 읽는다(`> A: #` 밑 `> y` → `A: y`, 그 아래 줄은 전처럼 ‘y’ 안)
+      const parsed = blockedHere || ownFrame ? [] : frame
         ? segments.filter(segment => value.slice(segment.start, segment.end).trim()).map(segment => {
           const line = framedLine(segment);
           return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),

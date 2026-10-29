@@ -1594,7 +1594,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         ? Math.max(log.reviewGateLevel || 1, ...gateReviewQuestions.filter(question => question.logId === log.id).map(question => question.level))
         : log.reviewGateLevel || 1
     ]));
-    setGatePractice(startReviewPractice(gateReviewQuestions, unlocked));
+    // 한 번에 나오는 문제들의 순서는 기본이 랜덤이다(29일 요청). 중요한 묶음부터 나오는 것은 그대로
+    setGatePractice(startReviewPractice(gateReviewQuestions, unlocked, Math.floor(Math.random() * 2 ** 31)));
   }, [gateReviewQuestionSignature, gateReviewQuestions, gatePractice, preSessionReviewLogs, preSessionReviewGroup?.isGateRetry]);
 
   // 문제를 복습에서 빼거나 되돌려 문제 목록이 바뀌면 풀이 상태를 목록에 맞춘다

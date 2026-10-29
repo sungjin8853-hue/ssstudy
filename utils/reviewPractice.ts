@@ -41,11 +41,26 @@ export interface ReviewPractice {
   round: number;
   roundSize: number;
   roundAnswered: number;
+  /** 있으면 한 번에 나오는 문제들(같은 중요도 묶음)의 순서를 이 값으로 섞는다(29일 요청: 기본은 랜덤). 풀이 중에는 같은 순서로 유지된다 */
+  seed?: number;
 }
 
 /** 같은 우선순위 안의 순서: 중요도(작을수록 먼저) → 난도 → 처음 순서. */
 const compareOrder = (a: { q: PracticeQuestion; index: number }, b: { q: PracticeQuestion; index: number }) => (
   a.q.priority - b.q.priority || (a.q.importance ?? 0) - (b.q.importance ?? 0) || compareReviewQuestionDifficulty(a.q, b.q) || a.index - b.index
+);
+
+/** 섞는 순서: seed와 문제 id로 정해지는 값이라 다시 줄 세워도 같은 자리다 */
+const shuffleKey = (seed: number, id: string) => {
+  let value = (seed ^ 2166136261) >>> 0;
+  for (const character of id) value = Math.imul(value ^ character.charCodeAt(0), 16777619) >>> 0;
+  value ^= value >>> 15; value = Math.imul(value, 2246822507) >>> 0; value ^= value >>> 13;
+  return value >>> 0;
+};
+/** seed가 있으면 같은 중요도 묶음 안에서는 섞은 순서, 없으면 중요도 → 난도 → 처음 순서 */
+const orderFor = (state: { seed?: number }) => (a: { q: PracticeQuestion; index: number }, b: { q: PracticeQuestion; index: number }) => (
+  state.seed === undefined ? compareOrder(a, b)
+    : a.q.priority - b.q.priority || shuffleKey(state.seed, a.q.id) - shuffleKey(state.seed, b.q.id) || a.index - b.index
 );
 
 /** 노트에 문제가 이 단계부터만 있어도 하나는 낼 수 있게, 노트가 가진 가장 낮은 단계를 바닥으로 삼는다. */
@@ -57,7 +72,7 @@ const isAvailable = (state: ReviewPractice, catalog: PracticeQuestion[], q: Prac
 
 /** 지금 고른 난도까지 열린(이미 푼 것 포함) 문제들을 중요한 것부터 돌려준다. */
 export const getPracticeBatch = (state: ReviewPractice, catalog: PracticeQuestion[]) => (
-  catalog.map((q, index) => ({ q, index })).filter(item => isAvailable(state, catalog, item.q)).sort(compareOrder).map(item => item.q)
+  catalog.map((q, index) => ({ q, index })).filter(item => isAvailable(state, catalog, item.q)).sort(orderFor(state)).map(item => item.q)
 );
 
 const settle = (input: ReviewPractice, catalog: PracticeQuestion[]): ReviewPractice => {
@@ -70,7 +85,7 @@ const settle = (input: ReviewPractice, catalog: PracticeQuestion[]): ReviewPract
     // 중요도가 먼저다: 아직 못 맞힌 문제 중 가장 중요한 묶음을 다 풀기 전에는 덜 중요한 문제로 넘어가지 않는다(난도가 낮아도).
     const important = Math.min(...pool.filter(q => !current.completed.includes(q.id)).map(q => q.priority));
     return pool.filter(q => q.priority === important && !current.answered.includes(q.id))
-      .map(q => byId.get(q.id)!).sort(compareOrder).map(item => item.q);
+      .map(q => byId.get(q.id)!).sort(orderFor(current)).map(item => item.q);
   };
   for (let guard = 0; guard < 8; guard += 1) {
     const queue = open(state);
@@ -105,8 +120,9 @@ export const reconcileReviewPractice = (previous: ReviewPractice, catalog: Pract
 };
 
 /** 난도는 사용자가 직접 고른다. unlocked는 노트별로 처음 고른(저장돼 있던) 단계다. */
-export const startReviewPractice = (catalog: PracticeQuestion[], unlocked: Record<string, number> = {}): ReviewPractice => (
+export const startReviewPractice = (catalog: PracticeQuestion[], unlocked: Record<string, number> = {}, seed?: number): ReviewPractice => (
   settle({
+    ...(seed !== undefined ? { seed } : {}),
     queue: [], roundWrong: [], completed: [], wrongCounts: {}, attempts: {}, firstCorrect: {}, unlocked: { ...unlocked },
     grades: {}, answered: [], retryPool: null,
     level: 1, priority: 1, round: 1, roundSize: 0, roundAnswered: 0

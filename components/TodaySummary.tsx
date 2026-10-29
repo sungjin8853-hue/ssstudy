@@ -799,6 +799,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const [sessionNote, setSessionNote] = useState('');
   useEffect(() => { if (addingInline && subjectId) { try { setSessionNote(readSessionMemos()[subjectId] ?? ''); } catch { setSessionNote(''); } } }, [addingInline, subjectId]);
   const addLabel = getPageLabel(selectedSubject);
+  // 시간을 비우면 전체 효율로 계산한다. 잰 값도 임시 값도 없으면 0분이 되어 효율을 흐리므로 시간을 넣어야 저장된다
+  const addKnownAverage = addingInline && subjectId
+    ? calculateRecentTimedPageAverage(logs.filter(log => log.subjectId === subjectId)).averageTimePerPage || Math.max(0, selectedSubject?.initialAverageTimePerPage || 0) : 0;
+  const addNeedsMinutes = addingInline && editMinutes.trim() === '' && !(addKnownAverage > 0);
   const setSolvedPages = (count: number) => {
     const chapters = calculatedRange.chapters;
     if (!(count > 0)) { setEditEndPage(editStartPage - 1); return; }
@@ -832,7 +836,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             <section aria-label="추가할 기록" data-testid="amount-add-form" className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:p-4">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">시간(분) · 비우면 전체 효율로</span>
-                  <input data-testid="amount-minutes" type="number" min="0" value={editMinutes} onChange={event => setEditMinutes(event.target.value)} placeholder="비우면 자동" className={addField} /></label>
+                  <input data-testid="amount-minutes" type="number" min="0" value={editMinutes} onChange={event => setEditMinutes(event.target.value)} placeholder={addKnownAverage > 0 ? '비우면 자동' : '꼭 넣기'} className={addField} /></label>
                 <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">푼 {pageWord(addLabel)}</span>
                   <input data-testid="amount-pages" type="number" min="0" step="1" value={calculatedPages > 0 ? calculatedPages : ''} onChange={event => setSolvedPages(Number(event.target.value))} className={addField} /></label>
                 <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">끝 {pageWord(addLabel)}</span>
@@ -859,7 +863,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
                     minHeight={320} maxHeight={560} placeholder="정리노트" theme="light" grid symbolBar />
                 </div>
               )}
-              <button type="button" data-testid="amount-save" onClick={saveLog} disabled={!(calculatedPages > 0)}
+              {addNeedsMinutes && <p data-testid="amount-needs-minutes" className="text-[13px] font-bold text-rose-700">이 과목은 아직 잰 효율이 없어서 시간을 넣어야 해요.</p>}
+              <button type="button" data-testid="amount-save" onClick={saveLog} disabled={!(calculatedPages > 0) || addNeedsMinutes}
                 className="h-12 rounded-xl bg-indigo-600 text-base font-black text-white hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-500">추가 저장</button>
             </section>
           )}
