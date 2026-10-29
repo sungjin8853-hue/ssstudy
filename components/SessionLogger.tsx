@@ -229,7 +229,6 @@ const getSoundSrc = (path: string) => {
   const basePath = new URL('.', window.location.href).pathname;
   return `${basePath}${path}`;
 };
-const MARKER_SOUND_SRC = getSoundSrc('sounds/marker.mp3');
 const PAGE_TURN_SOUND_SRC = getSoundSrc('sounds/page-turn.mp3');
 const DEFAULT_SESSION_TIMER: SessionTimer = {
   id: 'none',
@@ -322,7 +321,6 @@ const ringChimeOnce = (context: AudioContext, startAt: number) => {
 const unlockSounds = () => {
   unlockChime();
   void (async () => {
-    await unlockSound(MARKER_SOUND_SRC);
     await unlockSound(PAGE_TURN_SOUND_SRC);
   })();
 };
@@ -353,8 +351,6 @@ const playSound = (src: string, startAtSeconds = 0, durationSeconds?: number) =>
   audio.load();
 };
 
-const playHalfwayPenSound = () => playSound(MARKER_SOUND_SRC, 0.5, 0.2);
-const playMarkerSound = () => playSound(MARKER_SOUND_SRC, 0.5);
 const playPageTurnSound = () => playSound(PAGE_TURN_SOUND_SRC);
 const playPomodoroEndSound = () => {
   const context = getChimeContext();
@@ -1064,9 +1060,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const currentPageMeasuredSecondsRef = useRef(0);
   const selectedSessionTimerIdRef = useRef('none');
   const gateQuestionCardRef = useRef<HTMLDivElement | null>(null);
-  const halfwaySoundPagesRef = useRef<Set<number>>(new Set());
-  const markerSoundPagesRef = useRef<Set<number>>(new Set());
-  const pageTurnSoundPagesRef = useRef<Set<number>>(new Set());
 
   const preSessionGateMemoItems = useMemo(() => (
     sortReviewLogsByRange(preSessionReviewLogs).map(log => {
@@ -1503,27 +1496,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     });
   }, [activePageAttackTargetSeconds, averageSecondsPerPage, seconds, selectedSessionTimerId, step]);
 
-  useEffect(() => {
-    if (!isTimerRunning || step !== 'timer' || timerMode !== 'remainingPages' || activePageAttackTargetSeconds <= 0) return;
-
-    const currentPageIndex = attackCompletedPages;
-    const remainingInPage = pageAttackRemainingSeconds;
-
-    if (remainingInPage <= activePageAttackTargetSeconds / 2 && !halfwaySoundPagesRef.current.has(currentPageIndex)) {
-      halfwaySoundPagesRef.current.add(currentPageIndex);
-      playHalfwayPenSound();
-    }
-
-    if (activePageAttackTargetSeconds > 60 && remainingInPage <= 60 && !markerSoundPagesRef.current.has(currentPageIndex)) {
-      markerSoundPagesRef.current.add(currentPageIndex);
-      playMarkerSound();
-    }
-
-    if (remainingInPage <= 2 && !pageTurnSoundPagesRef.current.has(currentPageIndex)) {
-      pageTurnSoundPagesRef.current.add(currentPageIndex);
-      playPageTurnSound();
-    }
-  }, [activePageAttackTargetSeconds, attackCompletedPages, isTimerRunning, pageAttackRemainingSeconds, step, timerMode]);
+  // 측정 중에는 장마다 내던 소리(반쯤 · 1분 전 · 장 넘김)를 내지 않는다(29일 요청). 소리는 뽀모도로가 끝날 때만 난다(playPomodoroEndSound).
 
   // 기본 복습 시간: "복습 완료"를 누를 때까지 잰다. 복습 문제를 다 풀어도 멈추지 않는다(28일 요청: 문제가 복습의 전부가 아니라서,
   // 문제를 맞힌 뒤에도 노트·페이지를 더 보는 추가 복습 시간을 준다).
@@ -1672,9 +1645,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setPageAttackTargetSeconds(targetSeconds > 0 ? targetSeconds : 0);
     setPageElapsedSeconds(0);
     currentPageMeasuredSecondsRef.current = 0;
-    halfwaySoundPagesRef.current.delete(attackCompletedPages);
-    markerSoundPagesRef.current.delete(attackCompletedPages);
-    pageTurnSoundPagesRef.current.delete(attackCompletedPages);
   };
 
   const getCurrentElapsedSeconds = () => (
@@ -1733,9 +1703,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setReviewMemoDocument(undefined);
     setIsConfirmingCancel(false);
     setTimerMode('remainingPages');
-    halfwaySoundPagesRef.current.clear();
-    markerSoundPagesRef.current.clear();
-    pageTurnSoundPagesRef.current.clear();
     selectedSessionTimerIdRef.current = 'none';
     setIsReviewNotePanelOpen(false);
     setIsReviewCondensePanelOpen(false);
@@ -1811,9 +1778,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
   const startMeasurementNow = () => {
     unlockSounds();
-    markerSoundPagesRef.current.clear();
-    halfwaySoundPagesRef.current.clear();
-    pageTurnSoundPagesRef.current.clear();
     setStudySeconds(0);
     setOrganizationSeconds(0);
     setAttackCompletedPages(0);

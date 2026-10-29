@@ -5957,9 +5957,9 @@ test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked w
   // 소리 막힘이면 쪽 넘김 소리로 대신한다
   const play = logger.slice(logger.indexOf('const playPomodoroEndSound'), logger.indexOf('const formatPageNumber'));
   assert.ok(play.includes('playPageTurnSound()') && play.includes('ringChime(context)') && play.includes('context.resume()'));
-  // 학습·복습 모두 회차가 끝나면 이 종소리를 내고, 장마다 나는 쪽 넘김 소리는 그대로 둔다
+  // 학습·복습 모두 회차가 끝나면 이 종소리를 낸다. 측정 중 장마다 나던 소리(반쯤 · 1분 전 · 장 넘김)는 없다(29일)
   assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 2);
-  assert.ok(logger.includes('if (remainingInPage <= 2 && !pageTurnSoundPagesRef.current.has(currentPageIndex))'));
+  assert.ok(!logger.includes('pageTurnSoundPagesRef') && !logger.includes('playHalfwayPenSound') && !logger.includes('playMarkerSound') && !logger.includes('marker.mp3'));
   // 도중에 시간을 바꿔 끝난 회차 수가 줄면 그 값부터 다시 센다
   assert.ok(logger.includes('reviewRoundsSeenRef.current = reviewCompletedRounds;\n      setDismissedReviewRound(current => Math.min(current, reviewCompletedRounds));'));
   assert.ok(logger.includes('studyPomodoroSeenRef.current = studyPomodoroRound;\n      setDismissedPomodoroRound(current => Math.min(current, studyPomodoroRound));'));
