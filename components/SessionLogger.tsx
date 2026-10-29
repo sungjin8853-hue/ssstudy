@@ -26,7 +26,7 @@ import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -634,7 +634,10 @@ export const buildStudyOrderForDate = (
       if (getPlanningDayCount(getDiffDays(subject.targetDate, today)) < 7) {
         return { subject, ...basePlan };
       }
-      const rawCarryoverPages = getPastCarryoverPages(subject, sourceLogs, targetStudyDate, todayDateKey);
+      // 지난날까지의 계획 대비 차이: 밀린 양은 오늘에 더해 쌓이고, 미리 한 양은 오늘 할 양에서 뺀다(29일 요청)
+      const balance = getPastPlanBalance(subject, sourceLogs, targetStudyDate, todayDateKey);
+      const rawCarryoverPages = Math.max(0, balance);
+      const aheadPages = Math.max(0, -balance);
       const remainingSubjectPages = getSubjectRemainingPageCount(subject);
       const remainingBeforeStudyDate = remainingSubjectPages + basePlan.scopedPages;
       const dayTarget = getSubjectDayTarget(
@@ -650,7 +653,7 @@ export const buildStudyOrderForDate = (
         Math.max(0, rawCarryoverPages - carryoverPaidPages)
       );
       const activeDayPagesAfterCarryover = Math.max(0, basePlan.scopedPages - carryoverPaidPages);
-      const currentDayRemainingPages = Math.max(0, dayTarget - activeDayPagesAfterCarryover);
+      const currentDayRemainingPages = Math.max(0, dayTarget - aheadPages - activeDayPagesAfterCarryover);
       const remainingDayPages = Math.min(
         remainingSubjectPages,
         Math.max(0, carryoverPages + currentDayRemainingPages)

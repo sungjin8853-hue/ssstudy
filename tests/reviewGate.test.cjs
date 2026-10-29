@@ -10695,3 +10695,21 @@ test('29일: 첨가 연결 — 하위 토글 기준의 칸이 상위 기준의 �
   // 따로 분리된 기준은 전처럼 하위 기준만
   assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [P];[C]\nx;y\n:::end\n:::end'), ['x(P)>y(C)']);
 });
+
+test('29일: 계획보다 미리 한 양은 다음 날부터 할 양에서 빠지고, 안 한 양은 계속 쌓인다', () => {
+  const schedule = loadSource('utils/schedule.ts');
+  const base = { id: 'S', name: 'S', startPage: 1, totalPages: 140, completedPages: 0, targetDate: '2026-11-27', scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6] };
+  const subject = { ...base, planResetDate: '2026-10-29', scheduledWeekdayPages: { 0: 4, 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 4 } };
+  const did = pages => (pages ? [{ id: 'l', subjectId: 'S', pagesRead: pages, timeSpentMinutes: pages * 3, startPage: 1, endPage: pages, timestamp: '2026-10-29T03:00:00Z', studyDate: '2026-10-29' }] : []);
+  const left = (pages, date, weekday, today) => buildStudyOrderForDate([{ ...subject, completedPages: pages }], did(pages), weekday, date, today).map(item => item.remainingDayPages)[0] ?? 0;
+  // 목요일(10/29)에 12쪽(계획 4쪽): 금요일 4쪽 → 0, 금요일을 건너뛰어도 토요일 4쪽 → 0 (미리 한 8쪽이 앞에서부터 빠진다)
+  assert.equal(left(12, '2026-10-30', 5, new Date(2026, 9, 30, 9)), 0);
+  assert.equal(left(12, '2026-10-31', 6, new Date(2026, 9, 31, 9)), 0);
+  assert.equal(left(12, '2026-11-01', 0, new Date(2026, 10, 1, 9)), 4, 'the eight pages ahead are used up after two days');
+  // 5쪽(1쪽 더): 금요일 3쪽, 금요일을 안 하면 토요일 7쪽(밀린 3 + 4)
+  assert.equal(left(5, '2026-10-30', 5, new Date(2026, 9, 30, 9)), 3);
+  assert.equal(left(5, '2026-10-31', 6, new Date(2026, 9, 31, 9)), 7);
+  // 하나도 안 하면 쌓인다: 목 · 금에 밀린 8쪽 + 토요일 4쪽 = 12쪽
+  assert.equal(left(0, '2026-10-31', 6, new Date(2026, 9, 31, 9)), 12, 'three days of 4 pages pile up');
+  assert.equal(schedule.getPastPlanBalance({ ...subject, completedPages: 12 }, did(12), '2026-10-30', '2026-10-30'), -8);
+});

@@ -516,7 +516,11 @@ export const getSubjectDayRemainingPages = (
   };
 };
 
-export const getPastCarryoverPages = (
+/**
+ * 계획 시작일부터 어제까지, 날짜마다 계획이 정한 페이지(요일별 페이지)와 실제로 푼 페이지를 견준 차이(29일 요청).
+ * 양수 = 밀린 양(오늘 할 양에 더해 계속 쌓인다), 음수 = 미리 한 양(오늘 이후 할 양에서 앞에서부터 뺀다).
+ */
+export const getPastPlanBalance = (
   subject: Subject,
   logs: StudyLog[],
   targetStudyDate: string,
@@ -559,6 +563,13 @@ export const getPastCarryoverPages = (
     guard += 1;
   }
 
-  // Extra pages studied on any earlier day reduce the shortfall carried to today.
-  return Math.max(0, shortfallPages - surplusPages);
+  // Extra pages studied on any earlier day reduce the shortfall carried to today, and what is left over is done ahead.
+  return shortfallPages - surplusPages;
 };
+
+export const getPastCarryoverPages = (
+  subject: Subject,
+  logs: StudyLog[],
+  targetStudyDate: string,
+  todayDateKey = getLocalDateKey()
+) => Math.max(0, getPastPlanBalance(subject, logs, targetStudyDate, todayDateKey));
