@@ -2425,16 +2425,19 @@ test('finished records are merged into the subject status rows and the separate 
   // 위쪽의 "학습량 변경" 버튼을 눌러야 열리는 창 안으로 들어갔다(닫혀 있으면 기록 줄이 보이지 않는다).
   assert.ok(!html.includes('완료된 기록'));
   assert.ok(!html.includes('aria-label="오늘 한 기록"') && !html.includes('aria-label="합산 기록 수정"') && !html.includes('data-testid="amount-change-dialog"'));
-  // "직접 추가"는 없어지고, 지금 보는 과목의 "학습량 변경" 버튼이 상세 칸 위쪽에 있다.
+  // "직접 추가"는 없어지고, 상세 칸 위쪽에 "추가" 버튼이 있다(29일: 학습량 변경 → 추가). 언제나 눌린다(과목은 창에서 고른다)
   assert.ok(!html.includes('직접 추가'));
-  assert.ok(html.includes('aria-label="학습량 변경"') && html.includes('data-testid="amount-change"') && !html.includes('aria-label="학습량 추가"'));
-  assert.ok(!/data-testid="amount-change"[^>]*disabled=""/.test(html), 'there is a record, so the change button is on');
+  assert.ok(html.includes('aria-label="학습 기록 추가"') && html.includes('data-testid="amount-change"') && !html.includes('aria-label="학습량 변경"'));
+  assert.ok(!/data-testid="amount-change"[^>]*disabled=""/.test(html));
   const summarySource = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   const dialog = summarySource.slice(summarySource.indexOf('data-testid="amount-change-dialog"'), summarySource.indexOf('const startBlock'));
-  assert.ok(dialog.includes('학습량 변경') && dialog.includes('data-testid="amount-add"') && dialog.includes('aria-label="학습량 추가"') && dialog.includes('오늘 한 기록') && dialog.includes('? recordRows :'),
-    'the window holds the add button and today records');
-  assert.ok(dialog.indexOf('data-testid="amount-add"') < dialog.indexOf('오늘 한 기록'), 'add comes first, records below');
-  assert.ok(dialog.includes('setChangingAmount(false); openAddModal(detailData.subject)') && summarySource.includes('setChangingAmount(false); openEditModal(summary)'), 'add and edit close this window and open their own');
+  // 창: 과목 고르기 → 시간 · 푼 페이지 · 끝 페이지 · 복습 유무 → 세션 메모 · 정리노트(크게) → 추가 저장, 맨 아래 오늘 추가한 기록(모든 과목)
+  const order = ['data-testid="amount-subject"', 'data-testid="amount-minutes"', 'data-testid="amount-pages"', 'data-testid="amount-end"', 'data-testid="amount-review-on"',
+    'data-testid="amount-session-memo"', 'data-testid="amount-note"', 'data-testid="amount-save"', '오늘 추가한 기록 · 모든 과목'].map(text => dialog.indexOf(text));
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order));
+  assert.ok(dialog.includes('placeholder="비우면 자동"') && dialog.includes('minHeight={320}') && dialog.includes('symbolBar'));
+  assert.ok(summarySource.includes("buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)"), 'every subject');
+  assert.ok(summarySource.includes('setChangingAmount(false); openEditModal(summary)') && summarySource.includes('{modalMode && !addingInline && ('), 'adding happens inside the window; editing still opens its own');
   assert.ok(!summarySource.includes('todayRecordsBlock'), 'no records block under the growth cell');
   assert.ok(!html.includes('실시간 기록'));
   assert.ok(!html.includes('하루 평균 공부량'));
@@ -4477,7 +4480,7 @@ test('study amount is added for the subject being viewed, and finished data reac
   const summarySource = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   // 직접 추가(과목 고르기 목록)가 아니라, 지금 보는 과목에 더하는 "학습량 추가". 과목은 고정되어 보이기만 한다.
   assert.ok(!summarySource.includes('직접 추가'));
-  assert.ok(summarySource.includes("openAddModal(detailData.subject)") && summarySource.includes('data-testid="add-subject"'));
+  assert.ok(summarySource.includes('onClick={() => openAddModal(subject)}') && summarySource.includes('data-testid="add-subject"'));
   assert.ok(summarySource.includes("modalMode === 'edit' ? '합산 기록 수정' : '학습량 추가'"));
   assert.ok(summarySource.includes('!detailIsReview') && summarySource.includes('getSubjectRemainingPageCount(detailData.subject) > 0'),
     'review rows have no study amount, and a book with no pages left cannot take more');

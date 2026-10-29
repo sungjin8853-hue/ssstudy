@@ -20,7 +20,8 @@ import {
   normalizeWeekdays,
   parseStudyDate
 } from '../utils/schedule';
-import { getSubjectChapters, pagesBetween } from '../utils/subjectChapters';
+import { endPageForSolved, getSubjectChapters, pagesBetween } from '../utils/subjectChapters';
+import { readSessionMemos, writeSessionMemo } from '../utils/sessionMemo';
 import { ReviewMemoEditor } from './ReviewMemoEditor';
 import { ReviewSpeedGrowthCell, SpeedGraph, UnitGrowthEfficiency } from './PageGrowth';
 import { describeGrowthChange, describeSpeed, getEfficiencyScope, getEfficiencyView, pagesPerReferenceTime, toGrowthChange } from '../utils/pageGrowth';
@@ -752,23 +753,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     : idle.extraReviewKeys?.includes(detailSubjectId)));
   const reopened = Boolean(doneRow && reopenedId === detailSubjectId);
   const showDoneCard = Boolean(doneRow && !reopened);
-  const editableRecords = subjectSummaries.filter(summary => summary.detailId === detailSubjectId && summary.kind === 'study');
-  const recordRows = editableRecords.map(summary => (
-    <div key={summary.recordKey} className="flex min-w-0 items-center gap-1">
-      <p className="min-w-0 flex-1 truncate text-[15px] font-black text-slate-900">
-        {summary.startPage > 0 && summary.endPage > 0 ? `${pagePos}.${formatNumber(summary.startPage)}~${formatNumber(summary.endPage)} · ` : ''}
-        {formatNumber(summary.pages)}{pageLabel} · {formatDoneMinutes(summary.minutes)}
-      </p>
-      <button type="button" onClick={() => { setChangingAmount(false); openEditModal(summary); }} title="합산 기록 수정" aria-label="합산 기록 수정"
-        className="flex h-11 w-11 shrink-0 items-center justify-center text-slate-600 transition-colors hover:text-indigo-700">
-        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-      </button>
-      <button type="button" onClick={() => onDeleteLogs(summary.logs.map(log => log.id))} title="합산 기록 삭제" aria-label="합산 기록 삭제"
-        className="flex h-11 w-11 shrink-0 items-center justify-center text-xl text-slate-600 transition-colors hover:text-rose-600">
-        ×
-      </button>
-    </div>
-  ));
   // 시작 버튼 자리: 끝낸 과목을 열어 둔 동안은 눌러지지 않는 "오늘 학습 완료", 추가 학습을 연 뒤에는 그 과목의 "학습 시작".
   const startSlot = idle ? (showDoneCard ? <DoneStartButton />
     : reopened && canExtraStudy && idle.onExtraStudy ? <StartButton kind={doneRow?.kind === 'review' ? 'review' : 'study'} onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
@@ -801,35 +785,102 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
   // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다
   useEffect(() => { if (pendingReviewCount === 0) setChoosingReview(false); }, [pendingReviewCount, detailData?.subject.id]);
-  const canAddAmount = Boolean(detailData && !detailIsReview && getSubjectRemainingPageCount(detailData.subject) > 0);
   // 제목 뒤에 이어 붙이는 과목: 이 과목 → 후행과목, 각 과목에 붙은 복습과목은 대괄호. 예: A-B[C]-D. 이을 것이 없으면 이름만 보인다.
   const chainSegments = detailData && !detailIsReview ? getSubjectChain(detailData.subject, subjects) : [];
   const titleChain = hasSubjectChain(chainSegments) ? chainSegments : null;
   const headerButton = 'flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-indigo-400 bg-indigo-100 px-3.5 text-sm font-black text-indigo-900 transition-colors hover:bg-indigo-200 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400';
 
-  // "학습량 변경" 창의 내용: 위에 학습량 추가, 아래에 오늘 한 기록(고치기 · 지우기). 예전에는 성장 칸 밑에 늘 펼쳐져 있었다.
-  const amountDialog = changingAmount && detailData && !detailIsReview ? (
-    <div role="dialog" aria-modal="true" aria-label="학습량 변경" data-testid="amount-change-dialog" onClick={() => setChangingAmount(false)}
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-      <div onClick={event => event.stopPropagation()} className="flex max-h-[92vh] w-full max-w-md flex-col rounded-[2rem] bg-white shadow-2xl animate-fade-in">
-        <div className="flex items-start justify-between gap-3 px-6 pb-3 pt-6">
-          <div className="min-w-0">
-            <h4 className="text-xl font-black text-slate-900">학습량 변경</h4>
-            <p className="mt-1 truncate text-sm font-bold text-slate-600">{detailData.subject.name}</p>
-          </div>
-          <button type="button" onClick={() => setChangingAmount(false)} aria-label="학습량 변경 닫기"
+  // "추가" 창(29일 요청): 과목을 골라 시간(비우면 기존 전체 효율) · 푼 페이지 · 끝 페이지 · 복습 유무를 넣고,
+  // 그 아래 측정 화면과 같은 세션 메모 · 정리노트를 크게 쓴 뒤 "추가 저장". 맨 아래에 오늘 추가한 기록(모든 과목)을 보여 주고 고치거나 지울 수 있다.
+  const addableSubjects = subjects.filter(subject => !reviewSubjectOwnerMap.has(subject.id) && getSubjectRemainingPageCount(subject) > 0);
+  const addingInline = changingAmount && modalMode === 'add';
+  const todayAdded = buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)
+    .filter(summary => summary.kind === 'study');
+  const [sessionNote, setSessionNote] = useState('');
+  useEffect(() => { if (addingInline && subjectId) { try { setSessionNote(readSessionMemos()[subjectId] ?? ''); } catch { setSessionNote(''); } } }, [addingInline, subjectId]);
+  const addLabel = getPageLabel(selectedSubject);
+  const setSolvedPages = (count: number) => {
+    const chapters = calculatedRange.chapters;
+    if (!(count > 0)) { setEditEndPage(editStartPage - 1); return; }
+    setEditEndPage(chapters.length > 0 ? endPageForSolved(chapters, editStartPage, count) ?? editStartPage : editStartPage + count - 1);
+  };
+  const addField = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-lg font-black text-slate-900 outline-none focus:border-indigo-500';
+  const amountDialog = changingAmount ? (
+    <div role="dialog" aria-modal="true" aria-label="학습 기록 추가" data-testid="amount-change-dialog" onClick={() => { setChangingAmount(false); closeModal(); }}
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4">
+      <div onClick={event => event.stopPropagation()} className="flex max-h-[94vh] w-full max-w-3xl flex-col rounded-[2rem] bg-white shadow-2xl animate-fade-in">
+        <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-5 sm:px-6">
+          <h4 className="text-xl font-black text-slate-900">학습 기록 추가</h4>
+          <button type="button" onClick={() => { setChangingAmount(false); closeModal(); }} aria-label="학습 기록 추가 닫기"
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-2xl text-slate-600 hover:bg-slate-100">×</button>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-6">
-          <button type="button" data-testid="amount-add" disabled={!canAddAmount} aria-label="학습량 추가"
-            onClick={() => { setChangingAmount(false); openAddModal(detailData.subject); }}
-            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-base font-black text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
-            <span aria-hidden="true" className="text-xl leading-none">+</span>학습량 추가
-          </button>
-          {!canAddAmount && <p className="-mt-2 text-xs font-bold text-slate-600">남은 페이지가 없어서 더 추가할 수 없어요.</p>}
-          <section aria-label="오늘 한 기록" className="flex flex-col gap-1.5 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
-            <h3 className="text-sm font-black text-slate-800">오늘 한 기록</h3>
-            {editableRecords.length > 0 ? recordRows : <p data-testid="amount-empty" className="py-1 text-sm font-bold text-slate-600">오늘 한 기록이 없어요.</p>}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 sm:px-6">
+          <section aria-label="과목 고르기" className="flex flex-col gap-2">
+            <p className="text-sm font-black text-slate-700">기록을 추가할 과목</p>
+            <div className="flex flex-wrap gap-2">
+              {addableSubjects.map(subject => (
+                <button key={subject.id} type="button" data-testid="amount-subject" aria-pressed={addingInline && subjectId === subject.id}
+                  onClick={() => openAddModal(subject)}
+                  className={`h-11 rounded-xl border-2 px-4 text-sm font-black ${addingInline && subjectId === subject.id ? 'border-indigo-600 bg-indigo-50 text-indigo-900' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                  {subject.name}
+                </button>
+              ))}
+              {addableSubjects.length === 0 && <p className="text-sm font-bold text-slate-600">남은 페이지가 있는 과목이 없어요.</p>}
+            </div>
+          </section>
+          {addingInline && selectedSubject && (
+            <section aria-label="추가할 기록" data-testid="amount-add-form" className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:p-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">시간(분) · 비우면 전체 효율로</span>
+                  <input data-testid="amount-minutes" type="number" min="0" value={editMinutes} onChange={event => setEditMinutes(event.target.value)} placeholder="비우면 자동" className={addField} /></label>
+                <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">푼 {pageWord(addLabel)}</span>
+                  <input data-testid="amount-pages" type="number" min="0" step="1" value={calculatedPages > 0 ? calculatedPages : ''} onChange={event => setSolvedPages(Number(event.target.value))} className={addField} /></label>
+                <label className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">끝 {pageWord(addLabel)}</span>
+                  <input data-testid="amount-end" type="number" step="1" value={editEndPage} onChange={event => setEditEndPage(Number(event.target.value))} className={addField} /></label>
+                <div className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">복습</span>
+                  <div className="grid h-[50px] grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+                    <button type="button" data-testid="amount-review-off" aria-pressed={!includeReview} onClick={() => setIncludeReview(false)}
+                      className={`rounded-lg text-sm font-black ${!includeReview ? 'bg-slate-700 text-white' : 'text-slate-500'}`}>안 함</button>
+                    <button type="button" data-testid="amount-review-on" aria-pressed={includeReview} onClick={() => setIncludeReview(true)}
+                      className={`rounded-lg text-sm font-black ${includeReview ? 'bg-rose-500 text-white' : 'text-slate-500'}`}>하기</button>
+                  </div>
+                </div>
+              </div>
+              <p className="text-[13px] font-bold text-slate-600">시작 {pagePositionLabel(addLabel)}.{formatNumber(editStartPage)} · 학습량 {calculatedPages > 0 ? formatNumber(calculatedPages) : '0'}{addLabel}</p>
+              <label className="flex flex-col gap-1"><span className="text-sm font-black text-indigo-700">세션 메모</span>
+                <textarea data-testid="amount-session-memo" value={sessionNote} placeholder="세션 메모"
+                  onChange={event => { setSessionNote(event.target.value); try { writeSessionMemo(subjectId, event.target.value); } catch { /* 저장 실패는 무시 */ } }}
+                  className="h-16 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-base font-bold text-slate-800 outline-none focus:border-indigo-500" /></label>
+              {includeReview && (
+                <div data-testid="amount-note" className="flex flex-col gap-2 rounded-2xl border border-rose-200 p-3">
+                  <span className="text-base font-black text-rose-700">정리노트</span>
+                  <ReviewMemoEditor value={reviewMemo} document={reviewMemoDocument}
+                    onChange={(memo, document) => { setReviewMemo(memo); setReviewMemoDocument(document); }}
+                    minHeight={320} maxHeight={560} placeholder="정리노트" theme="light" grid symbolBar />
+                </div>
+              )}
+              <button type="button" data-testid="amount-save" onClick={saveLog} disabled={!(calculatedPages > 0)}
+                className="h-12 rounded-xl bg-indigo-600 text-base font-black text-white hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-500">추가 저장</button>
+            </section>
+          )}
+          <section aria-label="오늘 추가한 기록" className="flex flex-col gap-1.5 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
+            <h3 className="text-sm font-black text-slate-800">오늘 추가한 기록 · 모든 과목</h3>
+            {todayAdded.length > 0 ? todayAdded.map(summary => {
+              const label = getPageLabel(subjects.find(subject => subject.id === summary.subjectId));
+              return (
+                <div key={summary.recordKey} data-testid="amount-today-row" className="flex min-w-0 items-center gap-1">
+                  <p className="min-w-0 flex-1 truncate text-[15px] font-black text-slate-900">
+                    <span className="text-slate-600">{summary.name} · </span>
+                    {summary.startPage > 0 && summary.endPage > 0 ? `${pagePositionLabel(label)}.${formatNumber(summary.startPage)}~${formatNumber(summary.endPage)} · ` : ''}
+                    {formatNumber(summary.pages)}{label} · {formatDoneMinutes(summary.minutes)}
+                  </p>
+                  <button type="button" onClick={() => { setChangingAmount(false); openEditModal(summary); }} title="합산 기록 수정" aria-label="합산 기록 수정"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center text-slate-600 hover:text-indigo-700">✎</button>
+                  <button type="button" onClick={() => onDeleteLogs(summary.logs.map(log => log.id))} title="합산 기록 삭제" aria-label="합산 기록 삭제"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center text-xl text-slate-600 hover:text-rose-600">×</button>
+                </div>
+              );
+            }) : <p data-testid="amount-empty" className="py-1 text-sm font-bold text-slate-600">오늘 추가한 기록이 없어요.</p>}
           </section>
         </div>
       </div>
@@ -977,8 +1028,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </button>
           )}
           {!detailIsReview && (
-            <button type="button" data-testid="amount-change" onClick={() => setChangingAmount(true)} disabled={!canAddAmount && editableRecords.length === 0} aria-label="학습량 변경" className={headerButton}>
-              <span aria-hidden="true" className="text-base leading-none">✎</span>학습량 변경
+            <button type="button" data-testid="amount-change" onClick={() => { closeModal(); setChangingAmount(true); }} aria-label="학습 기록 추가" className={headerButton}>
+              <span aria-hidden="true" className="text-base leading-none">+</span>추가
             </button>
           )}
         </div>
@@ -1060,7 +1111,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
 
       {amountDialog}
 
-      {modalMode && (
+      {modalMode && !addingInline && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-6 z-[10000]">
           <div className="flex max-h-[92vh] w-full max-w-sm flex-col rounded-[2.5rem] bg-white shadow-2xl animate-fade-in">
             <h4 className="px-8 pb-5 pt-8 text-xl font-black md:px-10 md:pt-10">{modalMode === 'edit' ? '합산 기록 수정' : '학습량 추가'}</h4>
