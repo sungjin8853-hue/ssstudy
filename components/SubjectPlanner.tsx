@@ -10,7 +10,7 @@ import {
   getSubjectRemainingPageCount,
   WEEKDAYS
 } from '../utils/schedule';
-import { BASIC_REVIEW_PLAN_RATIO, formatDuration } from '../utils/weekPlan';
+import { formatDuration } from '../utils/weekPlan';
 import { PlanPriorityNote } from './SpeedPanels';
 
 interface Props {
@@ -106,8 +106,8 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     const plan = calculateFreshWeekdayPagePlan(draft, getSubjectRemainingPageCount(draft), getDiffDays(date));
     const days = scheduledWeekdays.filter(day => (plan[day] || 0) > 0);
     if (!days.length) return null;
-    // 하루 시간은 공부 + 기본 복습(재기 전 임시값: 공부의 1/4)
-    const week = days.reduce((sum, day) => sum + (plan[day] || 0), 0) * initialValue * (1 + BASIC_REVIEW_PLAN_RATIO);
+    // 하루 시간은 그 과목을 직접 공부하는 시간(복습 제외)
+    const week = days.reduce((sum, day) => sum + (plan[day] || 0), 0) * initialValue;
     return { perDay: week / days.length, week };
   })();
   const labelClass = 'ml-1 text-[13px] font-bold text-slate-500';
@@ -217,7 +217,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
           </div>
           {previewPlan && (
             <p data-testid="new-plan-time" className="px-1 text-[14px] font-black text-indigo-700">
-              공부하는 날 하루 약 {formatDuration(previewPlan.perDay)} · 한 주 {formatDuration(previewPlan.week)} (기본 복습 포함)
+              공부하는 날 하루 약 {formatDuration(previewPlan.perDay)} · 한 주 {formatDuration(previewPlan.week)} (복습 제외)
             </p>
           )}
           <PlanPriorityNote />

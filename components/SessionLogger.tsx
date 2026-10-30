@@ -26,7 +26,7 @@ import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
 import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
@@ -628,7 +628,8 @@ export const buildStudyOrderForDate = (
     .map(subject => {
       const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today);
       if (getPlanningDayCount(getDiffDays(subject.targetDate, today)) < 7) {
-        return { subject, ...basePlan };
+        const actualPages = Math.min(getSubjectRemainingPageCount(subject), planPagesToActualPages(subject, basePlan.remainingDayPages));
+        return { subject, ...basePlan, carryoverPages: Math.min(basePlan.carryoverPages, actualPages), remainingDayPages: actualPages, estimatedMinutes: actualPages * basePlan.averageTimePerPage };
       }
       // 지난날까지의 계획 대비 차이: 밀린 양은 오늘에 더해 쌓이고, 미리 한 양은 오늘 할 양에서 뺀다(29일 요청)
       const balance = getPastPlanBalance(subject, sourceLogs, targetStudyDate, todayDateKey);
@@ -645,14 +646,15 @@ export const buildStudyOrderForDate = (
       );
       const carryoverPaidPages = Math.min(rawCarryoverPages, basePlan.scopedPages);
       const carryoverPages = Math.min(
-        remainingSubjectPages,
+        Math.ceil(remainingSubjectPages * getPlanRemainingScale(subject)),
         Math.max(0, rawCarryoverPages - carryoverPaidPages)
       );
       const activeDayPagesAfterCarryover = Math.max(0, basePlan.scopedPages - carryoverPaidPages);
       const currentDayRemainingPages = Math.max(0, dayTarget - aheadPages - activeDayPagesAfterCarryover);
+      // 할 일은 지금 단계 페이지로 센 값: 지금 단계가 먼저 끝나면 넘치는 몫을 다음 단계 페이지로 바꾼다(하루 시간이 고르게)
       const remainingDayPages = Math.min(
         remainingSubjectPages,
-        Math.max(0, carryoverPages + currentDayRemainingPages)
+        planPagesToActualPages(subject, Math.max(0, carryoverPages + currentDayRemainingPages))
       );
       const estimatedMinutes = remainingDayPages * basePlan.averageTimePerPage;
 
