@@ -1232,10 +1232,17 @@ export const Analytics: React.FC<Props> = ({
                                 isRequired: editForm.isRequired,
                               };
                               // 학습 요일 · 요일별 페이지는 수정 중에 한 주 필요 시간 밑에 나오는 칸에서 바로 고치므로 여기서는 그대로 둔다(마감일이 바뀌면 그 비율대로 페이지만 다시 나눈다)
-                              onUpdateSubject?.({
-                                ...updatedSubject,
-                                scheduledWeekdayPages: resolveSavedWeekdayPages(sub, updatedSubject, null)
-                              });
+                              // 아무것도 고치지 않고 저장하면 아무것도 바꾸지 않는다(30일): 계획 · 계획 시작일 · 저장된 과목 모두 그대로
+                              const original = subjects.find(subject => subject.id === sub.id);
+                              const unchanged = original && updatedSubject.name === original.name && updatedSubject.targetDate === original.targetDate
+                                && Boolean(updatedSubject.isRequired) === Boolean(original.isRequired)
+                                && JSON.stringify(updatedSubject.tagIds ?? []) === JSON.stringify(original.tagIds ?? [])
+                                && JSON.stringify(updatedSubject.followUpSubjects ?? []) === JSON.stringify(original.followUpSubjects ?? []);
+                              if (original && !unchanged) {
+                                const { name, followUpSubjects, targetDate, tagIds, isRequired } = updatedSubject;
+                                const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired };
+                                onUpdateSubject?.({ ...next, scheduledWeekdayPages: resolveSavedWeekdayPages(original, next, null) });
+                              }
                             }
                             setEditingId(null);
                             setEditForm(null);

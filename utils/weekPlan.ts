@@ -226,8 +226,10 @@ export const hasCustomWeekdayPages = (subject: Subject): boolean => {
 export const resolveSavedWeekdayPages = (subject: Subject, next: Subject, edited: Record<string, number> | null): Record<string, number> => {
   if (edited) return cleanWeekdayPagePlan(edited, next.scheduledWeekdays);
   const sameDays = normalizeWeekdays(subject.scheduledWeekdays).join() === normalizeWeekdays(next.scheduledWeekdays).join();
-  if (sameDays && subject.targetDate === next.targetDate && hasCustomWeekdayPages(subject)) {
-    return cleanWeekdayPagePlan(subject.scheduledWeekdayPages || {}, next.scheduledWeekdays);
+  if (sameDays && subject.targetDate === next.targetDate) {
+    // 요일과 마감일이 그대로면 저장된 요일별 페이지도 그대로다(30일: 이름만 바꿔 저장해도 계획이 다시 나뉘지 않게). 직접 정한 값은 쉬는 요일을 빼고 둔다
+    if (hasCustomWeekdayPages(subject)) return cleanWeekdayPagePlan(subject.scheduledWeekdayPages || {}, next.scheduledWeekdays);
+    if (Object.keys(subject.scheduledWeekdayPages || {}).length > 0) return { ...subject.scheduledWeekdayPages };
   }
   return calculateFreshWeekdayPagePlan(next, getSubjectRemainingPageCount(next), getDiffDays(next.targetDate));
 };

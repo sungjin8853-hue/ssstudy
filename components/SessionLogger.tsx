@@ -263,7 +263,7 @@ const unlockSound = async (src: string) => {
   }
 };
 
-// 뽀모도로가 끝났을 때 내는 소리. 쪽 넘김 소리(장마다 나는 소리)와 구별되도록 맑은 종소리 세 음을 따로 합성해서 낸다.
+// 뽀모도로가 끝났을 때 내는 소리: 코드로 만든 "삐삐삐삐" 알람(파일 없음).
 // 파일이 없어도 나고, 브라우저가 소리를 막으면(사용자가 누른 적이 없을 때) 쪽 넘김 소리로 대신한다.
 type ChimeWindow = Window & { webkitAudioContext?: typeof AudioContext };
 let chimeContext: AudioContext | null = null;
@@ -286,36 +286,35 @@ const unlockChime = () => {
   if (context && context.state === 'suspended') void context.resume().catch(() => undefined);
 };
 
-const CHIME_NOTES = [659.25, 783.99, 1046.5];
-/** 뽀모도로가 끝났을 때의 알람: 세 음 차임을 이만큼 되풀이한다(한 번이면 놓치기 쉬워서, 27일 요청 "알람소리") */
+/** 뽀모도로가 끝났을 때의 알람: "삐삐삐삐"(짧은 삐 소리 4번)를 이만큼 되풀이한다(30일 요청, 예전 세 음 종소리 대신) */
 export const POMODORO_ALARM_REPEATS = 3;
-const ALARM_GAP_SECONDS = 1.7;
+export const POMODORO_BEEPS = 4;
+const BEEP_FREQUENCY = 2000;
+const BEEP_SECONDS = 0.09;
+const BEEP_GAP_SECONDS = 0.07;
+const ALARM_GAP_SECONDS = 0.9;
 
 const ringChime = (context: AudioContext) => {
   const firstAt = context.currentTime + 0.04;
-  for (let repeat = 0; repeat < POMODORO_ALARM_REPEATS; repeat += 1) ringChimeOnce(context, firstAt + repeat * ALARM_GAP_SECONDS);
+  for (let repeat = 0; repeat < POMODORO_ALARM_REPEATS; repeat += 1) {
+    const groupAt = firstAt + repeat * (POMODORO_BEEPS * (BEEP_SECONDS + BEEP_GAP_SECONDS) + ALARM_GAP_SECONDS);
+    for (let beep = 0; beep < POMODORO_BEEPS; beep += 1) ringBeep(context, groupAt + beep * (BEEP_SECONDS + BEEP_GAP_SECONDS));
+  }
 };
-const ringChimeOnce = (context: AudioContext, startAt: number) => {
-  CHIME_NOTES.forEach((frequency, index) => {
-    const noteStart = startAt + index * 0.28;
-    const oscillator = context.createOscillator();
-    const overtone = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = 'sine';
-    overtone.type = 'sine';
-    oscillator.frequency.value = frequency;
-    overtone.frequency.value = frequency * 2;
-    gain.gain.setValueAtTime(0.0001, noteStart);
-    gain.gain.exponentialRampToValueAtTime(index === CHIME_NOTES.length - 1 ? 0.5 : 0.38, noteStart + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + (index === CHIME_NOTES.length - 1 ? 1.3 : 0.7));
-    oscillator.connect(gain);
-    overtone.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(noteStart);
-    overtone.start(noteStart);
-    oscillator.stop(noteStart + 1.4);
-    overtone.stop(noteStart + 1.4);
-  });
+/** 디지털 알람시계 같은 짧은 "삐": 네모파 한 음, 시작 · 끝을 아주 짧게 다듬어 딸깍 소리가 나지 않게 한다 */
+const ringBeep = (context: AudioContext, startAt: number) => {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = 'square';
+  oscillator.frequency.value = BEEP_FREQUENCY;
+  gain.gain.setValueAtTime(0.0001, startAt);
+  gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.005);
+  gain.gain.setValueAtTime(0.18, startAt + BEEP_SECONDS - 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + BEEP_SECONDS);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startAt);
+  oscillator.stop(startAt + BEEP_SECONDS + 0.01);
 };
 
 const unlockSounds = () => {

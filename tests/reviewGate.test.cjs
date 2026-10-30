@@ -5122,7 +5122,7 @@ test('a hand-set weekday plan survives edits that do not touch study days or the
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
   const editPanel = source.slice(source.indexOf('폴더 이동</p>') - 1500, source.indexOf('폴더 이동</p>'));
   assert.ok(!editPanel.includes('요일별 페이지') && !editPanel.includes('페이지 늘리기') && !editPanel.includes('학습 요일</p>'), 'the edit panel no longer sets weekday pages or study days: that moved under 한 주 필요 시간');
-  assert.ok(source.includes('resolveSavedWeekdayPages(sub, updatedSubject, null)') && !source.includes('pagesTouched') && !source.includes('toggleEditWeekday'), 'saving keeps the ratios and only re-splits pages when the deadline changes');
+  assert.ok(source.includes('resolveSavedWeekdayPages(original, next, null)') && !source.includes('pagesTouched') && !source.includes('toggleEditWeekday'), 'saving keeps the ratios and only re-splits pages when the deadline changes');
 });
 
 test('changing study days or the deadline rebuilds the weekday plan so the pages still add up to what remains, and short deadlines are not hand-editable', () => {
@@ -10802,4 +10802,14 @@ test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 �
   const source = fs.readFileSync(path.resolve(__dirname, '../components/PageGrowth.tsx'), 'utf8');
   assert.ok(source.includes('const unitOptions = efficiencyCycle(view.options);') && source.includes('const canCompare = unitOptions.length > 1;')
     && source.includes('unitOptions.findIndex(option => sameComparison(option, comparison))'));
+});
+
+test('30일: 학습 설정에서 아무것도 고치지 않고 저장하면 아무것도 바뀌지 않는다', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
+  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired };'),
+    'nothing is saved when nothing changed, and the saved subject is the stored one (not the screen copy with its computed values)');
+  const { resolveSavedWeekdayPages } = loadSource('utils/weekPlan.ts');
+  const stored = { 0: 0, 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 0 };
+  const subject = { id: 'S', name: 'S', startPage: 1, totalPages: 100, completedPages: 40, targetDate: '2026-12-31', scheduledWeekdays: [1, 2, 3, 4, 5], scheduledWeekdayPages: stored };
+  assert.deepEqual(resolveSavedWeekdayPages(subject, { ...subject, name: '새 이름' }, null), { 1: 4, 2: 4, 3: 4, 4: 4, 5: 4 }, 'same days and deadline: the stored pages stay even if progress changed since');
 });
