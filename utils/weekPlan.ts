@@ -330,14 +330,16 @@ export interface StagePlanTime {
   study: number;
   /** 그 페이지의 기본 복습(분) */
   basicReview: number;
-  /** 그 페이지를 따라 하는 복습과목들(분, 복습과목의 남은 양이 공부보다 적으면 그만큼만) */
+  /** 그 페이지를 따라 하는 복습과목들(분, 복습과목의 남은 양이 공부보다 적으면 그만큼만). 계획 시간(total)에는 넣지 않고 따로 보여 준다 */
   reviewSubjects: number;
+  /** 계획 시간 = 공부 + 기본 복습(31일: 복습과목은 합치지 않고 나눠서 본다) */
   total: number;
 }
 
 /**
- * 계획에 쓰는 한 단계 한 페이지의 시간 = 공부 + 기본 복습 + 복습과목. 복습은 직접 할당하지 않고 공부한 페이지를 따라오므로
- * 공부 한 페이지에 붙는 시간으로 센다. 복습 시간은 잰 값, 재기 전이면 기본 복습 = 공부의 1/4, 복습과목 = 공부의 2/3배.
+ * 계획에 쓰는 한 단계 한 페이지의 시간 = 공부 + 기본 복습. 복습과목은 계획 시간에 합치지 않고 나눠서 따로 보여 준다(31일 요청).
+ * 복습은 직접 할당하지 않고 공부한 페이지를 따라오므로 공부 한 페이지에 붙는 시간으로 센다.
+ * 복습 시간은 잰 값, 재기 전이면 기본 복습 = 공부의 1/4, 복습과목 = 공부의 2/3배.
  */
 export const getStagePlanTime = (subjects: Subject[], logs: StudyLog[], subject: Subject, stageId: string): StagePlanTime => {
   const study = getStageMinutesPerPage(subjects, logs, subject, stageId);
@@ -353,11 +355,11 @@ export const getStagePlanTime = (subjects: Subject[], logs: StudyLog[], subject:
     const rate = measured > 0 ? measured : study * REVIEW_SUBJECT_PLAN_RATIO;
     return sum + rate * Math.min(1, left / Math.max(1, stage.remainingPages));
   }, 0);
-  return { study, basicReview, reviewSubjects, total: study + basicReview + reviewSubjects };
+  return { study, basicReview, reviewSubjects, total: study + basicReview };
 };
 
 /**
- * 계획을 세우거나 고칠 때 단계별 계획 시간을 적어 둔다(planMinutesPerPage). 시간은 이때만 쓰이고, 그다음은 이 비율로 나눈 페이지가 할당이다.
+ * 계획을 세우거나 고칠 때 단계별 계획 시간(공부 + 기본 복습)을 적어 둔다(planMinutesPerPage). 시간은 이때만 쓰이고, 그다음은 이 비율로 나눈 페이지가 할당이다.
  * 이 비율로 "하루 시간"이 단계가 바뀌어도 고르게 된다(느린 후행과목 기간에는 페이지가 줄고, 빠른 본 과목 기간에는 는다).
  */
 export const withPlanTimes = (subjects: Subject[], logs: StudyLog[], subject: Subject): Subject => {
@@ -369,7 +371,7 @@ export const withPlanTimes = (subjects: Subject[], logs: StudyLog[], subject: Su
   return { ...subject, planMinutesPerPage: Object.keys(times).length > 0 ? times : undefined };
 };
 
-/** 지금 단계 한 페이지의 계획 시간(공부 + 복습)을 요일마다(모든 요일이 같다: 하루 시간은 단계와 상관없이 고르다). 0이면 모른다 */
+/** 지금 단계 한 페이지의 계획 시간(공부 + 기본 복습)을 요일마다(모든 요일이 같다: 하루 시간은 단계와 상관없이 고르다). 0이면 모른다 */
 export const getWeekdayMinutesPerPage = (subjects: Subject[], logs: StudyLog[], subject: Subject): Record<number, number> => {
   const total = getStagePlanTime(subjects, logs, subject, currentPlanStageId(subject)).total;
   const result: Record<number, number> = {};

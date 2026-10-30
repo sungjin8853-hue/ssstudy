@@ -6457,9 +6457,9 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
     minutesPerPage: { 1: 3, 2: 3, 3: 3 }, onToggle() {}, onStep() {}, onSetMinutes() {} }));
   assert.ok(editor.includes('1h 30m') && editor.includes('1h 12m') && editor.includes('30m'), 'time per day');
   assert.ok(editor.includes('한 주 3h 12m') && !editor.includes('합계 64P') && !/>30<span/.test(editor), 'week total in time, no page values');
-  assert.ok(editor.includes('(복습 포함)') && editor.includes('한 요일은 최대 3h 12m까지'), 'the time includes review; the most one day can take is the week');
+  assert.ok(editor.includes('(기본 복습 포함 · 복습과목은 따로)') && editor.includes('한 요일은 최대 3h 12m까지'), 'the time includes basic review, review subjects apart; the most one day can take is the week');
   assert.ok(editor.includes('월요일 공부 시간 늘리기') && editor.includes('월요일 공부 시간 약 10분씩') && editor.includes('월요일 공부 시간 직접 넣기'), 'about 10-minute steps and a typed value');
-  assert.ok(editor.includes('하루 할당량 우선') && editor.includes('1/4') && editor.includes('2/3배'), 'the note: time plans, pages are assigned, review temporary values');
+  assert.ok(editor.includes('하루 할당량 우선') && editor.includes('1/4') && editor.includes('2/3배') && editor.includes('복습과목 시간은 합치지 않고 따로'), 'the note: time plans, pages are assigned, review subjects apart, review temporary values');
   assert.equal(minuteStepPages(3), 3); assert.equal(minuteStepPages(30), 1); assert.equal(minuteStepPages(0), 1);
   assert.equal(parsePlanMinutes('1:30'), 90); assert.equal(parsePlanMinutes('90'), 90); assert.equal(parsePlanMinutes('1h30m'), 90);
   assert.equal(parsePlanMinutes('1시간 30분'), 90); assert.equal(parsePlanMinutes('2h'), 120); assert.ok(Number.isNaN(parsePlanMinutes('abc')));
@@ -6474,6 +6474,8 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
   const reviewSubject = { id: 'r', name: '오답', startPage: 1, totalPages: 30, completedPages: 0, targetDate: '2026-11-22' };
   const time = getStagePlanTime([withReview, reviewSubject], [], withReview, 's');
   assert.equal(time.basicReview, 0.75); assert.equal(time.reviewSubjects, 3 * (2 / 3) * (30 / 60), 'the review subject follows the study pages, only as far as it has pages left');
+  assert.equal(time.total, 3.75, 'the plan time is study + basic review; review subjects are not merged in (31st)');
+  assert.equal(getWeekdayMinutesPerPage([withReview, reviewSubject], [], withReview)[1], 3.75, 'a review subject does not change the weekday time');
   const remaining = getSubjectRemainingPageCount(subject); const diff = getDiffDays(subject.targetDate);
   const start = { ...subject, scheduledWeekdayPages: calculateFreshWeekdayPagePlan(subject, remaining, diff) };
   const plan = s => getWeekdayPagePlan(s, remaining, diff);

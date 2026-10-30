@@ -144,7 +144,7 @@ export const describePageUnits = (pages: number, step: number) => {
 };
 
 /** 계획 설정에서 알려 주는 말: 계획은 시간으로 세우지만 실제 할당은 페이지다 */
-export const PLAN_PRIORITY_NOTE = '계획은 하루 시간(공부 + 복습)으로 세우지만, 실제로는 그 시간에 맞는 하루 할당량(페이지)으로 나눠져요. 시간은 계획을 세우고 고칠 때(계획 갱신 포함)만 쓰이고, 그다음부터는 하루 할당량이 먼저예요. 복습은 따로 할당되지 않고 공부한 양을 따라와요. 재기 전 복습 시간은 기본 복습이 공부의 1/4, 복습과목이 2/3배예요.';
+export const PLAN_PRIORITY_NOTE = '계획은 하루 시간(공부 + 기본 복습)으로 세우지만, 실제로는 그 시간에 맞는 하루 할당량(페이지)으로 나눠져요. 시간은 계획을 세우고 고칠 때(계획 갱신 포함)만 쓰이고, 그다음부터는 하루 할당량이 먼저예요. 복습과목 시간은 합치지 않고 따로 보여 줘요. 복습은 따로 할당되지 않고 공부한 양을 따라와요. 재기 전 복습 시간은 기본 복습이 공부의 1/4, 복습과목이 2/3배예요.';
 
 export const PlanPriorityNote: React.FC<{ className?: string }> = ({ className = '' }) => (
   <p data-testid="plan-priority-note" className={`break-keep rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-bold leading-relaxed text-amber-800 ${className}`}>
@@ -197,7 +197,7 @@ export const WeekdayPagesEditor: React.FC<{
   return (
     <div data-testid="weekday-pages" className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-1">
-        <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간<span className="ml-1 font-semibold">(복습 포함)</span></p>
+        <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간<span className="ml-1 font-semibold">(기본 복습 포함 · 복습과목은 따로)</span></p>
         <p data-testid="weekday-pages-total" className="font-mono text-[13px] font-bold tabular-nums text-slate-500">
           {allTimed ? `한 주 ${formatDurationShort(totalMinutes)}` : `합계 ${totalPages}${pageLabel}`}
         </p>
