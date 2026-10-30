@@ -54,10 +54,12 @@ export interface Subject {
   scheduledWeekdays?: number[];
   scheduledWeekdayPages?: Record<string, number>;
   /**
-   * 계획 설정에서 시간으로 정한 요일별 공부 시간(분). 실제 할당은 scheduledWeekdayPages(페이지)가 먼저이고,
-   * 이 값은 계획을 다시 나눌 때(계획 갱신 등) 요일 사이의 시간 비율을 지키는 재료로만 쓴다.
+   * 계획을 세우거나 고칠 때 적어 둔 단계별(과목 자신 · 후행과목 id) 한 페이지의 계획 시간(분, 복습 시간 포함).
+   * 하루 시간을 고르게 맞추는 데만 쓴다: 느린 단계의 한 페이지는 빠른 단계의 여러 페이지 몫이다. 없으면 모든 단계를 같게 본다(예전과 같음).
    */
-  scheduledWeekdayMinutes?: Record<string, number>;
+  planMinutesPerPage?: Record<string, number>;
+  /** scheduledWeekdayPages가 어느 단계의 페이지로 적혀 있는가(없으면 과목 자신). 지금 단계와 다르면 계획 시간 비율로 바꿔 쓴다 */
+  planStageId?: string;
   scheduledWeekdayWeights?: Record<string, number>;
   scheduledWeekdayRemainderDay?: number;
   followUpSubjects?: FollowUpSubject[];

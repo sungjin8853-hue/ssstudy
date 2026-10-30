@@ -7,7 +7,7 @@ import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
-import { buildReviewWeekCells, buildWeekPlan, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withWeekdayMinutes } from '../utils/weekPlan';
+import { buildPlanReviewCells, buildReviewWeekCells, buildWeekPlan, currentPlanStageId, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withPlanTimes } from '../utils/weekPlan';
 import { DEFAULT_PAGE_LABEL, getPageLabel, MAX_PAGE_LABEL_LENGTH, normalizePageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatEstimatedDate, SubjectStage } from '../utils/completionEstimate';
 import {
@@ -433,14 +433,19 @@ export const Analytics: React.FC<Props> = ({
     });
   }, [subjects, logs, activeWeekday, activeStudyDate]);
 
-  const withFreshPagePlan = (subject: Subject): Subject => ({
-    ...subject,
-    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-      subject,
-      getSubjectRemainingPageCount(subject),
-      getDiffDays(subject.targetDate)
-    )
-  });
+  // 후행과목을 넣고 빼고 고치면 계획을 다시 세운다: 단계별 계획 시간(공부 + 복습)을 다시 적고 하루 시간이 고르게 나눈다
+  const withFreshPagePlan = (subject: Subject): Subject => {
+    const planned = withPlanTimes(subjects, logs, subject);
+    return {
+      ...planned,
+      planStageId: currentPlanStageId(planned),
+      scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+        planned,
+        getSubjectRemainingPageCount(planned),
+        getDiffDays(planned.targetDate)
+      )
+    };
+  };
 
   const openSubjectSummaryEditor = (subject: Subject, requestedStageId?: string) => {
     const stages = getSubjectStages(subject);
@@ -640,11 +645,14 @@ export const Analytics: React.FC<Props> = ({
     const own: Record<string, ReturnType<typeof toDays>> = {};
     const reviews: Record<string, ReturnType<typeof toDays>> = {};
     /** 시간을 나눠 가지는 몫(카드의 "현재 과목 · 복습과목" 비율 막대): 현재 단계, 그리고 복습과목들 */
-    const parts: Record<string, Array<{ id: string; name: string; kind: 'current' | 'review'; days: ReturnType<typeof toDays> }>> = {};
-    const collectReviewCells = (subject: Subject, parentEfficiency: number) => {
-      const working: Array<{ id: string; name: string; cells: Record<number, WeekCell> }> = [];
+    const parts: Record<string, Array<{ id: string; name: string; kind: 'current' | 'review' | 'basic'; days: ReturnType<typeof toDays> }>> = {};
+    const collectReviewCells = (subject: Subject, parentEfficiency: number, studyCells?: Record<number, WeekCell>) => {
+      const working: Array<{ id: string; name: string; cells: Record<number, WeekCell>; basic?: boolean }> = [];
       const stages = getSubjectStages(subject);
       const currentStage = stages.find(stage => stage.status === 'current');
+      // 지금 단계의 복습(기본 복습 · 복습과목)은 직접 할당하지 않고 계획한 공부 페이지를 따라온다(31일 요청): 공부 페이지 × 복습 시간
+      const derived = studyCells ? buildPlanReviewCells(subjects, logs, subject, studyCells) : null;
+      if (derived?.basic) working.push({ id: `${subject.id}:basic`, name: '기본 복습', cells: derived.basic, basic: true });
       // 같은 복습과목이 여러 단계(본 과목 · 후행과목)에 붙어 있어도 그 복습은 하나다: 한 번만 센다
       const counted = new Set<string>();
       stages.forEach(stage => stage.reviewSubjectIds.forEach(reviewId => {
@@ -652,15 +660,17 @@ export const Analytics: React.FC<Props> = ({
         if (!review || counted.has(reviewId)) return;
         const finished = stage.status === 'completed';
         if (finished && getSubjectRemainingPageCount(review) <= 0) return;
-        const cells = buildReviewWeekCells(logs, subject, review, parentEfficiency);
+        // 지금 단계 복습과목은 공부를 따라온 몫, 끝난 단계에서 남은 복습과목은 전처럼 남은 양을 마감까지 나눈 몫
+        const cells = (stage.id === currentStage?.id && derived?.reviews.find(item => item.id === reviewId)?.cells)
+          || buildReviewWeekCells(logs, subject, review, parentEfficiency);
         reviews[`${subject.id}:${reviewId}`] = toDays(cells);
         if (finished || stage.id === currentStage?.id) { counted.add(reviewId); working.push({ id: reviewId, name: review.name, cells }); }
       }));
       return working;
     };
-    const reviewParts = (working: ReturnType<typeof collectReviewCells>) => working.map(item => ({ id: item.id, name: item.name, kind: 'review' as const, days: toDays(item.cells) }));
+    const reviewParts = (working: ReturnType<typeof collectReviewCells>) => working.map(item => ({ id: item.id, name: item.name, kind: (item.basic ? 'basic' : 'review') as 'basic' | 'review', days: toDays(item.cells) }));
     plan.rows.forEach(row => {
-      const working = collectReviewCells(row.subject, row.efficiency);
+      const working = collectReviewCells(row.subject, row.efficiency, row.cells);
       const currentStage = getSubjectStages(row.subject).find(stage => stage.status === 'current');
       own[row.subject.id] = toDays(row.cells);
       combined[row.subject.id] = toDays(mergeWeekCells([row.cells, ...working.map(item => item.cells)]));
@@ -1241,7 +1251,10 @@ export const Analytics: React.FC<Props> = ({
                               if (original && !unchanged) {
                                 const { name, followUpSubjects, targetDate, tagIds, isRequired } = updatedSubject;
                                 const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired };
-                                onUpdateSubject?.({ ...next, scheduledWeekdayPages: resolveSavedWeekdayPages(original, next, null) });
+                                // 마감일이나 후행과목이 바뀌면 계획을 다시 세우는 것이라 단계별 계획 시간(공부 + 복습)도 새로 적는다
+                                const replanned = next.targetDate !== original.targetDate || JSON.stringify(next.followUpSubjects || []) !== JSON.stringify(original.followUpSubjects || [])
+                                  ? withPlanTimes(subjects, logs, next) : next;
+                                onUpdateSubject?.({ ...replanned, scheduledWeekdayPages: resolveSavedWeekdayPages(original, replanned, null) });
                               }
                             }
                             setEditingId(null);
@@ -1316,17 +1329,19 @@ export const Analytics: React.FC<Props> = ({
                    const original = subjects.find(subject => subject.id === sub.id);
                    if (!isEditing || !original || !onUpdateSubject) return null;
                    // 계획은 시간으로 고친다(요일마다 그날 공부할 단계의 효율로 시간 ↔ 페이지). 효율을 모르는 요일만 1쪽씩
+                   // 시간은 공부 + 복습(기본 복습 · 복습과목)을 합친 하루 시간이다. 고칠 때 단계별 계획 시간을 새로 적는다
                    const minutesPerPage = getWeekdayMinutesPerPage(subjects, logs, original);
+                   const planned = withPlanTimes(subjects, logs, original);
                    return (
                      <WeekdayPagesEditor
                        days={WEEKDAYS} selected={normalizeWeekdays(original.scheduledWeekdays)}
                        pages={getWeekdayPagePlan(original, getSubjectRemainingPageCount(original), getDiffDays(original.targetDate))}
                        pageLabel={getPageLabel(sub)} step={getWeekdayPageStep(original)} minutesPerPage={minutesPerPage}
-                       onToggle={dayId => onUpdateSubject(withWeekdayMinutes(toggleStudyWeekday(original, dayId), minutesPerPage))}
+                       onToggle={dayId => onUpdateSubject(toggleStudyWeekday(planned, dayId))}
                        onStep={(dayId, direction) => onUpdateSubject(minutesPerPage[dayId] > 0
-                         ? stepWeekdayMinutes(original, dayId, direction, minutesPerPage)
-                         : withWeekdayMinutes(stepWeekdayPages(original, dayId, direction, 1), minutesPerPage))}
-                       onSetMinutes={(dayId, minutes) => onUpdateSubject(setWeekdayMinutes(original, dayId, minutes, minutesPerPage))}
+                         ? stepWeekdayMinutes(planned, dayId, direction, minutesPerPage)
+                         : stepWeekdayPages(planned, dayId, direction, 1))}
+                       onSetMinutes={(dayId, minutes) => onUpdateSubject(setWeekdayMinutes(planned, dayId, minutes, minutesPerPage))}
                      />
                    );
                  })()}
@@ -1360,7 +1375,7 @@ export const Analytics: React.FC<Props> = ({
                         <SpeedGainChart series={speed.series} label={pageLabel} />
                         {(() => {
                           // 폴더처럼 항목마다 따로: 현재 과목과, 지금 하고 있는 복습과목 하나하나의 속도 증가율(최근 값)
-                          const rows = (weekNeed.parts[sub.id] || []).map(part => ({
+                          const rows = (weekNeed.parts[sub.id] || []).filter(part => part.kind !== 'basic').map(part => ({
                             id: part.id, name: part.name, kind: part.kind,
                             growth: (() => { const series = (part.kind === 'current' ? speed.own : speed.reviews[part.id])?.series; return series ? unitGrowthOf(series, planUnit, summaryWeekday) : null; })(),
                             amount: (() => { const series = (part.kind === 'current' ? speed.own : speed.reviews[part.id])?.series; return series ? unitAmountGrowthOf(series, planUnit, summaryWeekday) : null; })()

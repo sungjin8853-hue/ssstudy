@@ -27,7 +27,7 @@ import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
-import { getWeekdayMinutesPerPage, withTimeReference } from '../utils/weekPlan';
+import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -1917,16 +1917,21 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (!onUpdateSubjects) return;
 
     const resetDateKey = getLocalDateKey();
-    // 시간으로 정해 둔 요일별 시간이 있으면 그 시간 비율을 지금 효율(후행과목이면 그 효율 · 임시값)로 페이지로 바꿔 다시 나눈다
-    const updatedSubjects = subjects.map(subject => ({
-      ...subject,
-      planResetDate: resetDateKey,
-      scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-        withTimeReference(subject, getWeekdayMinutesPerPage(subjects, logs, subject)),
-        getSubjectRemainingPageCount(subject),
-        getDiffDays(subject.targetDate)
-      )
-    }));
+    // 갱신은 계획을 다시 세우는 것: 단계별 계획 시간(공부 + 기본 복습 + 복습과목, 재기 전이면 임시값)을 새로 적고
+    // 그 비율로 하루 시간이 고르게 나눈다(31일 요청). 요일 사이 비율은 저장된 요일별 페이지 비율 그대로
+    const updatedSubjects = subjects.map(subject => {
+      const planned = withPlanTimes(subjects, logs, subject);
+      return {
+        ...planned,
+        planResetDate: resetDateKey,
+        planStageId: currentPlanStageId(planned),
+        scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
+          planned,
+          getSubjectRemainingPageCount(planned),
+          getDiffDays(planned.targetDate)
+        )
+      };
+    });
 
     onUpdateSubjects(updatedSubjects);
   };

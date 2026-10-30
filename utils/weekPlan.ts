@@ -1,11 +1,12 @@
 import { StudyLog, Subject } from '../types';
-import { calculateRecentTimedPageAverage, calculateStats, getReviewEfficiencySamples } from './math';
-import { estimateStageSchedule, estimateSubjectEndDate } from './completionEstimate';
+import { calculateBasicReviewAverageTimePerPage, calculateRecentTimedPageAverage, calculateStats, getReviewEfficiencySamples } from './math';
+import { estimateSubjectEndDate } from './completionEstimate';
 import { getSubjectFamily, isFamilyStudyLog } from './subjectChain';
 import { getPageLabel } from './pageLabel';
 import {
   calculateFreshWeekdayPagePlan,
   cleanWeekdayPagePlan,
+  getActiveSubjectStage,
   getAllSubjectReviewIds,
   getDiffDays,
   getLocalDateKey,
@@ -155,8 +156,6 @@ export const buildWeekPlan = (subjects: Subject[], logs: StudyLog[], now = new D
       const date = getLogStudyDate(log);
       return date >= weekStartKey && date <= todayKey;
     });
-    // 요일마다 그날 공부할 단계의 효율(후행과목으로 넘어가는 요일은 그 후행과목의 효율 · 임시값)
-    const dayEfficiency = getWeekdayMinutesPerPage(subjects, logs, subject, now);
     const cells: Record<number, WeekCell> = {};
     WEEKDAYS.forEach(({ id }) => {
       const isToday = id === todayWeekday;
@@ -166,7 +165,7 @@ export const buildWeekPlan = (subjects: Subject[], logs: StudyLog[], now = new D
         weekday: id,
         pages,
         carryover: isToday ? Math.max(0, pages - planned) : 0,
-        minutes: roundMinutes(pages * (dayEfficiency[id] || efficiency)),
+        minutes: roundMinutes(pages * efficiency),
         spreadMinutes: roundMinutes(pages * sigma),
         scheduled: scheduled.includes(id)
       };
@@ -206,8 +205,12 @@ export const buildWeekPlan = (subjects: Subject[], logs: StudyLog[], now = new D
 };
 
 /** 학습 요일이나 마감일을 바꿀 때: 요일별 권장량을 자동 배분으로 다시 만든 과목 */
+/** 지금 단계 id: 새로 계산한 요일별 페이지는 이 단계의 페이지다(planStageId) */
+export const currentPlanStageId = (subject: Subject) => getActiveSubjectStage(subject)?.id ?? subject.id;
+
 export const withFreshWeekPlan = (subject: Subject): Subject => ({
   ...subject,
+  planStageId: currentPlanStageId(subject),
   scheduledWeekdayWeights: undefined,
   scheduledWeekdayRemainderDay: undefined,
   scheduledWeekdayPages: calculateFreshWeekdayPagePlan(subject, getSubjectRemainingPageCount(subject), getDiffDays(subject.targetDate))
@@ -276,7 +279,7 @@ export const stepWeekdayPages = (subject: Subject, dayId: number, direction: 1 |
       next[pick] += 1; diff += 1;
     }
   }
-  return { ...subject, scheduledWeekdayPages: next };
+  return { ...subject, planStageId: currentPlanStageId(subject), scheduledWeekdayPages: next };
 };
 
 /**
@@ -291,13 +294,16 @@ export const toggleStudyWeekday = (subject: Subject, dayId: number): Subject => 
   // 새로 켠 요일에는 저장된 값이 없어야 평균으로 시작한다(끄면서 남은 0이 몫이 되지 않게)
   const kept = cleanWeekdayPagePlan(currentWeekdayPlan(subject), days.filter(day => ordered.includes(day)));
   const base: Subject = { ...subject, scheduledWeekdays: ordered, scheduledWeekdayPages: kept };
-  return { ...base, scheduledWeekdayPages: cleanWeekdayPagePlan(calculateFreshWeekdayPagePlan(base, getSubjectRemainingPageCount(base), getDiffDays(base.targetDate)), ordered) };
+  return { ...base, planStageId: currentPlanStageId(base), scheduledWeekdayPages: cleanWeekdayPagePlan(calculateFreshWeekdayPagePlan(base, getSubjectRemainingPageCount(base), getDiffDays(base.targetDate)), ordered) };
 };
 
 /* ───────────── 요일별 공부 시간(계획은 시간으로 세우고, 실제 할당은 페이지) ───────────── */
 
 /** ▲▼ 한 번에 바꾸는 시간(분) */
 export const PLAN_MINUTE_STEP = 10;
+/** 복습 시간의 임시값(재기 전): 기본 복습은 공부 시간의 1/4, 복습과목은 2/3배(31일 요청). 재 둔 값이 있으면 그 값 */
+export const BASIC_REVIEW_PLAN_RATIO = 1 / 4;
+export const REVIEW_SUBJECT_PLAN_RATIO = 2 / 3;
 
 /** 과목 전체의 효율(분/페이지): 잰 값, 재기 전이면 처음 정한 임시값. 0이면 아직 모른다 */
 const subjectBaseEfficiency = (logs: StudyLog[], subject: Subject) => (
@@ -305,7 +311,7 @@ const subjectBaseEfficiency = (logs: StudyLog[], subject: Subject) => (
 );
 
 /**
- * 한 단계(과목 자신 또는 후행과목 한 칸)의 효율(분/페이지).
+ * 한 단계(과목 자신 또는 후행과목 한 칸)의 공부 효율(분/페이지).
  * 그 단계에서 잰 값 → 후행과목이 다른 과목을 합쳐 만든 것이면 그 원래 과목의 임시값 → 과목 전체의 효율(잰 값, 없으면 임시값) 순서.
  */
 export const getStageMinutesPerPage = (subjects: Subject[], logs: StudyLog[], subject: Subject, stageId: string) => {
@@ -319,31 +325,82 @@ export const getStageMinutesPerPage = (subjects: Subject[], logs: StudyLog[], su
   return base;
 };
 
+export interface StagePlanTime {
+  /** 공부 한 페이지(분) */
+  study: number;
+  /** 그 페이지의 기본 복습(분) */
+  basicReview: number;
+  /** 그 페이지를 따라 하는 복습과목들(분, 복습과목의 남은 양이 공부보다 적으면 그만큼만) */
+  reviewSubjects: number;
+  total: number;
+}
+
 /**
- * 요일마다 계획 시간 ↔ 페이지를 바꾸는 효율(분/페이지). 그 요일이 다음에 오는 날 공부할 단계의 효율이다:
- * 지금 단계가 그날 전에 끝날 것으로 보이면(완료 예상일) 그다음 후행과목의 효율(재기 전이면 임시값)을 쓴다. 0이면 모른다.
+ * 계획에 쓰는 한 단계 한 페이지의 시간 = 공부 + 기본 복습 + 복습과목. 복습은 직접 할당하지 않고 공부한 페이지를 따라오므로
+ * 공부 한 페이지에 붙는 시간으로 센다. 복습 시간은 잰 값, 재기 전이면 기본 복습 = 공부의 1/4, 복습과목 = 공부의 2/3배.
  */
-export const getWeekdayMinutesPerPage = (subjects: Subject[], logs: StudyLog[], subject: Subject, now = new Date()): Record<number, number> => {
-  const base = subjectBaseEfficiency(logs, subject);
-  const stages = getSubjectStages(subject).filter(stage => stage.remainingPages > 0);
-  const result: Record<number, number> = {};
-  if (stages.length <= 1) {
-    const only = stages[0] ? getStageMinutesPerPage(subjects, logs, subject, stages[0].id) : base;
-    WEEKDAYS.forEach(({ id }) => { result[id] = only; });
-    return result;
-  }
-  const { completionDates } = estimateStageSchedule(subject);
-  const stageOn = (dateKey: string) => stages.find(stage => {
-    const done = completionDates.get(stage.id);
-    return !done || dateKey <= getLocalDateKey(done);
-  }) || stages[stages.length - 1];
-  const cache = new Map<string, number>();
-  WEEKDAYS.forEach(({ id }) => {
-    const stage = stageOn(getStudyDateForWeekday(id, now));
-    if (!cache.has(stage.id)) cache.set(stage.id, getStageMinutesPerPage(subjects, logs, subject, stage.id));
-    result[id] = cache.get(stage.id) as number;
+export const getStagePlanTime = (subjects: Subject[], logs: StudyLog[], subject: Subject, stageId: string): StagePlanTime => {
+  const study = getStageMinutesPerPage(subjects, logs, subject, stageId);
+  if (!(study > 0)) return { study: 0, basicReview: 0, reviewSubjects: 0, total: 0 };
+  const measuredBasic = calculateBasicReviewAverageTimePerPage(logs, subject.id);
+  const basicReview = subject.reviewEnabled === false ? 0 : measuredBasic > 0 ? measuredBasic : study * BASIC_REVIEW_PLAN_RATIO;
+  const stage = getSubjectStages(subject).find(item => item.id === stageId);
+  const reviewSubjects = (stage?.reviewSubjectIds || []).reduce((sum, reviewId) => {
+    const review = subjects.find(item => item.id === reviewId);
+    const left = review ? getSubjectRemainingPageCount(review) : 0;
+    if (!review || left <= 0 || !stage) return sum;
+    const measured = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, subject.id, reviewId)).averageTimePerPage;
+    const rate = measured > 0 ? measured : study * REVIEW_SUBJECT_PLAN_RATIO;
+    return sum + rate * Math.min(1, left / Math.max(1, stage.remainingPages));
+  }, 0);
+  return { study, basicReview, reviewSubjects, total: study + basicReview + reviewSubjects };
+};
+
+/**
+ * 계획을 세우거나 고칠 때 단계별 계획 시간을 적어 둔다(planMinutesPerPage). 시간은 이때만 쓰이고, 그다음은 이 비율로 나눈 페이지가 할당이다.
+ * 이 비율로 "하루 시간"이 단계가 바뀌어도 고르게 된다(느린 후행과목 기간에는 페이지가 줄고, 빠른 본 과목 기간에는 는다).
+ */
+export const withPlanTimes = (subjects: Subject[], logs: StudyLog[], subject: Subject): Subject => {
+  const times: Record<string, number> = {};
+  getSubjectStages(subject).forEach(stage => {
+    const total = getStagePlanTime(subjects, logs, subject, stage.id).total;
+    if (total > 0) times[stage.id] = Math.round(total * 100) / 100;
   });
+  return { ...subject, planMinutesPerPage: Object.keys(times).length > 0 ? times : undefined };
+};
+
+/** 지금 단계 한 페이지의 계획 시간(공부 + 복습)을 요일마다(모든 요일이 같다: 하루 시간은 단계와 상관없이 고르다). 0이면 모른다 */
+export const getWeekdayMinutesPerPage = (subjects: Subject[], logs: StudyLog[], subject: Subject): Record<number, number> => {
+  const total = getStagePlanTime(subjects, logs, subject, currentPlanStageId(subject)).total;
+  const result: Record<number, number> = {};
+  WEEKDAYS.forEach(({ id }) => { result[id] = total; });
   return result;
+};
+
+/** 학습 설정 한 주 막대에 들어갈 복습 몫: 공부 페이지를 따라오는 기본 복습과 지금 단계 복습과목들의 요일별 시간 */
+export const buildPlanReviewCells = (subjects: Subject[], logs: StudyLog[], subject: Subject, studyCells: Record<number, WeekCell>) => {
+  const stageId = currentPlanStageId(subject);
+  const stage = getSubjectStages(subject).find(item => item.id === stageId);
+  const time = getStagePlanTime(subjects, logs, subject, stageId);
+  const cellsOf = (pagesPerStudyPage: number, minutesPerStudyPage: number) => {
+    const cells: Record<number, WeekCell> = {};
+    WEEKDAYS.forEach(({ id }) => {
+      const studyPages = studyCells[id]?.pages || 0;
+      cells[id] = { weekday: id, pages: Math.round(studyPages * pagesPerStudyPage * 10) / 10, carryover: 0, minutes: roundMinutes(studyPages * minutesPerStudyPage), spreadMinutes: 0, scheduled: Boolean(studyCells[id]?.scheduled) };
+    });
+    return cells;
+  };
+  const basic = time.basicReview > 0 ? cellsOf(1, time.basicReview) : null;
+  const reviews = (stage?.reviewSubjectIds || []).flatMap(reviewId => {
+    const review = subjects.find(item => item.id === reviewId);
+    const left = review ? getSubjectRemainingPageCount(review) : 0;
+    if (!review || left <= 0 || !stage || !(time.study > 0)) return [];
+    const share = Math.min(1, left / Math.max(1, stage.remainingPages));
+    const measured = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, subject.id, reviewId)).averageTimePerPage;
+    const rate = measured > 0 ? measured : time.study * REVIEW_SUBJECT_PLAN_RATIO;
+    return [{ id: reviewId, name: review.name, cells: cellsOf(share, rate * share) }];
+  });
+  return { basic, reviews };
 };
 
 /** ▲▼ 한 번(PLAN_MINUTE_STEP분)이 몇 페이지인가: 최소 1페이지 */
@@ -351,21 +408,9 @@ export const minuteStepPages = (minutesPerPage: number) => (
   minutesPerPage > 0 ? Math.max(1, Math.round(PLAN_MINUTE_STEP / minutesPerPage)) : 1
 );
 
-/** 지금 요일별 페이지를 시간(분)으로 적어 둔다. 효율을 모르는 학습 요일이 있으면 적지 않는다(시간 비율을 알 수 없다) */
-export const withWeekdayMinutes = (subject: Subject, minutesPerPage: Record<number, number>): Subject => {
-  const days = normalizeWeekdays(subject.scheduledWeekdays);
-  if (days.some(day => !(minutesPerPage[day] > 0))) return { ...subject, scheduledWeekdayMinutes: undefined };
-  const plan = currentWeekdayPlan(subject);
-  const minutes = days.reduce<Record<string, number>>((next, day) => {
-    next[day] = roundMinutes(Math.max(0, plan[day] || 0) * minutesPerPage[day]);
-    return next;
-  }, {});
-  return { ...subject, scheduledWeekdayMinutes: minutes };
-};
-
-/** 한 요일의 공부 시간을 ▲▼로 PLAN_MINUTE_STEP분씩 바꾼다. 저장은 그 시간에 맞는 페이지로(하루 할당량이 먼저다) */
+/** 한 요일의 공부 시간을 ▲▼로 약 PLAN_MINUTE_STEP분씩 바꾼다. 저장은 그 시간에 맞는 페이지로(하루 할당량이 먼저다) */
 export const stepWeekdayMinutes = (subject: Subject, dayId: number, direction: 1 | -1, minutesPerPage: Record<number, number>): Subject => (
-  withWeekdayMinutes(stepWeekdayPages(subject, dayId, direction, minuteStepPages(minutesPerPage[dayId] || 0)), minutesPerPage)
+  stepWeekdayPages(subject, dayId, direction, minuteStepPages(minutesPerPage[dayId] || 0))
 );
 
 /** 한 요일의 공부 시간을 직접 정한다(분). 그 시간에 가장 가까운 페이지로 바꿔 저장하고, 한 주 합계는 다른 요일로 맞춘다 */
@@ -375,23 +420,7 @@ export const setWeekdayMinutes = (subject: Subject, dayId: number, minutes: numb
   const current = Math.max(0, Math.round(currentWeekdayPlan(subject)[dayId] || 0));
   const target = Math.max(0, Math.round(Math.max(0, minutes) / perPage));
   const diff = target - current;
-  return diff === 0 ? subject : withWeekdayMinutes(stepWeekdayPages(subject, dayId, diff > 0 ? 1 : -1, Math.abs(diff)), minutesPerPage);
-};
-
-/**
- * 계획을 다시 나눌 때(계획 갱신) 쓸 기준: 시간으로 정해 둔 요일별 시간이 있으면 그 시간을 지금 요일별 효율로 페이지로 바꿔
- * 비율 재료로 넣는다. 그래서 후행과목으로 넘어가 효율이 바뀌는 요일이 있어도 요일 사이의 "시간" 비율이 지켜진다.
- * 효율이 같으면 지금 페이지 비율과 같아 결과가 바뀌지 않는다. 시간이 없거나 효율을 모르는 요일이 있으면 그대로 둔다.
- */
-export const withTimeReference = (subject: Subject, minutesPerPage: Record<number, number>): Subject => {
-  const stored = subject.scheduledWeekdayMinutes;
-  const days = normalizeWeekdays(subject.scheduledWeekdays);
-  if (!stored || days.some(day => !(minutesPerPage[day] > 0) || !Number.isFinite(Number(stored[day])))) return subject;
-  const reference = days.reduce<Record<string, number>>((next, day) => {
-    next[day] = Math.max(0, Number(stored[day])) / minutesPerPage[day];
-    return next;
-  }, {});
-  return reference && Object.values(reference).some(value => value > 0) ? { ...subject, scheduledWeekdayPages: reference } : subject;
+  return diff === 0 ? subject : stepWeekdayPages(subject, dayId, diff > 0 ? 1 : -1, Math.abs(diff));
 };
 
 /** "1:30", "1시간 30분", "1h30m", "90"(분), "1.5h" → 분. 못 읽으면 NaN */

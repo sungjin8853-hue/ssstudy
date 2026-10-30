@@ -144,7 +144,7 @@ export const describePageUnits = (pages: number, step: number) => {
 };
 
 /** 계획 설정에서 알려 주는 말: 계획은 시간으로 세우지만 실제 할당은 페이지다 */
-export const PLAN_PRIORITY_NOTE = '계획은 공부 시간으로 세우지만, 실제로는 그 시간에 맞는 하루 할당량(페이지)으로 나눠져요. 시간은 계획을 세우고 고칠 때만 쓰이고, 그다음부터는 하루 할당량이 먼저예요. 효율이 바뀌어도 할당량은 그대로라서 실제 걸리는 시간은 달라질 수 있어요.';
+export const PLAN_PRIORITY_NOTE = '계획은 하루 시간(공부 + 복습)으로 세우지만, 실제로는 그 시간에 맞는 하루 할당량(페이지)으로 나눠져요. 시간은 계획을 세우고 고칠 때(계획 갱신 포함)만 쓰이고, 그다음부터는 하루 할당량이 먼저예요. 복습은 따로 할당되지 않고 공부한 양을 따라와요. 재기 전 복습 시간은 기본 복습이 공부의 1/4, 복습과목이 2/3배예요.';
 
 export const PlanPriorityNote: React.FC<{ className?: string }> = ({ className = '' }) => (
   <p data-testid="plan-priority-note" className={`break-keep rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-bold leading-relaxed text-amber-800 ${className}`}>
@@ -173,6 +173,8 @@ export const WeekdayPagesEditor: React.FC<{
 }> = ({ days, selected, pages, pageLabel, minutesPerPage = {}, onToggle, onStep, onSetMinutes }) => {
   const [typingDay, setTypingDay] = useState<number | null>(null);
   const [typed, setTyped] = useState('');
+  // 한 주 몫보다 긴 시간을 넣으면 그 요일에 한 주 몫이 다 몰린다: 그렇게 맞췄다고 알려 준다(31일 요청)
+  const [capAsk, setCapAsk] = useState<{ label: string; minutes: number } | null>(null);
   const pagesOf = (id: number) => Math.max(0, Math.round(pages[id] || 0));
   const timed = (id: number) => (minutesPerPage[id] || 0) > 0;
   const allTimed = selected.every(timed);
@@ -186,13 +188,16 @@ export const WeekdayPagesEditor: React.FC<{
   );
   const commit = (id: number) => {
     const minutes = parsePlanMinutes(typed);
-    if (Number.isFinite(minutes)) onSetMinutes?.(id, minutes);
+    if (Number.isFinite(minutes)) {
+      setCapAsk({ label: days.find(day => day.id === id)?.label || '', minutes });
+      onSetMinutes?.(id, minutes);
+    }
     setTypingDay(null);
   };
   return (
     <div data-testid="weekday-pages" className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-1">
-        <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간</p>
+        <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간<span className="ml-1 font-semibold">(복습 포함)</span></p>
         <p data-testid="weekday-pages-total" className="font-mono text-[13px] font-bold tabular-nums text-slate-500">
           {allTimed ? `한 주 ${formatDurationShort(totalMinutes)}` : `합계 ${totalPages}${pageLabel}`}
         </p>
@@ -234,6 +239,17 @@ export const WeekdayPagesEditor: React.FC<{
           );
         })}
       </div>
+      {allTimed && (
+        <p data-testid="weekday-pages-cap" className="px-1 text-[12px] font-bold text-slate-500">
+          한 주 합계는 마감에 맞춰 정해져 있어요. 한 요일을 늘리면 다른 요일이 줄고, 한 요일은 최대 {formatDurationShort(totalMinutes)}까지예요.
+        </p>
+      )}
+      {/* 넣은 시간이 (고친 뒤의) 한 주 몫보다 길면 한 주 몫으로 맞춰졌다고 알려 준다 */}
+      {capAsk && allTimed && capAsk.minutes > totalMinutes + 0.5 && (
+        <p data-testid="weekday-pages-cap-note" role="status" className="rounded-lg bg-indigo-50 px-3 py-2 text-[12px] font-bold text-indigo-800">
+          {`${capAsk.label}요일 ${formatDurationShort(capAsk.minutes)}은 한 주 몫(${formatDurationShort(totalMinutes)})보다 길어서 ${formatDurationShort(totalMinutes)}로 맞췄어요. 한 주 합계는 마감에 맞춰 정해져 있어요.`}
+        </p>
+      )}
       {!allTimed && <p data-testid="weekday-pages-untimed" className="px-1 text-[12px] font-bold text-slate-500">효율을 아직 몰라 페이지로 보여요. 한 장이라도 재거나 한 {pageLabel}당 시간(임시값)을 넣으면 시간으로 바뀌어요.</p>}
       <PlanPriorityNote />
     </div>

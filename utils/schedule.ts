@@ -171,6 +171,35 @@ export const getActiveSubjectStage = (subject: Subject) => {
   return stages.find(stage => stage.status === 'current') || null;
 };
 
+/* ───── 하루 시간을 고르게(31일 요청): 단계마다 한 페이지의 계획 시간이 다르면 그 비율로 페이지를 바꿔 센다 ───── */
+
+/**
+ * 그 단계 한 페이지가 지금 단계 페이지 몇 개 몫인가(계획 시간 비율). 계획 시간을 적어 두지 않았거나 모르면 1(예전과 같다).
+ * 예: 지금 본 과목 3분/쪽, 후행과목 6분/쪽이면 후행 한 쪽 = 본 과목 2쪽 몫.
+ */
+export const getPlanStageRatio = (subject: Subject, stageId?: string) => {
+  const times = subject.planMinutesPerPage;
+  if (!times) return 1;
+  const current = getActiveSubjectStage(subject)?.id ?? subject.id;
+  const from = Number(times[stageId || subject.id]) || 0;
+  const to = Number(times[current]) || 0;
+  return from > 0 && to > 0 ? from / to : 1;
+};
+
+/** 남은 페이지를 지금 단계 페이지로 바꿨을 때의 배율(남은 단계들의 계획 시간을 지금 단계 기준으로) */
+export const getPlanRemainingScale = (subject: Subject) => {
+  if (!subject.planMinutesPerPage) return 1;
+  const stages = getSubjectStages(subject).filter(stage => stage.remainingPages > 0);
+  const actual = stages.reduce((sum, stage) => sum + stage.remainingPages, 0);
+  const equivalent = stages.reduce((sum, stage) => sum + stage.remainingPages * getPlanStageRatio(subject, stage.id), 0);
+  return actual > 0 && equivalent > 0 ? equivalent / actual : 1;
+};
+
+/** 기록 하나의 진도를 지금 단계 페이지로(그 기록을 한 단계의 계획 시간 비율) */
+export const getLogPlanPages = (subject: Subject, log: StudyLog) => (
+  getLogProgressPages(log) * getPlanStageRatio(subject, log.subjectStageId || subject.id)
+);
+
 export const adjustSubjectProgress = (subject: Subject, pageDelta: number): Subject => {
   const totalPages = getSubjectTotalPageCount(subject);
   const startPage = getSubjectStartPage(subject);
@@ -380,11 +409,13 @@ const coverDeadline = (plan: Record<string, number>, selectedDays: number[], rem
 
 export const calculateFreshWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
   const selectedDays = getPlanningWeekdays(subject.scheduledWeekdays, diffDays, from);
-  const weeklyRequiredPages = calculateWeeklyRequiredPages(remainingPages, diffDays);
+  // 하루 시간을 고르게: 뒤에 남은 느린(빠른) 단계는 지금 단계 페이지로 더(덜) 센다. 마감날은 남은 페이지 그대로
+  const planningPages = diffDays > 0 ? remainingPages * getPlanRemainingScale(subject) : remainingPages;
+  const weeklyRequiredPages = calculateWeeklyRequiredPages(planningPages, diffDays);
   const reference = getReferenceWeights(subject, selectedDays);
-  const plan = !reference ? distributePagesByWeekdayWeights(weeklyRequiredPages, selectedDays)
-    : distributePagesProportionally(weeklyRequiredPages, selectedDays, reference);
-  return coverDeadline(plan, selectedDays, remainingPages, diffDays, from);
+  // 처음 나눌 때 나머지는 한 요일에 몰지 않고 오늘부터 가까운 요일에 1쪽씩 고르게 더한다(31일 요청)
+  const plan = distributePagesProportionally(weeklyRequiredPages, selectedDays, reference || {});
+  return coverDeadline(plan, selectedDays, planningPages, diffDays, from);
 };
 
 export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, diffDays: number, from = new Date()) => {
@@ -394,6 +425,7 @@ export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, dif
   if (getPlanningDayCount(diffDays) < 7) return weightPlan;
   const storedPlan = subject.scheduledWeekdayPages || {};
   const hasStoredPlan = Object.keys(storedPlan).length > 0;
+  const stageRatio = getPlanStageRatio(subject, subject.planStageId || subject.id);
   const plan: Record<string, number> = {};
 
   WEEKDAYS.forEach(day => {
@@ -404,11 +436,14 @@ export const getWeekdayPagePlan = (subject: Subject, remainingPages: number, dif
 
     const storedValue = Number(storedPlan[day.id]);
     plan[day.id] = hasStoredPlan && Number.isFinite(storedValue)
-      ? Math.max(0, Math.round(storedValue))
+      ? Math.max(0, Math.round(storedValue * stageRatio))
       : weightPlan[day.id] || 0;
   });
 
-  return plan;
+  // 저장된 페이지가 다른 단계(예: 끝난 본 과목)의 페이지면 지금 단계 페이지로 바꿨다: 반올림으로 모자라지 않게 마감까지 덮는지 다시 본다
+  return hasStoredPlan && stageRatio !== 1
+    ? coverDeadline(plan, selectedDays, remainingPages * getPlanRemainingScale(subject), diffDays, from)
+    : plan;
 };
 
 export const cleanWeekdayPagePlan = (plan: Record<string, number>, days?: number[]) => {
@@ -456,9 +491,9 @@ export const getSubjectDayRemainingPages = (
   includeCarryover = true
 ) => {
   const remainingPages = getSubjectRemainingPageCount(subject);
-  const scopedPages = logs
+  const scopedPages = Math.round(logs
     .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === targetStudyDate)
-    .reduce((sum, log) => sum + getLogProgressPages(log), 0);
+    .reduce((sum, log) => sum + getLogPlanPages(subject, log), 0));
   const remainingBeforeStudyDate = remainingPages + scopedPages;
   const diffDays = getDiffDays(subject.targetDate, today);
   if (includeCarryover && getPlanningDayCount(diffDays) < 7) {
@@ -472,9 +507,10 @@ export const getSubjectDayRemainingPages = (
       .filter(log => log.subjectId === subject.id && dates.some(date => date.dateKey === getLogStudyDate(log)))
       .reduce<Record<string, number>>((pages, log) => {
         const dateKey = getLogStudyDate(log);
-        pages[dateKey] = (pages[dateKey] || 0) + getLogProgressPages(log);
+        pages[dateKey] = (pages[dateKey] || 0) + getLogPlanPages(subject, log);
         return pages;
       }, {});
+    Object.keys(pagesByDate).forEach(dateKey => { pagesByDate[dateKey] = Math.round(pagesByDate[dateKey]); });
     // Reconstruct one shared budget so a record is deducted only on its own day.
     const windowPages = Object.values(pagesByDate).reduce((sum, pages) => sum + pages, 0);
     const subjectBeforeWindow = adjustSubjectProgress(subject, -windowPages);
@@ -540,9 +576,9 @@ export const getPastPlanBalance = (
   while (cursor < targetDate && guard < 3650) {
     const cursorDateKey = getLocalDateKey(cursor);
     const cursorWeekday = cursor.getDay();
-    const scopedPages = logs
+    const scopedPages = Math.round(logs
       .filter(log => log.subjectId === subject.id && getLogStudyDate(log) === cursorDateKey)
-      .reduce((sum, log) => sum + getLogProgressPages(log), 0);
+      .reduce((sum, log) => sum + getLogPlanPages(subject, log), 0));
 
     if (selectedWeekdays.includes(cursorWeekday)) {
       const dayTarget = getSubjectDayTarget(
@@ -578,8 +614,13 @@ export const getPastCarryoverPages = (
  * 계획을 고치면 그날부터 새 계획이다(29일 요청): 요일별 페이지 · 학습 요일 · 마감일 · 범위(시작 · 끝 · 단원)가 바뀌면 계획 시작일을 오늘로 옮긴다.
  * 지난날은 그때의 계획대로 둔다(새 값으로 지난날을 다시 따지면 밀린 양 · 미리 한 양이 갑자기 생긴다). 밀린 양 · 미리 한 양은 남은 페이지에 들어 있어 새 계획에 나뉜다.
  */
-export const withPlanRestart = (previous: Subject | undefined, next: Subject, todayKey = getLocalDateKey()): Subject => {
-  if (!previous) return next;
+export const withPlanRestart = (previous: Subject | undefined, rawNext: Subject, todayKey = getLocalDateKey()): Subject => {
+  if (!previous) return rawNext;
+  // 요일별 페이지를 새로 적었으면 그 값은 지금 단계의 페이지다(따로 적지 않은 곳에서 고쳐도 단계 비율이 어긋나지 않게)
+  const pagesChanged = JSON.stringify(previous.scheduledWeekdayPages || {}) !== JSON.stringify(rawNext.scheduledWeekdayPages || {});
+  const next = pagesChanged && rawNext.planStageId === previous.planStageId
+    ? { ...rawNext, planStageId: getActiveSubjectStage(rawNext)?.id ?? rawNext.id }
+    : rawNext;
   const key = (subject: Subject) => JSON.stringify([
     normalizeWeekdays(subject.scheduledWeekdays), cleanWeekdayPagePlan(subject.scheduledWeekdayPages || {}, subject.scheduledWeekdays),
     subject.targetDate, subject.startPage, subject.totalPages, subject.chapters ?? null, subject.followUpSubjects?.map(item => [item.id, item.startPage, item.endPage]) ?? null
