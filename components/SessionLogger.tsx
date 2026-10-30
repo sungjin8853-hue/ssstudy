@@ -27,6 +27,7 @@ import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, WEEKDAYS } from '../utils/schedule';
+import { getWeekdayMinutesPerPage, withTimeReference } from '../utils/weekPlan';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -1916,11 +1917,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (!onUpdateSubjects) return;
 
     const resetDateKey = getLocalDateKey();
+    // 시간으로 정해 둔 요일별 시간이 있으면 그 시간 비율을 지금 효율(후행과목이면 그 효율 · 임시값)로 페이지로 바꿔 다시 나눈다
     const updatedSubjects = subjects.map(subject => ({
       ...subject,
       planResetDate: resetDateKey,
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-        subject,
+        withTimeReference(subject, getWeekdayMinutesPerPage(subjects, logs, subject)),
         getSubjectRemainingPageCount(subject),
         getDiffDays(subject.targetDate)
       )

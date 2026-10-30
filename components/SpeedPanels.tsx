@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ForecastItem, GroupSpeed, PlanUnit, UnitGrowthSummary, describeSpeedGrowth, describeStudyAmountGrowth, formatSignedHundredth, latestAmountGrowthOf, SpeedSeries } from '../utils/speedGrowth';
 import { pagePositionLabel, pageWord } from '../utils/pageLabel';
 import { formatSignedTenth } from '../utils/pageGrowth';
-import { formatDuration } from '../utils/weekPlan';
+import { formatDuration, formatDurationShort, parsePlanMinutes, PLAN_MINUTE_STEP } from '../utils/weekPlan';
 
 /** 학습 설정(과목·폴더 관리)에 들어가는 속도 증가 · 시간 비율 · 완료 예측 부품. 계산은 하지 않고 받은 값만 그린다. */
 
@@ -143,9 +143,20 @@ export const describePageUnits = (pages: number, step: number) => {
   return rest > 0 ? (whole > 0 ? `${whole}단위+${rest}` : `${rest}`) : `${whole}단위`;
 };
 
+/** 계획 설정에서 알려 주는 말: 계획은 시간으로 세우지만 실제 할당은 페이지다 */
+export const PLAN_PRIORITY_NOTE = '계획은 공부 시간으로 세우지만, 실제로는 그 시간에 맞는 하루 할당량(페이지)으로 나눠져요. 시간은 계획을 세우고 고칠 때만 쓰이고, 그다음부터는 하루 할당량이 먼저예요. 효율이 바뀌어도 할당량은 그대로라서 실제 걸리는 시간은 달라질 수 있어요.';
+
+export const PlanPriorityNote: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <p data-testid="plan-priority-note" className={`break-keep rounded-xl bg-amber-50 px-3 py-2 text-[12px] font-bold leading-relaxed text-amber-800 ${className}`}>
+    <span className="mr-1 font-black">하루 할당량 우선 ·</span>{PLAN_PRIORITY_NOTE}
+  </p>
+);
+
 /**
- * 한 주 필요 시간 바로 밑: 학습 요일을 켜고 끄고(요일 버튼), 요일마다 페이지를 + / − 로 고친다.
- * 페이지 값 바로 옆의 작은 위·아래 버튼(onStep)이 1쪽씩 고친다(페이지 단위씩 바꾸는 큰 버튼은 없다). 값 밑에 몇 단위인지 함께 나온다. 쉬는 요일은 "쉼".
+ * 한 주 필요 시간 바로 밑: 학습 요일을 켜고 끄고(요일 버튼), 요일마다 하루 공부 시간을 고친다.
+ * 계획은 시간으로 세운다: 값 옆의 작은 ▲▼가 PLAN_MINUTE_STEP분씩 바꾸고, 값을 누르면 시간을 직접 넣을 수 있다.
+ * 저장은 그 시간에 맞는 페이지로 하며(하루 할당량이 먼저), 페이지는 학습 실행의 할당에서만 보인다.
+ * 효율을 아직 모르는 요일(잰 값도 임시값도 없음)은 시간으로 바꿀 수 없어 페이지로 보이고 1쪽씩 고친다.
  * 과목 카드에서 "수정"을 눌렀을 때만 나온다(평소에는 숨김).
  */
 export const WeekdayPagesEditor: React.FC<{
@@ -154,48 +165,77 @@ export const WeekdayPagesEditor: React.FC<{
   pages: Record<number, number>;
   pageLabel: string;
   step: number;
+  /** 요일별 효율(분/페이지). 0이면 그 요일은 시간으로 바꿀 수 없다 */
+  minutesPerPage?: Record<number, number>;
   onToggle: (dayId: number) => void;
   onStep: (dayId: number, direction: 1 | -1) => void;
-}> = ({ days, selected, pages, pageLabel, step, onToggle, onStep }) => {
-  const total = selected.reduce((sum, id) => sum + Math.max(0, Math.round(pages[id] || 0)), 0);
+  onSetMinutes?: (dayId: number, minutes: number) => void;
+}> = ({ days, selected, pages, pageLabel, minutesPerPage = {}, onToggle, onStep, onSetMinutes }) => {
+  const [typingDay, setTypingDay] = useState<number | null>(null);
+  const [typed, setTyped] = useState('');
+  const pagesOf = (id: number) => Math.max(0, Math.round(pages[id] || 0));
+  const timed = (id: number) => (minutesPerPage[id] || 0) > 0;
+  const allTimed = selected.every(timed);
+  const totalMinutes = selected.reduce((sum, id) => sum + (timed(id) ? pagesOf(id) * minutesPerPage[id] : 0), 0);
+  const totalPages = selected.reduce((sum, id) => sum + pagesOf(id), 0);
   const stepButton = 'flex h-6 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-all hover:bg-slate-100 active:scale-95';
   const arrow = (up: boolean) => (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} />
     </svg>
   );
+  const commit = (id: number) => {
+    const minutes = parsePlanMinutes(typed);
+    if (Number.isFinite(minutes)) onSetMinutes?.(id, minutes);
+    setTypingDay(null);
+  };
   return (
     <div data-testid="weekday-pages" className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-1">
-        <p className="text-[13px] font-bold text-slate-500">{`학습 요일 · 요일별 ${pageLabel}`}</p>
-        <p data-testid="weekday-pages-total" className="font-mono text-[13px] font-bold tabular-nums text-slate-500">합계 {total}{pageLabel}</p>
+        <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간</p>
+        <p data-testid="weekday-pages-total" className="font-mono text-[13px] font-bold tabular-nums text-slate-500">
+          {allTimed ? `한 주 ${formatDurationShort(totalMinutes)}` : `합계 ${totalPages}${pageLabel}`}
+        </p>
       </div>
       <div className="grid grid-cols-7 gap-1.5">
         {days.map(day => {
           const on = selected.includes(day.id);
-          const value = Math.max(0, Math.round(pages[day.id] || 0));
+          const value = pagesOf(day.id);
+          const byTime = timed(day.id);
+          // 시간 칸은 약 PLAN_MINUTE_STEP분씩(한 페이지가 더 길면 한 페이지씩) 움직인다
+          const unit = byTime ? '공부 시간' : `1${pageLabel}`;
           return (
-            <div key={day.id} data-testid="weekday-pages-cell" data-weekday={day.id} className="flex min-w-0 flex-col items-stretch gap-1">
+            <div key={day.id} data-testid="weekday-pages-cell" data-weekday={day.id} data-unit={byTime ? 'minutes' : 'pages'} className="flex min-w-0 flex-col items-stretch gap-1">
               <button type="button" aria-pressed={on} aria-label={`${day.label}요일 학습 ${on ? '끄기' : '켜기'}`} onClick={() => onToggle(day.id)}
                 className={`rounded-xl py-3 text-[15px] font-bold transition-all ${on ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>{day.label}</button>
               {on ? (
-                <>
-                  <div className="flex items-center justify-center gap-1 py-1">
-                    <div className="flex min-w-0 flex-col items-center py-0.5">
-                      <p data-testid="weekday-pages-value" className="font-mono text-xl font-bold leading-tight tabular-nums text-amber-600">{value}<span className="ml-0.5 text-xs opacity-60">{pageLabel}</span></p>
-                      <p data-testid="weekday-pages-units" className="h-4 text-[11px] font-semibold leading-4 text-slate-500">{describePageUnits(value, step)}</p>
-                    </div>
-                    <div role="group" aria-label={`${day.label}요일 1${pageLabel}씩`} className="flex shrink-0 flex-col gap-0.5">
-                      <button type="button" data-testid="weekday-pages-up" aria-label={`${day.label}요일 1${pageLabel} 늘리기`} onClick={() => onStep(day.id, 1)} className={stepButton}>{arrow(true)}</button>
-                      <button type="button" data-testid="weekday-pages-down" aria-label={`${day.label}요일 1${pageLabel} 줄이기`} onClick={() => onStep(day.id, -1)} className={stepButton}>{arrow(false)}</button>
-                    </div>
+                <div className="flex flex-wrap items-center justify-center gap-1 py-1">
+                  {typingDay === day.id ? (
+                    <input data-testid="weekday-minutes-input" autoFocus value={typed} placeholder="1:30" inputMode="text"
+                      aria-label={`${day.label}요일 공부 시간(예: 1:30, 90분)`}
+                      onChange={event => setTyped(event.target.value)} onBlur={() => commit(day.id)}
+                      onKeyDown={event => { if (event.key === 'Enter') commit(day.id); if (event.key === 'Escape') setTypingDay(null); }}
+                      className="w-full min-w-0 rounded-md border border-indigo-300 px-1 py-1 text-center font-mono text-sm font-bold tabular-nums outline-none" />
+                  ) : (
+                    <button type="button" data-testid="weekday-pages-value" disabled={!byTime || !onSetMinutes}
+                      aria-label={byTime ? `${day.label}요일 공부 시간 직접 넣기` : undefined}
+                      onClick={() => { setTyped(formatDurationShort(value * minutesPerPage[day.id]).replace(/h /, ':').replace(/m$/, '')); setTypingDay(day.id); }}
+                      className="min-w-0 rounded-md px-0.5 py-0.5 text-center font-mono text-[15px] font-bold leading-tight tabular-nums text-indigo-700 enabled:hover:bg-indigo-50 disabled:text-amber-600 sm:text-lg">
+                      {byTime ? formatDurationShort(value * minutesPerPage[day.id]) : <>{value}<span className="ml-0.5 text-xs opacity-60">{pageLabel}</span></>}
+                    </button>
+                  )}
+                  <div role="group" aria-label={byTime ? `${day.label}요일 공부 시간 약 ${PLAN_MINUTE_STEP}분씩` : `${day.label}요일 ${unit}씩`} className="flex shrink-0 flex-col gap-0.5">
+                    <button type="button" data-testid="weekday-pages-up" aria-label={`${day.label}요일 ${unit} 늘리기`} onClick={() => onStep(day.id, 1)} className={stepButton}>{arrow(true)}</button>
+                    <button type="button" data-testid="weekday-pages-down" aria-label={`${day.label}요일 ${unit} 줄이기`} onClick={() => onStep(day.id, -1)} className={stepButton}>{arrow(false)}</button>
                   </div>
-                </>
+                </div>
               ) : <div className="flex flex-1 items-center justify-center py-3 text-sm font-semibold text-slate-400">쉼</div>}
             </div>
           );
         })}
       </div>
+      {!allTimed && <p data-testid="weekday-pages-untimed" className="px-1 text-[12px] font-bold text-slate-500">효율을 아직 몰라 페이지로 보여요. 한 장이라도 재거나 한 {pageLabel}당 시간(임시값)을 넣으면 시간으로 바뀌어요.</p>}
+      <PlanPriorityNote />
     </div>
   );
 };

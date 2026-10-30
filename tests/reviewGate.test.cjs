@@ -6416,8 +6416,10 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   const days = [{ id: 1, label: '월' }, { id: 2, label: '화' }, { id: 3, label: '수' }, { id: 4, label: '목' }];
   const editor = renderToStaticMarkup(React.createElement(WeekdayPagesEditor, { days, selected: [1, 2, 3], pages: { 1: 30, 2: 24, 3: 10 }, pageLabel: 'P', step: 10,
     onToggle() {}, onStep() {} }));
-  assert.ok(editor.includes('학습 요일 · 요일별 P') && editor.includes('합계 64P'), 'title and total');
-  assert.ok(editor.includes('3단위') && editor.includes('2단위+4') && editor.includes('>쉼<') && editor.includes('aria-pressed="true"'), 'units per day, rest days, weekday toggles');
+  // 30일: 계획은 시간으로 본다. 효율을 모르면(minutesPerPage 없음) 페이지로 보이고 1쪽씩 고친다
+  assert.ok(editor.includes('학습 요일 · 요일별 공부 시간') && editor.includes('합계 64P'), 'title and total (pages while the efficiency is unknown)');
+  assert.ok(editor.includes('weekday-pages-untimed') && editor.includes('plan-priority-note'), 'says why it shows pages, and that the daily quota comes first');
+  assert.ok(editor.includes('>쉼<') && editor.includes('aria-pressed="true"'), 'rest days, weekday toggles');
   assert.equal((editor.match(/data-testid="weekday-pages-value"/g) || []).length, 3);
   assert.equal((editor.match(/data-testid="weekday-pages-up"/g) || []).length, 3, 'a small up button next to each study day page value');
   assert.equal((editor.match(/data-testid="weekday-pages-down"/g) || []).length, 3);
@@ -6437,7 +6439,72 @@ test('weekday pages: set per day in steps of the subject\'s page unit right unde
   assert.equal(pagesOf(floor)[3], 0, 'never below 0');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
   assert.ok(source.includes('if (!isEditing || !original || !onUpdateSubject) return null;'), 'only while the subject is being edited');
-  assert.ok(source.includes('onUpdateSubject(toggleStudyWeekday(original, dayId))') && source.includes('onUpdateSubject(stepWeekdayPages(original, dayId, direction, 1))') && !source.includes('onNudge'), 'taps apply to the subject right away, one page at a time');
+  assert.ok(source.includes('onUpdateSubject(withWeekdayMinutes(toggleStudyWeekday(original, dayId), minutesPerPage))') && source.includes('withWeekdayMinutes(stepWeekdayPages(original, dayId, direction, 1), minutesPerPage)') && !source.includes('onNudge'), 'taps apply to the subject right away, one page at a time while the efficiency is unknown');
+});
+
+test('plan by time (30th): weekday editor shows study time; the daily quota (pages) is what is stored and assigned; follow-up temporary values; refresh keeps time ratios', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 9, 26, 10, 0, 0) });
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { WeekdayPagesEditor } = loadSource('components/SpeedPanels.tsx');
+  const { getWeekdayMinutesPerPage, getStageMinutesPerPage, stepWeekdayMinutes, setWeekdayMinutes, minuteStepPages, parsePlanMinutes, withWeekdayMinutes, withTimeReference } = loadSource('utils/weekPlan.ts');
+  const { calculateFreshWeekdayPagePlan, getWeekdayPagePlan, getSubjectRemainingPageCount, getDiffDays } = loadSource('utils/schedule.ts');
+  // 편집기: 효율이 있으면 요일마다 시간(페이지 × 분/페이지)과 한 주 합계 시간, ▲▼는 10분씩. 페이지 값은 보이지 않는다
+  const days = [{ id: 1, label: '월' }, { id: 2, label: '화' }, { id: 3, label: '수' }];
+  const editor = renderToStaticMarkup(React.createElement(WeekdayPagesEditor, { days, selected: [1, 2, 3], pages: { 1: 30, 2: 24, 3: 10 }, pageLabel: 'P', step: 1,
+    minutesPerPage: { 1: 3, 2: 3, 3: 3 }, onToggle() {}, onStep() {}, onSetMinutes() {} }));
+  assert.ok(editor.includes('1h 30m') && editor.includes('1h 12m') && editor.includes('30m'), 'time per day');
+  assert.ok(editor.includes('한 주 3h 12m') && !editor.includes('합계 64P') && !/>30<span/.test(editor), 'week total in time, no page values');
+  assert.ok(editor.includes('월요일 공부 시간 늘리기') && editor.includes('월요일 공부 시간 약 10분씩') && editor.includes('월요일 공부 시간 직접 넣기'), 'about 10-minute steps and a typed value');
+  assert.ok(editor.includes('하루 할당량 우선') && editor.includes('실제로는 그 시간에 맞는 하루 할당량(페이지)'), 'the note: time plans, pages are assigned');
+  assert.ok(!editor.includes('weekday-pages-untimed'));
+  // 시간 → 페이지: 10분이 몇 페이지인지(최소 1)
+  assert.equal(minuteStepPages(3), 3); assert.equal(minuteStepPages(30), 1); assert.equal(minuteStepPages(0), 1);
+  assert.equal(parsePlanMinutes('1:30'), 90); assert.equal(parsePlanMinutes('90'), 90); assert.equal(parsePlanMinutes('1h30m'), 90);
+  assert.equal(parsePlanMinutes('1시간 30분'), 90); assert.equal(parsePlanMinutes('2h'), 120); assert.ok(Number.isNaN(parsePlanMinutes('abc')));
+  // 과목: 월·수·금, 60쪽, 3분/페이지(임시값)
+  const subject = { id: 's', name: '수학', startPage: 1, totalPages: 60, completedPages: 0, targetDate: '2026-11-22', createdAt: '2026-10-01T00:00:00.000Z',
+    scheduledWeekdays: [1, 3, 5], initialAverageTimePerPage: 3 };
+  const eff = getWeekdayMinutesPerPage([subject], [], subject);
+  assert.deepEqual([eff[1], eff[3], eff[5]], [3, 3, 3], 'the temporary value is the efficiency before measuring');
+  const remaining = getSubjectRemainingPageCount(subject); const diff = getDiffDays(subject.targetDate);
+  const start = { ...subject, scheduledWeekdayPages: calculateFreshWeekdayPagePlan(subject, remaining, diff) };
+  const plan = s => getWeekdayPagePlan(s, remaining, diff);
+  const total = p => [1, 3, 5].reduce((sum, day) => sum + (p[day] || 0), 0);
+  const up = stepWeekdayMinutes(start, 1, 1, eff);
+  assert.equal(plan(up)[1], plan(start)[1] + 3, '10 minutes = 3 pages at 3 min/page');
+  assert.equal(total(plan(up)), total(plan(start)), 'the week total (pages, set by the deadline) stays');
+  assert.deepEqual(up.scheduledWeekdayMinutes, { 1: plan(up)[1] * 3, 3: plan(up)[3] * 3, 5: plan(up)[5] * 3 }, 'the time plan is kept beside the pages');
+  const typed = setWeekdayMinutes(start, 3, 45, eff);
+  assert.equal(plan(typed)[3], 15, '45 minutes typed = 15 pages'); assert.equal(total(plan(typed)), total(plan(start)));
+  assert.equal(setWeekdayMinutes(start, 3, Number.NaN, eff), start, 'an unreadable time changes nothing');
+  // 효율을 모르면 시간 계획을 적지 않는다
+  const unknown = { ...start, initialAverageTimePerPage: undefined };
+  const noEff = getWeekdayMinutesPerPage([unknown], [], unknown);
+  assert.equal(noEff[1], 0); assert.equal(withWeekdayMinutes(unknown, noEff).scheduledWeekdayMinutes, undefined);
+  // 잰 기록이 있으면 임시값 대신 잰 값
+  const logs = [{ id: 'l1', subjectId: 's', timestamp: '2026-10-25T10:00:00.000Z', pagesRead: 5, timeSpentMinutes: 10, studyDate: '2026-10-25' }];
+  assert.equal(getWeekdayMinutesPerPage([subject], logs, subject)[1], 2, 'measured beats the temporary value');
+  // 계획 갱신: 효율이 같으면 시간 비율 = 페이지 비율이라 결과가 같다
+  assert.deepEqual(calculateFreshWeekdayPagePlan(withTimeReference(up, eff), remaining, diff), calculateFreshWeekdayPagePlan(up, remaining, diff));
+  // 후행과목: 본 과목이 화요일에 끝나면 그 뒤 요일은 후행과목의 효율(재기 전이면 원래 과목의 임시값)
+  const source = { id: 'src', name: '기출', startPage: 1, totalPages: 40, completedPages: 0, targetDate: '2026-11-22', initialAverageTimePerPage: 6, scheduledWeekdays: [1, 3, 5] };
+  const owner = { ...subject, id: 'o', totalPages: 4, scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], targetDate: '2026-11-22',
+    followUpSubjects: [{ id: 'f', sourceSubjectId: 'src', name: '기출', startPage: 1, endPage: 40, completedPage: 0 }] };
+  owner.scheduledWeekdayPages = calculateFreshWeekdayPagePlan(owner, getSubjectRemainingPageCount(owner), getDiffDays(owner.targetDate));
+  assert.equal(getStageMinutesPerPage([owner, source], [], owner, 'f'), 6, 'a follow-up made from a subject uses that subject\'s temporary value');
+  const stageEff = getWeekdayMinutesPerPage([owner, source], [], owner);
+  assert.equal(stageEff[1], 3, 'today (Monday) is still the main stage');
+  assert.ok(Object.values(stageEff).includes(6), 'days after the main stage ends use the follow-up efficiency');
+  // 그런 요일이 섞이면 갱신은 페이지 비율이 아니라 시간 비율을 지킨다: 같은 시간이면 느린(6분) 요일은 페이지가 절반
+  const timed = { ...owner, scheduledWeekdayMinutes: { 0: 60, 1: 60, 2: 60, 3: 60, 4: 60, 5: 60, 6: 60 } };
+  const ref = withTimeReference(timed, stageEff);
+  const fastDay = Number(Object.keys(stageEff).find(day => stageEff[day] === 3)); const slowDay = Number(Object.keys(stageEff).find(day => stageEff[day] === 6));
+  assert.equal(ref.scheduledWeekdayPages[fastDay], 20); assert.equal(ref.scheduledWeekdayPages[slowDay], 10);
+  // 화면 연결
+  const fsSrc = name => fs.readFileSync(path.resolve(__dirname, '..', name), 'utf8');
+  assert.ok(fsSrc('components/SessionLogger.tsx').includes('withTimeReference(subject, getWeekdayMinutesPerPage(subjects, logs, subject))'), '계획 갱신 uses the time ratios');
+  assert.ok(fsSrc('components/SubjectPlanner.tsx').includes('<PlanPriorityNote />') && fsSrc('components/SubjectPlanner.tsx').includes('new-plan-time'), 'the new-plan form shows the time per day and the note');
 });
 
 test('note diagram: criteria written with [ ] in toggle titles change the criterion inside that toggle and show as chips; grouping brackets stay grouping', () => {

@@ -53,6 +53,11 @@ export interface Subject {
   isRequired?: boolean;
   scheduledWeekdays?: number[];
   scheduledWeekdayPages?: Record<string, number>;
+  /**
+   * 계획 설정에서 시간으로 정한 요일별 공부 시간(분). 실제 할당은 scheduledWeekdayPages(페이지)가 먼저이고,
+   * 이 값은 계획을 다시 나눌 때(계획 갱신 등) 요일 사이의 시간 비율을 지키는 재료로만 쓴다.
+   */
+  scheduledWeekdayMinutes?: Record<string, number>;
   scheduledWeekdayWeights?: Record<string, number>;
   scheduledWeekdayRemainderDay?: number;
   followUpSubjects?: FollowUpSubject[];

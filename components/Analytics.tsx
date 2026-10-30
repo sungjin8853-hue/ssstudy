@@ -7,7 +7,7 @@ import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
-import { buildReviewWeekCells, buildWeekPlan, mergeWeekCells, resolveSavedWeekdayPages, stepWeekdayPages, toggleStudyWeekday, WeekCell } from '../utils/weekPlan';
+import { buildReviewWeekCells, buildWeekPlan, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withWeekdayMinutes } from '../utils/weekPlan';
 import { DEFAULT_PAGE_LABEL, getPageLabel, MAX_PAGE_LABEL_LENGTH, normalizePageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatEstimatedDate, SubjectStage } from '../utils/completionEstimate';
 import {
@@ -1315,13 +1315,18 @@ export const Analytics: React.FC<Props> = ({
                    // 과목 카드의 "수정"을 눌렀을 때만: 학습 요일을 켜고 끄고, 요일별 페이지를 페이지 값 옆의 작은 ▲▼로 1쪽씩 고친다(누르면 바로 적용)
                    const original = subjects.find(subject => subject.id === sub.id);
                    if (!isEditing || !original || !onUpdateSubject) return null;
+                   // 계획은 시간으로 고친다(요일마다 그날 공부할 단계의 효율로 시간 ↔ 페이지). 효율을 모르는 요일만 1쪽씩
+                   const minutesPerPage = getWeekdayMinutesPerPage(subjects, logs, original);
                    return (
                      <WeekdayPagesEditor
                        days={WEEKDAYS} selected={normalizeWeekdays(original.scheduledWeekdays)}
                        pages={getWeekdayPagePlan(original, getSubjectRemainingPageCount(original), getDiffDays(original.targetDate))}
-                       pageLabel={getPageLabel(sub)} step={getWeekdayPageStep(original)}
-                       onToggle={dayId => onUpdateSubject(toggleStudyWeekday(original, dayId))}
-                       onStep={(dayId, direction) => onUpdateSubject(stepWeekdayPages(original, dayId, direction, 1))}
+                       pageLabel={getPageLabel(sub)} step={getWeekdayPageStep(original)} minutesPerPage={minutesPerPage}
+                       onToggle={dayId => onUpdateSubject(withWeekdayMinutes(toggleStudyWeekday(original, dayId), minutesPerPage))}
+                       onStep={(dayId, direction) => onUpdateSubject(minutesPerPage[dayId] > 0
+                         ? stepWeekdayMinutes(original, dayId, direction, minutesPerPage)
+                         : withWeekdayMinutes(stepWeekdayPages(original, dayId, direction, 1), minutesPerPage))}
+                       onSetMinutes={(dayId, minutes) => onUpdateSubject(setWeekdayMinutes(original, dayId, minutes, minutesPerPage))}
                      />
                    );
                  })()}

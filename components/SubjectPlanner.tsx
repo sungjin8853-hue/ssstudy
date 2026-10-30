@@ -10,6 +10,8 @@ import {
   getSubjectRemainingPageCount,
   WEEKDAYS
 } from '../utils/schedule';
+import { formatDuration } from '../utils/weekPlan';
+import { PlanPriorityNote } from './SpeedPanels';
 
 interface Props {
   onAddSubject: (s: Subject) => void;
@@ -96,6 +98,17 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   };
 
   const word = pageWord(normalizePageLabel(pageLabel));
+  // 계획은 시간으로 본다: 한 장당 시간(임시값)을 넣고 마감을 정하면 공부하는 날 하루 몇 시간인지 미리 보여 준다(실제 할당은 페이지)
+  const initialValue = Number(initialMinutes);
+  const previewPlan = (() => {
+    if (!date || chapterParse.error || !(initialValue > 0)) return null;
+    const draft = createNewStudyPlan(name || '새 과목', startPage, pages, date, isRequired, scheduledWeekdays, 0, pageLabel, chapterParse.chapters);
+    const plan = calculateFreshWeekdayPagePlan(draft, getSubjectRemainingPageCount(draft), getDiffDays(date));
+    const days = scheduledWeekdays.filter(day => (plan[day] || 0) > 0);
+    if (!days.length) return null;
+    const week = days.reduce((sum, day) => sum + (plan[day] || 0), 0) * initialValue;
+    return { perDay: week / days.length, week };
+  })();
   const labelClass = 'ml-1 text-[13px] font-bold text-slate-500';
   const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-base font-bold outline-none transition-all focus:ring-4 focus:ring-indigo-500/10';
   return (
@@ -201,6 +214,12 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               })}
             </div>
           </div>
+          {previewPlan && (
+            <p data-testid="new-plan-time" className="px-1 text-[14px] font-black text-indigo-700">
+              공부하는 날 하루 약 {formatDuration(previewPlan.perDay)} · 한 주 {formatDuration(previewPlan.week)}
+            </p>
+          )}
+          <PlanPriorityNote />
           <p className="px-1 text-[13px] font-bold text-slate-500">
             학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.
           </p>
