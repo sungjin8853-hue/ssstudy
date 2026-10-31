@@ -28,6 +28,8 @@ import {
   getAllSubjectReviewIds,
   getDiffDays,
   getSubjectStages,
+  getLogPlanPages,
+  getPlanRemainingScale,
   getSubjectCompletedPageCount,
   getSubjectTotalPageCount
 } from '../utils/schedule';
@@ -210,7 +212,14 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
           return { id: stage.id, name: stage.name, pages, done: Math.min(pages, Math.max(0, stage.completedPage - stage.startPage + 1)), status: stage.status, isFollowUp: stage.isFollowUp };
         }).filter(stage => stage.pages > 0);
         const diffDays = subject.targetDate ? getDiffDays(subject.targetDate, now) : null;
-        const check = buildPlanCheck({ logs: logs.filter(log => log.subjectId === subject.id), remainingPages: total - done, diffDays, now });
+        const subjectLogs = logs.filter(log => log.subjectId === subject.id);
+        const rawCheck = buildPlanCheck({ logs: subjectLogs, remainingPages: total - done, diffDays, now });
+        // 단계마다 한 쪽의 계획 시간이 다르면(느린 후행과목 등) 쪽수 속도로는 늦음 · 빠름을 잘못 본다: 지금 단계 페이지로 바꿔 견준다(31일).
+        // 효율(분/쪽)은 실제 기록 그대로
+        const check = subject.planMinutesPerPage
+          ? { ...buildPlanCheck({ logs: subjectLogs.map(log => ({ ...log, pagesRead: getLogPlanPages(subject, log) })), remainingPages: (total - done) * getPlanRemainingScale(subject), diffDays, now }),
+            firstEfficiency: rawCheck.firstEfficiency, recentEfficiency: rawCheck.recentEfficiency }
+          : rawCheck;
         const minutes = minutesBySubject.get(subject.id) || 0;
         return {
           id: subject.id, name: subject.name, pageLabel: getPageLabel(subject), total, done, percent: total > 0 ? Math.round((done / total) * 100) : 0,

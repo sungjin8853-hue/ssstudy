@@ -10951,3 +10951,28 @@ test('31st checks: the week share counts study days to the deadline; a day past 
   assert.equal(sch.planPagesToActualPages(staged, 8), 5);
   assert.equal(sch.planPagesToActualPages({ ...staged, planMinutesPerPage: undefined }, 8), 8, 'without stage plan times nothing changes');
 });
+
+test('31st related parts: stage completion estimates follow the stage plan times; the trend plan check paces by elapsed days and in current-stage pages', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 9, 31, 9, 0, 0) });
+  const sch = loadSource('utils/schedule.ts');
+  const { estimateStageSchedule } = loadSource('utils/completionEstimate.ts');
+  const report = loadSource('utils/studyReport.ts');
+  const key = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const deadline = new Date(2026, 9, 31); deadline.setDate(deadline.getDate() + 40);
+  const base = { id: 'o', name: '본', startPage: 1, totalPages: 30, completedPages: 0, targetDate: key(deadline), scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], planStageId: 'o',
+    followUpSubjects: [{ id: 'f', name: '후행', startPage: 1, endPage: 60, completedPage: 0 }] };
+  const timed = { ...base, planMinutesPerPage: { o: 3, f: 6 } };
+  timed.scheduledWeekdayPages = sch.calculateFreshWeekdayPagePlan(timed, 90, 40);
+  const end = estimateStageSchedule(timed).completionDates.get('f');
+  const daysLeft = Math.round((end - new Date(2026, 9, 31)) / 86400e3);
+  assert.ok(daysLeft >= 37 && daysLeft <= 40, `the slower follow-up is expected to end near the deadline (day ${daysLeft} of 40), not long before it`);
+  // 계획 점검: 5일 동안 하루 2쪽씩(60쪽 · 35일 계획과 같은 속도) → 시작한 지 1주가 안 돼도 "늦음"이 아니다
+  const today = new Date(2026, 9, 31, 9);
+  const logs = [1, 2, 3, 4, 5].map(back => { const d = new Date(today); d.setDate(d.getDate() - back); return { id: `p${back}`, subjectId: 's', pagesRead: 2, timeSpentMinutes: 6, timestamp: d.toISOString(), studyDate: key(d) }; });
+  const check = report.buildPlanCheck({ logs, remainingPages: 50, diffDays: 30, now: today });
+  assert.equal(check.weeklyPages, 14, 'paced over the 5 days studied (to yesterday), not over a fixed 7');
+  assert.notEqual(check.status, 'late');
+  // 화면: 단계별 계획 시간이 있는 과목은 지금 단계 페이지로 견준다
+  const source = fs.readFileSync(path.resolve(__dirname, '../components/HistoryCharts.tsx'), 'utf8');
+  assert.ok(source.includes('getLogPlanPages(subject, log)') && source.includes('(total - done) * getPlanRemainingScale(subject)'));
+});

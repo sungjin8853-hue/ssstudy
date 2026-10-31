@@ -674,7 +674,10 @@ export const buildPlanCheck = (input: { logs: StudyLog[]; remainingPages: number
   const recent = rows.filter(row => row.key >= recentStart);
   const recentPages = recent.reduce((sum, row) => sum + row.pages, 0);
   const recentMinutes = recent.reduce((sum, row) => sum + row.minutes, 0);
-  const activeDays = firstKey === null ? 28 : Math.min(28, Math.max(7, dayNumber(today) - dayNumber(firstKey) + 1));
+  // 속도를 나누는 날 수: 첫 기록부터 오늘까지(오늘 기록이 아직 없으면 어제까지), 최대 4주. 예전에는 최소 7일로 나눠
+  // 시작한 지 1주가 안 되면 계획대로 해도 속도가 작게 나와 "늦음"으로 보였다(31일 점검)
+  const lastKey = rows.some(row => row.key === today) ? today : getLocalDateKey(shiftDays(todayStart, -1));
+  const activeDays = firstKey === null ? 28 : Math.min(28, Math.max(1, dayNumber(lastKey) - dayNumber(firstKey) + 1));
   const weeks = activeDays / 7;
   const weeklyPages = recentPages / weeks;
   const weeklyMinutes = recentMinutes / weeks;

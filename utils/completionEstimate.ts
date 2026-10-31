@@ -4,6 +4,7 @@ import {
   calculateFreshWeekdayPagePlan,
   getDiffDays,
   getLocalDateKey,
+  getPlanStageRatio,
   getSubjectRemainingPageCount,
   getSubjectStages,
   getWeekdayPagePlan,
@@ -65,18 +66,20 @@ export const estimateStageSchedule = (subject: Subject): StageScheduleEstimate =
     date.setDate(cursor.getDate() + dayOffset);
     let availablePages = Math.max(0, weekdayPlan[date.getDay()] || 0);
 
-    while (availablePages > 0 && activeStageIndex >= 0) {
+    // 하루 할 일은 지금 단계 페이지로 센 값: 다른 단계(후행과목)를 풀 때는 계획 시간 비율로 바꿔 쓴다(31일: 느린 후행과목의 완료 예상일이 너무 이르게 나오지 않게)
+    while (availablePages > 1e-9 && activeStageIndex >= 0) {
       const stage = stages[activeStageIndex];
-      const pages = Math.min(availablePages, remainingByStage[activeStageIndex]);
+      const ratio = getPlanStageRatio(subject, stage.id);
+      const pages = Math.min(availablePages / ratio, remainingByStage[activeStageIndex]);
       if (pages > 0) {
         const events = studyEvents.get(stage.id) || [];
         events.push({ date: new Date(date), pages });
         studyEvents.set(stage.id, events);
         remainingByStage[activeStageIndex] -= pages;
-        availablePages -= pages;
+        availablePages -= pages * ratio;
       }
 
-      if (remainingByStage[activeStageIndex] <= 0) {
+      if (remainingByStage[activeStageIndex] <= 1e-9) {
         completionDates.set(stage.id, new Date(date));
         activeStageIndex = remainingByStage.findIndex((pages, index) => index > activeStageIndex && pages > 0);
       }
