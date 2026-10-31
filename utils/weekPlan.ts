@@ -421,7 +421,8 @@ export const buildPlanReviewCells = (subjects: Subject[], logs: StudyLog[], subj
     });
     return cells;
   };
-  const basic = time.basicReview > 0 ? cellsOf(1, time.basicReview) : null;
+  // 기본 복습은 같은 페이지를 다시 보는 것이라 시간만 더하고 페이지는 더하지 않는다(하루 평균 페이지가 두 번 세지 않게)
+  const basic = time.basicReview > 0 ? cellsOf(0, time.basicReview) : null;
   const reviews = (stage?.reviewSubjectIds || []).flatMap(reviewId => {
     const review = subjects.find(item => item.id === reviewId);
     const left = review ? getSubjectRemainingPageCount(review) : 0;

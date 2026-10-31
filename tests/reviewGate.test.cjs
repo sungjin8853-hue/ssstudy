@@ -6550,6 +6550,7 @@ test('even day time across stages (31st): a slower follow-up gets fewer pages a 
   const studyCells = { 1: { weekday: 1, pages: 6, carryover: 0, minutes: 18, spreadMinutes: 0, scheduled: true } };
   const cells = buildPlanReviewCells([parent, review], [], parent, studyCells);
   assert.equal(cells.basic[1].minutes, 4.5);
+  assert.equal(cells.basic[1].pages, 0, 'basic review re-reads the same pages: time only, so 하루 평균 페이지 does not count them twice');
   assert.equal(cells.reviews[0].cells[1].pages, 3, 'the review subject has 6 of 12 pages: half of each study page');
   assert.equal(cells.reviews[0].cells[1].minutes, 6, '6 study pages × 3 min × 2/3 × half');
   // 학습 실행의 기본 복습 예상 시간(재기 전)도 공부의 1/4

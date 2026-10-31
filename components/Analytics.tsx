@@ -5,6 +5,7 @@ import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/revie
 import { ReviewGrowthSettings } from './PageGrowth';
 import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
+import { buildStudyOrderForDate } from './SessionLogger';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
 import { buildDueReviewWeekCells, buildPlanReviewCells, buildWeekPlan, currentPlanStageId, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withPlanTimes } from '../utils/weekPlan';
@@ -13,11 +14,9 @@ import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatE
 import {
   calculateFreshWeekdayPagePlan,
   calculateWeeklyRequiredPages,
+  getPlanRemainingScale,
   getDiffDays,
   getLocalDateKey,
-  getPastCarryoverPages,
-  getPlanningDayCount,
-  getSubjectDayRemainingPages,
   getWeekdayPagePlan,
   getWeekdayPageStep,
   getLogStudyDate,
@@ -378,20 +377,13 @@ export const Analytics: React.FC<Props> = ({
         .reduce((sum, log) => sum + log.pagesRead, 0);
       const planningRemaining = remaining + activeDayCompletedPages;
       const scheduledWeekdays = normalizeWeekdays(sub.scheduledWeekdays);
-      const weeklyRequiredPages = calculateWeeklyRequiredPages(planningRemaining, diffDays);
+      const weeklyRequiredPages = calculateWeeklyRequiredPages(planningRemaining * getPlanRemainingScale(sub), diffDays, sub.scheduledWeekdays);
       const weekdayPagePlan = getWeekdayPagePlan({ ...sub, targetDate: effectiveTargetDate }, planningRemaining, diffDays);
-      const rawCarryoverPages = getPastCarryoverPages(sub, logs, activeStudyDate, todayDateKey);
-      const carryoverPaidPages = Math.min(rawCarryoverPages, activeDayCompletedPages);
-      const deadlinePlan = getPlanningDayCount(diffDays) < 7
-        ? getSubjectDayRemainingPages({ ...sub, targetDate: effectiveTargetDate }, logs, activeWeekday, activeStudyDate)
-        : null;
-      const carryoverPages = deadlinePlan?.carryoverPages ?? Math.min(remaining, Math.max(0, rawCarryoverPages - carryoverPaidPages));
-      const activeDayPagesAfterCarryover = Math.max(0, activeDayCompletedPages - carryoverPaidPages);
-      const recommendedDailyPages = deadlinePlan?.remainingDayPages ?? Math.min(
-        remaining,
-        Math.max(0, (weekdayPagePlan[activeWeekday] || 0) - activeDayPagesAfterCarryover)
-        + carryoverPages
-      );
+      // 오늘 권장량 · 이월은 학습 실행의 "오늘 할 일"과 같은 계산(미리 한 양 · 단계별 계획 시간 · 다음 단계로 넘치는 몫까지)을 쓴다(31일 점검:
+      // 여기만 예전 계산이라 후행과목이 있거나 미리 한 날에 학습 설정의 권장량 · 이월이 학습 실행과 달랐다)
+      const todayItem = buildStudyOrderForDate([{ ...sub, targetDate: effectiveTargetDate }], logs, activeWeekday, activeStudyDate)[0];
+      const carryoverPages = todayItem?.carryoverPages ?? 0;
+      const recommendedDailyPages = todayItem?.remainingDayPages ?? 0;
       const stats = calculateStats(
         subLogs,
         remaining,

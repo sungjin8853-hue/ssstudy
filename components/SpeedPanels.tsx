@@ -198,7 +198,7 @@ export const WeekdayPagesEditor: React.FC<{
     <div data-testid="weekday-pages" className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3 px-1">
         <p className="text-[13px] font-bold text-slate-500">학습 요일 · 요일별 공부 시간<span className="ml-1 font-semibold">(복습 제외 · 직접 공부)</span></p>
-        <p data-testid="weekday-pages-total" className="font-mono text-[13px] font-bold tabular-nums text-slate-500">
+        <p data-testid="weekday-pages-total" className="shrink-0 whitespace-nowrap font-mono text-[13px] font-bold tabular-nums text-slate-500">
           {allTimed ? `한 주 ${formatDurationShort(totalMinutes)}` : `합계 ${totalPages}${pageLabel}`}
         </p>
       </div>
