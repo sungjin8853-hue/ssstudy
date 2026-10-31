@@ -1944,7 +1944,12 @@ test('masking respects occurrence offsets: an identical word used as a condition
   assert.deepEqual(noteSummary.getMaskedNoteSpans(questions, new Set([first.key])), first.answerSpans);
   const chained = questionsFor('a:b:c');
   const masks = noteSummary.getMaskedNoteSpans(chained, new Set(chained.map(q => q.key)));
-  assert.deepEqual(masks.map(span => 'a:b:c'.slice(span.start, span.end)), ['c', 'c']);
+  // 이번에 물은 칸은 모두 가린다(31일): 사슬 가운데 b도 값이라 가리고, 맨 앞 a는 단서라 남긴다
+  assert.deepEqual(masks.map(span => 'a:b:c'.slice(span.start, span.end)), ['b', 'c']);
+  const onlyReverse = noteSummary.getMaskedNoteSpans(chained, new Set(chained.filter(q => q.kind === 'reverse').map(q => q.key)));
+  assert.deepEqual(onlyReverse.map(span => 'a:b:c'.slice(span.start, span.end)), ['b', 'c'], 'a reverse question hides the value side it was given');
+  const headBlank = chained.find(q => q.kind === 'blank' && q.answer === 'a');
+  assert.deepEqual(noteSummary.getMaskedNoteSpans(chained, new Set([headBlank.key])), [], 'the first cell stays visible as the cue');
 });
 
 const planningToday = new Date(2026, 9, 12, 12);

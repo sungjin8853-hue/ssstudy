@@ -2,24 +2,23 @@ import React, { useState } from 'react';
 import { buildReviewQuestions } from '../utils/reviewQuestions';
 import type { NoteQuestion, AnswerSpan } from '../utils/reviewQuestions';
 
+const VALUE_KINDS: NoteQuestion['kind'][] = ['direct', 'order-next', 'reconstruct', 'order-reconstruct', 'remaining'];
+const overlaps = (a: AnswerSpan, b: AnswerSpan) => a.nodeId === b.nodeId && a.start < b.end && b.start < a.end;
+
+/**
+ * 가릴 칸: 가릴 문제마다 그 관계의 값 쪽(앞으로 묻는 문제는 답, 거꾸로 묻는 문제는 주어진 값)을 가린다(31일 요청: 이번에 낸 문제는 모두 가린다).
+ * 값 = 노트에서 어떤 앞 칸 "다음"에 오는 칸. 줄 맨 앞 칸처럼 값이 아닌 곳은 빈칸 문제로 물었어도 보인 채로 남아 무엇을 떠올릴지 알려 준다.
+ * 사슬(a:b:c)의 가운데 값도 물었으면 가린다.
+ */
 export function getMaskedNoteSpans(questions: NoteQuestion[], maskedKeys: Set<string>): AnswerSpan[] {
-  const forward = questions.filter(question => question.direction === 'forward' && !['blank', 'far'].includes(question.kind));
-  const candidates = forward.filter(question => maskedKeys.has(question.key)).flatMap(question => question.answerSpans);
-  // A piece of text that is also a question condition/prompt stays visible.
-  const protectedSpans = forward.filter(question => question.kind !== 'remaining').flatMap(question => question.promptSpans);
-  return candidates.flatMap(candidate => {
-    let pieces = [candidate];
-    protectedSpans.filter(span => span.nodeId === candidate.nodeId).forEach(protectedSpan => {
-      pieces = pieces.flatMap(piece => {
-        if (protectedSpan.end <= piece.start || protectedSpan.start >= piece.end) return [piece];
-        return [
-          ...(protectedSpan.start > piece.start ? [{ ...piece, end: protectedSpan.start }] : []),
-          ...(protectedSpan.end < piece.end ? [{ ...piece, start: protectedSpan.end }] : [])
-        ];
-      });
-    });
-    return pieces;
-  });
+  const values = questions.filter(question => question.direction === 'forward' && VALUE_KINDS.includes(question.kind)).flatMap(question => question.answerSpans);
+  const masks: AnswerSpan[] = [];
+  questions
+    .filter(question => maskedKeys.has(question.key) && question.kind !== 'recall' && !question.convert)
+    .flatMap(question => (question.direction === 'forward' ? question.answerSpans : question.promptSpans) ?? [])
+    .filter(span => values.some(value => overlaps(span, value)))
+    .forEach(span => { if (!masks.some(mask => mask.nodeId === span.nodeId && mask.start === span.start && mask.end === span.end)) masks.push(span); });
+  return masks;
 }
 
 const RecallAnswer: React.FC<{ answer: string }> = ({ answer }) => {

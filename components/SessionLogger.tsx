@@ -12,7 +12,7 @@ import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedRev
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
-import { calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
+import { REVIEW_MASK_INTERVAL_MS, calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
 import type { QuestionLineEdit } from './ReviewQuestionTools';
 import { planReviewRemoval, replaceMemoLine, REMOVE_REASON_LABELS } from '../utils/reviewRemoval';
@@ -2425,9 +2425,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           : gate.logId === item.log.id && gate.questionKey === question.key);
         const practice = gatePractice;
         const done = Boolean(entry && practice?.completed.includes(entry.id));
-        return previous?.masked || (previous?.intervalMs || 0) >= 8 * 86400000
-          || (done && calculateQuestionPerformance(previous, practice!.wrongCounts[entry!.id] || 0, practice!.attempts[entry!.id] || 0,
-            { grades: practice!.grades[entry!.id], nowMs, unit: isConvertUnitKey(question.key) }).masked);
+        // 이번에 낸(끝낸) 문제는 모두 가린다(31일 요청). 이번에 묻지 않았어도 간격이 8일에 닿은 답은 전처럼 가린다
+        return done || previous?.masked || (previous?.intervalMs || 0) >= REVIEW_MASK_INTERVAL_MS;
       }).map(question => question.key);
     };
     const maskedByItem = isGateReviewComplete ? preSessionGateMemoItems.map(item => ({ item, maskedKeys: maskedKeysFor(item) })) : [];
@@ -2512,7 +2511,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         completion={(
           <div className="flex flex-col gap-4">
             {maskedByItem.some(entry => entry.maskedKeys.length > 0) && (
-              <p className="text-sm font-medium leading-relaxed text-slate-700">복습 간격이 8일에 닿은 답은 가려져요. 가려진 칸을 누르면 원문이 보이고, 다시 누르면 가려져요.</p>
+              <p className="text-sm font-medium leading-relaxed text-slate-700">이번에 물어본 답과 복습 간격이 8일에 닿은 답은 가려져요. 가려진 칸을 누르면 원문이 보이고, 다시 누르면 가려져요.</p>
             )}
             {maskedByItem.map(({ item, maskedKeys }) => (
               <section key={item.log.id} className="space-y-2">
