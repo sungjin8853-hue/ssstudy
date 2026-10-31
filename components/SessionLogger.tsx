@@ -1919,7 +1919,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (!onUpdateSubjects) return;
 
     const resetDateKey = getLocalDateKey();
-    // 갱신은 계획을 다시 세우는 것: 단계별 계획 시간(공부 + 기본 복습 + 복습과목, 재기 전이면 임시값)을 새로 적고
+    // 갱신은 계획을 다시 세우는 것: 단계별 계획 시간(직접 공부 시간, 재기 전이면 임시값)을 새로 적고 — 복습 일정(기록의 다음 복습 시각)은 건드리지 않는다
     // 그 비율로 하루 시간이 고르게 나눈다(31일 요청). 요일 사이 비율은 저장된 요일별 페이지 비율 그대로
     const updatedSubjects = subjects.map(subject => {
       const planned = withPlanTimes(subjects, logs, subject);
