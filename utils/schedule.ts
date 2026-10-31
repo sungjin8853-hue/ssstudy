@@ -171,6 +171,17 @@ export const getActiveSubjectStage = (subject: Subject) => {
   return stages.find(stage => stage.status === 'current') || null;
 };
 
+/** 단계(과목 자신 · 후행과목)의 임시 한 페이지 시간(분). 후행과목은 그 후행과목에 정한 값, 없으면 합쳐 만든 원래 과목의 값. 없으면 0 */
+export const getStageInitialMinutesPerPage = (subjects: Subject[], subject: Subject, stageId: string) => {
+  if (stageId === subject.id) return Math.max(0, Number(subject.initialAverageTimePerPage) || 0);
+  const followUp = (subject.followUpSubjects || []).find(item => item.id === stageId);
+  if (!followUp) return 0;
+  const own = Number(followUp.initialAverageTimePerPage) || 0;
+  if (own > 0) return own;
+  const source = followUp.sourceSubjectId ? subjects.find(item => item.id === followUp.sourceSubjectId) : undefined;
+  return Math.max(0, Number(source?.initialAverageTimePerPage) || 0);
+};
+
 /* ───── 하루 시간을 고르게(31일 요청): 단계마다 한 페이지의 계획 시간이 다르면 그 비율로 페이지를 바꿔 센다 ───── */
 
 /**

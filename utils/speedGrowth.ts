@@ -2,7 +2,7 @@ import { StudyLog, Subject } from '../types';
 import { getReviewEfficiencySamples } from './math';
 import { buildEfficiencyWindows, calculateUnitEfficiency, EFFICIENCY_WINDOW_MINUTES, formatSignedTenth, PageEfficiencySample, SPEED_REFERENCE_MINUTES } from './pageGrowth';
 import { getSubjectFamily, isFamilyStudyLog } from './subjectChain';
-import { getLocalDateKey, getSubjectRemainingPageCount, getSubjectStages, parseStudyDate } from './schedule';
+import { getLocalDateKey, getStageInitialMinutesPerPage, getSubjectRemainingPageCount, getSubjectStages, parseStudyDate } from './schedule';
 
 /**
  * 학습 설정의 "속도 증가" 계산.
@@ -265,8 +265,14 @@ export const analyzeSubjectSpeed = (subjects: Subject[], logs: StudyLog[], subje
       push({ id: stage.id, name: stage.name, kind: 'current', remainingPages: stage.remainingPages, speed: baseSpeed, acceleration: baseSpeed ? baseAcceleration : null,
         basis: series.latestSpeed !== null ? 'measured' : previousSeries.latestSpeed !== null ? 'previous' : initialSpeed ? 'initial' : 'none' });
     } else if (!finished) {
-      push({ id: stage.id, name: stage.name, kind: 'followUp', remainingPages: stage.remainingPages, speed: baseSpeed, acceleration: baseSpeed ? baseAcceleration : null,
-        basis: baseSpeed ? 'inherited' : 'none' });
+      // 후행과목은 현재 단계의 속도를 이어 쓰되, 두 단계의 임시값(한 장당 시간)이 있으면 그 비율로 바꾼다(31일 요청: 현재 단계가 빨라지면 같이 빨라진다).
+      // 현재 단계 속도를 모르면 후행과목 임시값 그대로
+      const followTemp = getStageInitialMinutesPerPage(subjects, subject, stage.id);
+      const currentTemp = current ? getStageInitialMinutesPerPage(subjects, subject, current.id) : 0;
+      const ratio = followTemp > 0 && currentTemp > 0 ? currentTemp / followTemp : 1;
+      const speed = baseSpeed ? baseSpeed * ratio : followTemp > 0 ? SPEED_REFERENCE_MINUTES / followTemp : null;
+      push({ id: stage.id, name: stage.name, kind: 'followUp', remainingPages: stage.remainingPages, speed, acceleration: speed ? (baseSpeed ? baseAcceleration * ratio : 0) : null,
+        basis: baseSpeed ? 'inherited' : speed ? 'initial' : 'none' });
     }
     stage.reviewSubjectIds.forEach(reviewId => {
       const review = subjects.find(candidate => candidate.id === reviewId);

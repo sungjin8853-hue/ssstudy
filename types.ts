@@ -23,6 +23,8 @@ export interface FollowUpSubject {
   reviewSubjectIds?: string[];
   /** 이 후행과목의 단원(공부 범위). 있으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다 */
   chapters?: SubjectChapter[];
+  /** 재기 전에 정한 이 후행과목의 한 페이지 시간(분, 임시값). 학습 측정에서 바꿀 수 있다. 없으면 합쳐 만든 원래 과목의 임시값 */
+  initialAverageTimePerPage?: number;
   /** 이 후행과목을 공부하는 동안의 필수 여부. 없으면 본 과목의 값 */
   isRequired?: boolean;
   /** 이 후행과목에서 "페이지"를 부르는 글자. 없으면 본 과목의 글자 */

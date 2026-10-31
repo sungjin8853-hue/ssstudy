@@ -9,6 +9,7 @@ import {
   cleanWeekdayPagePlan,
   getActiveSubjectStage,
   getAllSubjectReviewIds,
+  getStageInitialMinutesPerPage,
   getDiffDays,
   getLocalDateKey,
   getLogStudyDate,
@@ -96,10 +97,10 @@ export const getWeekPlanSubjects = (subjects: Subject[]) => {
 /**
  * 복습과목 하나의 앞으로 7일(오늘부터) 요일별 복습량. 복습은 목표 날짜까지 끝내지 않아도 되므로(31일) 남은 양을 마감까지 나누지 않고,
  * 기록마다 잡힌 다음 복습 시각을 따라 돌아오는 양을 센다(지난 차례는 오늘에 모은다. 그 뒤로는 복습 간격대로 다시 돌아온다고 본다).
- * 복습과목에 남은 쪽수보다 많이 세지 않는다. 시간 = 쪽수 × 복습과목 효율(잰 값, 재기 전에는 공부의 2/3배).
+ * 복습과목에 남은 쪽수보다 많이 세지 않는다. 시간 = 쪽수 × 복습과목이 잰 효율(재기 전에는 시간 없음 = 측정 필요).
  */
 export const buildDueReviewWeekCells = (
-  logs: StudyLog[], parent: Subject, review: Subject, parentEfficiency: number, now = new Date()
+  logs: StudyLog[], parent: Subject, review: Subject, _parentEfficiency: number, now = new Date()
 ): Record<number, WeekCell> => {
   const DAY = 24 * 60 * 60 * 1000;
   const start = parseStudyDate(getLocalDateKey(now)).getTime();
@@ -133,7 +134,8 @@ export const buildDueReviewWeekCells = (
   }
   const own = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, parent.id, review.id));
   const measured = own.averageTimePerPage > 0;
-  const efficiency = measured ? own.averageTimePerPage : parentEfficiency * REVIEW_SUBJECT_PLAN_RATIO;
+  // 복습 시간은 잰 값만 쓴다(임시값 없음: 재기 전에는 0 = 측정 필요)
+  const efficiency = measured ? own.averageTimePerPage : 0;
   const sigma = measured ? own.standardDeviation : 0;
   const scheduled = normalizeWeekdays(review.scheduledWeekdays);
   const cells: Record<number, WeekCell> = {};
@@ -330,9 +332,6 @@ export const toggleStudyWeekday = (subject: Subject, dayId: number): Subject => 
 
 /** ▲▼ 한 번에 바꾸는 시간(분) */
 export const PLAN_MINUTE_STEP = 10;
-/** 복습 시간의 임시값(재기 전): 기본 복습은 공부 시간의 1/4, 복습과목은 2/3배(31일 요청). 재 둔 값이 있으면 그 값 */
-export const BASIC_REVIEW_PLAN_RATIO = 1 / 4;
-export const REVIEW_SUBJECT_PLAN_RATIO = 2 / 3;
 
 /** 과목 전체의 효율(분/페이지): 잰 값, 재기 전이면 처음 정한 임시값. 0이면 아직 모른다 */
 const subjectBaseEfficiency = (logs: StudyLog[], subject: Subject) => (
@@ -349,8 +348,20 @@ export const getStageMinutesPerPage = (subjects: Subject[], logs: StudyLog[], su
   const family = getSubjectFamily(subjects, subject.id, stageId);
   const measured = calculateRecentTimedPageAverage(logs.filter(log => isFamilyStudyLog(family, log))).averageTimePerPage;
   if (measured > 0) return measured;
-  const source = family.sourceSubjectId ? subjects.find(item => item.id === family.sourceSubjectId) : undefined;
-  if (source && (source.initialAverageTimePerPage || 0) > 0) return source.initialAverageTimePerPage as number;
+  // 재지 않은 후행과목: 지금 단계의 잰 효율 × (후행과목 임시값 ÷ 지금 단계 임시값). 지금 단계의 효율이 바뀌면 같이 바뀐다(31일 요청)
+  const followTemp = getStageInitialMinutesPerPage(subjects, subject, stageId);
+  if (followTemp > 0) {
+    const currentId = currentPlanStageId(subject);
+    if (currentId !== stageId) {
+      const currentTemp = getStageInitialMinutesPerPage(subjects, subject, currentId);
+      const currentFamily = getSubjectFamily(subjects, subject.id, currentId);
+      const currentMeasured = currentId === subject.id
+        ? calculateRecentTimedPageAverage(logs.filter(log => log.subjectId === subject.id && !log.reviewParentSubjectId)).averageTimePerPage
+        : calculateRecentTimedPageAverage(logs.filter(log => isFamilyStudyLog(currentFamily, log))).averageTimePerPage;
+      if (currentTemp > 0 && currentMeasured > 0) return currentMeasured * (followTemp / currentTemp);
+    }
+    return followTemp;
+  }
   return base;
 };
 
@@ -368,21 +379,21 @@ export interface StagePlanTime {
 /**
  * 계획에 쓰는 한 단계 한 페이지의 시간 = 그 과목을 직접 공부하는 시간. 기본 복습 · 복습과목은 계획 시간에 합치지 않고 나눠서 따로 보여 준다(31일 요청).
  * 복습은 직접 할당하지 않고 공부한 페이지를 따라오므로 공부 한 페이지에 붙는 시간으로 센다.
- * 복습 시간은 잰 값, 재기 전이면 기본 복습 = 공부의 1/4, 복습과목 = 공부의 2/3배.
+ * 복습 시간은 잰 값만 쓴다(재기 전에는 0 = 측정 필요). 후행과목의 공부 시간은 잰 값, 재기 전이면 임시값 비율로 추측.
  */
 export const getStagePlanTime = (subjects: Subject[], logs: StudyLog[], subject: Subject, stageId: string): StagePlanTime => {
   const study = getStageMinutesPerPage(subjects, logs, subject, stageId);
   if (!(study > 0)) return { study: 0, basicReview: 0, reviewSubjects: 0, total: 0 };
+  // 복습 시간은 잰 값만(임시값 없음)
   const measuredBasic = calculateBasicReviewAverageTimePerPage(logs, subject.id);
-  const basicReview = subject.reviewEnabled === false ? 0 : measuredBasic > 0 ? measuredBasic : study * BASIC_REVIEW_PLAN_RATIO;
+  const basicReview = subject.reviewEnabled === false ? 0 : Math.max(0, measuredBasic);
   const stage = getSubjectStages(subject).find(item => item.id === stageId);
   const reviewSubjects = (stage?.reviewSubjectIds || []).reduce((sum, reviewId) => {
     const review = subjects.find(item => item.id === reviewId);
     const left = review ? getSubjectRemainingPageCount(review) : 0;
     if (!review || left <= 0 || !stage) return sum;
     const measured = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, subject.id, reviewId)).averageTimePerPage;
-    const rate = measured > 0 ? measured : study * REVIEW_SUBJECT_PLAN_RATIO;
-    return sum + rate * Math.min(1, left / Math.max(1, stage.remainingPages));
+    return sum + Math.max(0, measured) * Math.min(1, left / Math.max(1, stage.remainingPages));
   }, 0);
   return { study, basicReview, reviewSubjects, total: study };
 };
@@ -429,8 +440,7 @@ export const buildPlanReviewCells = (subjects: Subject[], logs: StudyLog[], subj
     if (!review || left <= 0 || !stage || !(time.study > 0)) return [];
     const share = Math.min(1, left / Math.max(1, stage.remainingPages));
     const measured = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, subject.id, reviewId)).averageTimePerPage;
-    const rate = measured > 0 ? measured : time.study * REVIEW_SUBJECT_PLAN_RATIO;
-    return [{ id: reviewId, name: review.name, cells: cellsOf(share, rate * share) }];
+    return [{ id: reviewId, name: review.name, cells: cellsOf(share, Math.max(0, measured) * share) }];
   });
   return { basic, reviews };
 };

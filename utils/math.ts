@@ -178,8 +178,7 @@ export const resolveBasicReviewAverageTimePerPage = (
       0
     ).averageTimePerPage;
     const studyAverage = measuredAverage || fallbackSubject.initialAverageTimePerPage || 0;
-    // 기본 복습 시간의 임시값: 공부 시간의 1/4(31일 요청, 전에는 1/2)
-    if (studyAverage > 0) return studyAverage / 4;
+    if (studyAverage > 0) return studyAverage / 2;
   }
 
   return 0;

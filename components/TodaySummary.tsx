@@ -794,6 +794,18 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 그 아래 측정 화면과 같은 세션 메모 · 정리노트를 크게 쓴 뒤 "추가 저장". 맨 아래에 오늘 추가한 기록(모든 과목)을 보여 주고 고치거나 지울 수 있다.
   const addableSubjects = subjects.filter(subject => !reviewSubjectOwnerMap.has(subject.id) && getSubjectRemainingPageCount(subject) > 0);
   const addingInline = changingAmount && modalMode === 'add';
+  // "+ 추가"를 누르기 전에 고른 과목(지금 보고 있는 과목, 복습과목이면 그것을 거느린 학습과목)을 바로 고른다(31일 요청)
+  const preselectedAddSubject = (() => {
+    const id = reviewSubjectOwnerMap.get(resolvedDetailSubjectId)?.id ?? resolvedDetailSubjectId;
+    return addableSubjects.find(subject => subject.id === id) ?? null;
+  })();
+  const [pickingAddSubject, setPickingAddSubject] = useState(false);
+  const openAmountDialog = () => {
+    closeModal();
+    setChangingAmount(true);
+    setPickingAddSubject(!preselectedAddSubject);
+    if (preselectedAddSubject) openAddModal(preselectedAddSubject);
+  };
   const todayAdded = buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)
     .filter(summary => summary.kind === 'study');
   const [sessionNote, setSessionNote] = useState('');
@@ -820,17 +832,23 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 sm:px-6">
           <section aria-label="과목 고르기" className="flex flex-col gap-2">
-            <p className="text-sm font-black text-slate-700">기록을 추가할 과목</p>
-            <div className="flex flex-wrap gap-2">
+            {addingInline && selectedSubject && !pickingAddSubject ? (
+              <div data-testid="amount-subject-picked" className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-black text-slate-700">기록을 추가할 과목 · <span className="text-indigo-700">{selectedSubject.name}</span></p>
+                <button type="button" data-testid="amount-subject-change" onClick={() => setPickingAddSubject(true)}
+                  className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 hover:bg-slate-50">다른 과목</button>
+              </div>
+            ) : <p className="text-sm font-black text-slate-700">기록을 추가할 과목</p>}
+            {(pickingAddSubject || !addingInline || !selectedSubject) && <div className="flex flex-wrap gap-2">
               {addableSubjects.map(subject => (
                 <button key={subject.id} type="button" data-testid="amount-subject" aria-pressed={addingInline && subjectId === subject.id}
-                  onClick={() => openAddModal(subject)}
+                  onClick={() => { openAddModal(subject); setPickingAddSubject(false); }}
                   className={`h-11 rounded-xl border-2 px-4 text-sm font-black ${addingInline && subjectId === subject.id ? 'border-indigo-600 bg-indigo-50 text-indigo-900' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
                   {subject.name}
                 </button>
               ))}
               {addableSubjects.length === 0 && <p className="text-sm font-bold text-slate-600">남은 페이지가 있는 과목이 없어요.</p>}
-            </div>
+            </div>}
           </section>
           {addingInline && selectedSubject && (
             <section aria-label="추가할 기록" data-testid="amount-add-form" className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-3 sm:p-4">
@@ -1033,7 +1051,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </button>
           )}
           {!detailIsReview && (
-            <button type="button" data-testid="amount-change" onClick={() => { closeModal(); setChangingAmount(true); }} aria-label="학습 기록 추가" className={headerButton}>
+            <button type="button" data-testid="amount-change" onClick={openAmountDialog} aria-label="학습 기록 추가" className={headerButton}>
               <span aria-hidden="true" className="text-base leading-none">+</span>추가
             </button>
           )}

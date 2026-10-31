@@ -25,9 +25,9 @@ import { basicReviewFeedbackOf, formatSpeed, gradeSubjectCard, mostCommonFirstGr
 import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
-import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
+import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel, pageWord } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
-import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
+import { currentPlanStageId, getStageMinutesPerPage, withPlanTimes } from '../utils/weekPlan';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -149,6 +149,49 @@ const formatTime = (totalSeconds: number) => {
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
   return `${hrs > 0 ? hrs + ':' : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
+/**
+ * 학습 측정 중: 아직 시작하지 않은 후행과목의 한 장당 시간(임시값)을 손으로 정한다(31일 요청).
+ * 예상 시간 = 지금 단계의 잰 효율 × (후행과목 임시값 ÷ 지금 단계 임시값) — 지금 단계가 빨라지면 같이 바뀐다. 후행과목을 한 장이라도 재면 잰 값이 먼저다.
+ * 비우면 임시값을 지운다(합쳐 만든 원래 과목의 임시값, 없으면 지금 과목의 효율을 쓴다).
+ */
+export const FollowUpTempEditor: React.FC<{
+  stages: Array<{ id: string; name: string; temp: number; estimate: number }>;
+  pageLabel: string;
+  onSave: (stageId: string, minutes: number | undefined) => void;
+}> = ({ stages, pageLabel, onSave }) => {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const commit = (stageId: string) => {
+    const raw = drafts[stageId];
+    if (raw === undefined) return;
+    const value = Number(raw);
+    onSave(stageId, raw.trim() === '' ? undefined : Number.isFinite(value) && value > 0 ? value : undefined);
+    setDrafts(current => { const next = { ...current }; delete next[stageId]; return next; });
+  };
+  return (
+    <div data-testid="follow-up-temp" className="mt-3 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <p className="text-sm font-black text-slate-600">후행과목 한 {pageWord(pageLabel)}당 시간 <span className="font-bold text-slate-500">· 임시값 · 예상은 지금 과목의 효율을 따라 바뀌어요</span></p>
+      <div className="flex flex-col gap-2">
+        {stages.map(stage => (
+          <div key={stage.id} data-testid="follow-up-temp-row" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="min-w-0 flex-1 truncate text-sm font-black text-slate-800">{stage.name}</span>
+            <span data-testid="follow-up-temp-estimate" className="font-mono text-sm font-bold tabular-nums text-indigo-700">
+              {stage.estimate > 0 ? `예상 ${stage.estimate.toFixed(1)}분/${pagePositionLabel(pageLabel)}` : '예상 없음'}
+            </span>
+            <label className="flex items-center gap-1 text-[13px] font-bold text-slate-600">
+              <input data-testid="follow-up-temp-input" type="number" min="0" step="0.1" inputMode="decimal" aria-label={`${stage.name} 한 장당 시간(분)`}
+                value={drafts[stage.id] ?? (stage.temp > 0 ? String(stage.temp) : '')} placeholder="임시값"
+                onChange={event => setDrafts(current => ({ ...current, [stage.id]: event.target.value }))}
+                onBlur={() => commit(stage.id)} onKeyDown={event => { if (event.key === 'Enter') commit(stage.id); }}
+                className="h-11 w-24 rounded-xl border border-slate-200 bg-slate-50 px-2 text-center font-mono text-base font-black tabular-nums outline-none focus:border-indigo-500" />
+              분
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 export const MeasurementProgress: React.FC<{ pages: number; target: number | null; elapsed: string; label?: string }> = ({ pages, target, elapsed, label = DEFAULT_PAGE_LABEL }) => {
@@ -3069,6 +3112,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             </div>
             </div>
             )}
+            {!activeReviewRun && selectedSubject && onUpdateSubjects && (() => {
+              // 아직 시작하지 않은 후행과목: 한 장당 시간(임시값)을 여기서 바꾼다
+              const upcoming = getSubjectStages(selectedSubject).filter(stage => stage.isFollowUp && stage.status !== 'completed' && stage.status !== 'current');
+              if (upcoming.length === 0) return null;
+              return (
+                <FollowUpTempEditor pageLabel={pageLabel}
+                  stages={upcoming.map(stage => ({ id: stage.id, name: stage.name,
+                    temp: Number((selectedSubject.followUpSubjects || []).find(item => item.id === stage.id)?.initialAverageTimePerPage) || 0,
+                    estimate: getStageMinutesPerPage(subjects, logs, selectedSubject, stage.id) }))}
+                  onSave={(stageId, minutes) => onUpdateSubjects([{ ...selectedSubject,
+                    followUpSubjects: (selectedSubject.followUpSubjects || []).map(item => item.id === stageId ? { ...item, initialAverageTimePerPage: minutes } : item) }])} />
+              );
+            })()}
 
             </aside>
           </div>
