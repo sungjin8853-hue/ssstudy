@@ -172,7 +172,7 @@ export type ForecastKind = 'current' | 'followUp' | 'review';
  * measured: 이 과목의 속도를 쟀다 / inherited: 재지 않아서 현재 과목의 속도와 가속도로 계산 /
  * previous: 막 시작한 현재 과목(후행과목)이라 아직 25분이 안 돼 앞 과목(이전 단계)의 속도로 계산 / initial: 처음에 정해 둔 장당 시간 / none: 알 수 없다
  */
-export type ForecastBasis = 'measured' | 'inherited' | 'previous' | 'initial' | 'none';
+export type ForecastBasis = 'measured' | 'inherited' | 'ratio' | 'previous' | 'initial' | 'none';
 
 export interface ForecastItem {
   id: string;
@@ -272,7 +272,7 @@ export const analyzeSubjectSpeed = (subjects: Subject[], logs: StudyLog[], subje
       const ratio = followTemp > 0 && currentTemp > 0 ? currentTemp / followTemp : 1;
       const speed = baseSpeed ? baseSpeed * ratio : followTemp > 0 ? SPEED_REFERENCE_MINUTES / followTemp : null;
       push({ id: stage.id, name: stage.name, kind: 'followUp', remainingPages: stage.remainingPages, speed, acceleration: speed ? (baseSpeed ? baseAcceleration * ratio : 0) : null,
-        basis: baseSpeed ? 'inherited' : speed ? 'initial' : 'none' });
+        basis: baseSpeed ? (ratio !== 1 ? 'ratio' : 'inherited') : speed ? 'initial' : 'none' });
     }
     stage.reviewSubjectIds.forEach(reviewId => {
       const review = subjects.find(candidate => candidate.id === reviewId);

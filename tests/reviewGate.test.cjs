@@ -5526,7 +5526,7 @@ test('"과목·폴더 관리" subjects: weekday need in % under the weekly total
   // 한 주 필요 시간 막대는 과목 카드에(시간 비율 막대 바로 아래, 시간·페이지 칸 위). 복습과목이 없으면 시간 비율 막대는 없다.
   const card = html.slice(need);
   assert.ok(card.includes('한 주 필요 시간') && card.includes('data-testid="week-total"') && card.includes('data-testid="weekday-segment"'), 'the weekly need bar is on the subject card');
-  assert.ok(!card.includes('data-testid="subject-share"'), 'no review subject and no measured basic review time (no temporary review values): no share bar');
+  assert.ok(card.includes('data-testid="subject-share"') && card.includes('기본 복습'), 'no review subject, but basic review time (measured, else temporary 1/4) shows apart: 현재 과목 · 기본 복습 share bar');
   const progress = html.slice(html.indexOf('data-testid="subject-progress"'));
   assert.ok(progress.includes('학습 진척도') && progress.includes('role="progressbar"') && /data-testid="progress-percent"[^>]*>\d+%</.test(progress) && !/학습 진척도[^<]*\d+%/.test(progress), 'progress is the last block of the card, its % is inside the bar');
   assert.ok(!html.includes('누적 시간') && !html.includes('>효율<'), 'cumulative time and the old efficiency box are removed');
@@ -5594,7 +5594,7 @@ test('card = current stage + its review subjects: title [+names], combined speed
   assert.equal(due[3].pages, 3, 'a review due in two days comes on Wednesday');
   assert.equal(due[4].pages, 4, 'the overdue one comes back after its next interval (step 2 → 4 days from its due time: Thursday)');
   assert.equal(Object.values(due).reduce((sum, cell) => sum + cell.pages, 0), 11, 'nothing beyond seven days, and only logs that carry this review subject');
-  near(due[1].minutes, 0); // 복습 시간은 잰 값만(임시값 없음)
+  near(due[1].minutes, Math.round(4 * 3.3 * (2 / 3) * 10) / 10); // 재지 않았으면 임시값(공부 효율의 2/3배)
   const pastDeadline = buildDueReviewWeekCells(dueLogs, subjects[0], { ...subjects[1], targetDate: '2026-10-01' }, 3.3, now);
   assert.deepEqual(pastDeadline, due, 'the review subject\'s target date does not matter: reviews need not finish by it');
   const capped = buildDueReviewWeekCells(dueLogs, subjects[0], { ...subjects[1], completedPages: 18 }, 3.3, now);
@@ -6466,7 +6466,8 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { WeekdayPagesEditor } = loadSource('components/SpeedPanels.tsx');
-  const { getWeekdayMinutesPerPage, getStageMinutesPerPage, getStagePlanTime, stepWeekdayMinutes, setWeekdayMinutes, minuteStepPages, parsePlanMinutes } = loadSource('utils/weekPlan.ts');
+  const { getWeekdayMinutesPerPage, getStageMinutesPerPage, getStagePlanTime, stepWeekdayMinutes, setWeekdayMinutes, minuteStepPages, parsePlanMinutes, BASIC_REVIEW_PLAN_RATIO, REVIEW_SUBJECT_PLAN_RATIO } = loadSource('utils/weekPlan.ts');
+  assert.equal(BASIC_REVIEW_PLAN_RATIO, 1 / 4); assert.equal(REVIEW_SUBJECT_PLAN_RATIO, 2 / 3);
   const { calculateFreshWeekdayPagePlan, getWeekdayPagePlan, getSubjectRemainingPageCount, getDiffDays } = loadSource('utils/schedule.ts');
   const days = [{ id: 1, label: '월' }, { id: 2, label: '화' }, { id: 3, label: '수' }];
   const editor = renderToStaticMarkup(React.createElement(WeekdayPagesEditor, { days, selected: [1, 2, 3], pages: { 1: 30, 2: 24, 3: 10 }, pageLabel: 'P', step: 1,
@@ -6475,7 +6476,7 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
   assert.ok(editor.includes('한 주 3h 12m') && !editor.includes('합계 64P') && !/>30<span/.test(editor), 'week total in time, no page values');
   assert.ok(editor.includes('(복습 제외 · 직접 공부)') && editor.includes('한 요일은 최대 3h 12m까지'), 'the time is direct study only; the most one day can take is the week');
   assert.ok(editor.includes('월요일 공부 시간 늘리기') && editor.includes('월요일 공부 시간 약 10분씩') && editor.includes('월요일 공부 시간 직접 넣기'), 'about 10-minute steps and a typed value');
-  assert.ok(editor.includes('하루 할당량 우선') && !editor.includes('1/4') && !editor.includes('2/3배') && editor.includes('복습 제외') && editor.includes('잰 시간만'), 'the note: time plans, pages are assigned, review subjects apart, review temporary values');
+  assert.ok(editor.includes('하루 할당량 우선') && editor.includes('1/4') && editor.includes('2/3배') && editor.includes('복습 제외') && editor.includes('재기 전에는 임시값'), 'the note: time plans, pages are assigned, review subjects apart, review temporary values');
   assert.equal(minuteStepPages(3), 3); assert.equal(minuteStepPages(30), 1); assert.equal(minuteStepPages(0), 1);
   assert.equal(parsePlanMinutes('1:30'), 90); assert.equal(parsePlanMinutes('90'), 90); assert.equal(parsePlanMinutes('1h30m'), 90);
   assert.equal(parsePlanMinutes('1시간 30분'), 90); assert.equal(parsePlanMinutes('2h'), 120); assert.ok(Number.isNaN(parsePlanMinutes('abc')));
@@ -6487,7 +6488,8 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
   const withReview = { ...subject, reviewSubjectIds: ['r'] };
   const reviewSubject = { id: 'r', name: '오답', startPage: 1, totalPages: 30, completedPages: 0, targetDate: '2026-11-22' };
   const time = getStagePlanTime([withReview, reviewSubject], [], withReview, 's');
-  assert.equal(time.basicReview, 0); assert.equal(time.reviewSubjects, 0, 'no temporary review values (31st): review time needs measuring');
+  assert.equal(time.basicReview, 0.75); assert.equal(time.reviewSubjects, 3 * (2 / 3) * (30 / 60), 'not measured: temporary review values (1/4, 2/3), the review subject only as far as it has pages left');
+  assert.equal(time.total, 3, 'the plan time stays direct study only');
   assert.equal(time.total, 3, 'the plan time is direct study only; basic review and review subjects are apart (31st)');
   assert.equal(getWeekdayMinutesPerPage([withReview, reviewSubject], [], withReview)[1], 3, 'a review subject does not change the weekday time');
   const remaining = getSubjectRemainingPageCount(subject); const diff = getDiffDays(subject.targetDate);
@@ -6545,14 +6547,15 @@ test('even day time across stages (31st): a slower follow-up gets fewer pages a 
   // 페이지가 바뀌면 그 값은 지금 단계의 페이지다
   const restarted = sch.withPlanRestart(moved, { ...moved, scheduledWeekdayPages: { ...after } }, '2026-10-26');
   assert.equal(restarted.planStageId, 'f');
-  // 복습 몫: 잰 값만(31일: 임시값 없음). 복습과목 쪽수는 공부 페이지를 따라온다(남은 복습 쪽수만큼)
+  // 복습 몫: 잰 값, 재지 않았으면 임시값(기본 1/4 · 복습과목 2/3배). 복습과목 쪽수는 공부 페이지를 따라온다(남은 복습 쪽수만큼)
   const parent = { ...owner, followUpSubjects: [], reviewSubjectIds: ['r'] };
   const review = { id: 'r', name: '오답', startPage: 1, totalPages: 6, completedPages: 0, targetDate: '2026-12-20' };
   const studyCells = { 1: { weekday: 1, pages: 6, carryover: 0, minutes: 18, spreadMinutes: 0, scheduled: true } };
   const cells = buildPlanReviewCells([parent, review], [], parent, studyCells);
-  assert.equal(cells.basic, null, 'no measured basic review: no time (no temporary values)');
+  assert.equal(cells.basic[1].minutes, 4.5, 'not measured: 6 study pages × 3 min × 1/4');
+  assert.equal(cells.basic[1].pages, 0, 'basic review re-reads the same pages: time only');
   assert.equal(cells.reviews[0].cells[1].pages, 3, 'the review subject has 6 of 12 pages: half of each study page');
-  assert.equal(cells.reviews[0].cells[1].minutes, 0, 'not measured yet: no time');
+  assert.equal(cells.reviews[0].cells[1].minutes, 6, 'not measured: 6 study pages × 3 min × 2/3 × half');
   // 학습 실행의 기본 복습 예상 시간(재기 전)도 공부의 1/4
   const { resolveBasicReviewAverageTimePerPage } = loadSource('utils/math.ts');
   assert.equal(resolveBasicReviewAverageTimePerPage([], 'o', [owner]), 1.5, 'the study run keeps its old estimate (half the study time)');
@@ -10999,10 +11002,26 @@ test('31st: follow-up time is guessed from the temporary values ratio and follow
   assert.ok(Math.abs(follow.speed - current.speed / 2) < 1e-9, `follow-up speed ${follow.speed} = current ${current.speed} ÷ 2`);
   // 복습 시간 임시값 없음
   const time = getStagePlanTime([owner], [log(40)], owner, 'o');
-  assert.equal(time.basicReview, 0); assert.equal(time.reviewSubjects, 0);
+  assert.equal(time.basicReview, 4 / 4, 'not measured: the basic review temp (study 4 min/p × 1/4)'); assert.equal(time.total, 4);
   // 학습 측정 화면의 후행과목 임시값 칸
   const html = renderToStaticMarkup(React.createElement(FollowUpTempEditor, { pageLabel: 'P', stages: [{ id: 'f', name: '후행', temp: 6, estimate: 8 }], onSave() {} }));
   assert.ok(html.includes('data-testid="follow-up-temp"') && html.includes('예상 8.0분/p') && html.includes('value="6"') && html.includes('후행 한 장당 시간(분)'));
   const source = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   assert.ok(source.includes("item.id === stageId ? { ...item, initialAverageTimePerPage: minutes } : item"), 'saving writes the follow-up temp on the subject');
+});
+
+test('31st checks: follow-up fields survive loading the app; a follow-up chain guesses from the current follow-up; editing a temp alone does not restart the plan', () => {
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  const block = app.slice(app.indexOf('followUpSubjects: Array.isArray(subject.followUpSubjects)'), app.indexOf('followUpSubjects: Array.isArray(subject.followUpSubjects)') + 400);
+  assert.ok(block.includes('...followUp,'), 'loading keeps chapters, page label, required and the temp of each follow-up (they were dropped on every reload)');
+  const sch = loadSource('utils/schedule.ts');
+  const { getStageMinutesPerPage } = loadSource('utils/weekPlan.ts');
+  const src = { id: 'src', name: '원본', startPage: 1, totalPages: 20, completedPages: 0, initialAverageTimePerPage: 4 };
+  const owner = { id: 'o', name: '본', startPage: 1, totalPages: 10, completedPages: 10, targetDate: '2026-12-20', scheduledWeekdays: [1, 2, 3, 4, 5], initialAverageTimePerPage: 3,
+    followUpSubjects: [{ id: 'f1', sourceSubjectId: 'src', name: '후행1', startPage: 1, endPage: 20, completedPage: 5 }, { id: 'f2', name: '후행2', startPage: 1, endPage: 30, completedPage: 0, initialAverageTimePerPage: 8 }] };
+  const logs = [{ id: 'a', subjectId: 'o', subjectStageId: 'f1', pagesRead: 4, timeSpentMinutes: 20, timestamp: '2026-10-30T10:00:00.000Z', studyDate: '2026-10-30' }];
+  assert.equal(sch.getActiveSubjectStage(owner).id, 'f1');
+  assert.equal(getStageMinutesPerPage([owner, src], logs, owner, 'f2'), 10, 'current follow-up measured 5 × (8 ÷ its temp 4, from the subject it was made from)');
+  const next = { ...owner, followUpSubjects: owner.followUpSubjects.map(item => item.id === 'f2' ? { ...item, initialAverageTimePerPage: 2 } : item) };
+  assert.equal(sch.withPlanRestart({ ...owner, planResetDate: '2026-10-01' }, { ...next, planResetDate: '2026-10-01' }, '2026-10-31').planResetDate, '2026-10-01');
 });

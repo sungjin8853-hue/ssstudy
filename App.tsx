@@ -239,6 +239,8 @@ const App: React.FC = () => {
             scheduledWeekdays: subject.scheduledWeekdays ?? [1, 2, 3, 4, 5, 6, 0],
             followUpSubjects: Array.isArray(subject.followUpSubjects)
               ? subject.followUpSubjects.map(followUp => ({
+                  // 단원 · 단위 이름 · 필수 여부 · 임시값처럼 여기서 고치지 않는 값은 그대로 둔다(31일 점검: 다시 열면 지워지던 것)
+                  ...followUp,
                   id: followUp.id || Math.random().toString(36).slice(2, 11),
                   sourceSubjectId: followUp.sourceSubjectId,
                   name: followUp.name || '후행과목',
