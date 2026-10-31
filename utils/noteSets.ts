@@ -1,6 +1,6 @@
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { isReviewSlash } from './reviewSlash';
-import { canonicalMark, looksLikeCriterion, readNoteSetLine, splitTitleCriteria, topLevelCuts } from './noteDiagram';
+import { canonicalMark, looksLikeCriterion, noteCriterionOf as noteWideCriterionOf, parseCriterionLabels, readNoteSetLine, splitTitleCriteria, topLevelCuts } from './noteDiagram';
 export { readNoteSetLine } from './noteDiagram';
 export type { NoteSetLine } from './noteDiagram';
 import type { NoteSetLine } from './noteDiagram';
@@ -42,6 +42,8 @@ export interface NoteSetIndex {
   abilities: readonly AbilityDefinition[];
   /** 연결어(`:` `;` `<`)가 한 번이라도 쓰인 셀(줄 맨 앞 셀과 연결어 뒤에 이어 쓴 값): `[?]`에는 이런 셀이 들지 않는다 */
   connected: ReadonlySet<string>;
+  /** 색인을 만든 노트 글들(집합 안 줄의 칸과 분류기준을 읽어 추천할 때 쓴다) */
+  sources?: readonly string[];
 }
 
 export interface MarkSet {
@@ -434,7 +436,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
     ability.members.forEach(cell => { if (!(entry.cells as string[]).includes(cell)) (entry.cells as string[]).push(cell); });
     withAbilities.set(key, entry);
   });
-  return { ...index, marks: withAbilities, placements: marks, abilities };
+  return { ...index, marks: withAbilities, placements: marks, abilities, sources: memos };
 };
 
 /**
@@ -632,11 +634,21 @@ export const displayedLocations = (index: NoteSetIndex, name: string, covered: R
  */
 export const suggestSetNames = (index: NoteSetIndex, typed: string, following?: string): string[] => {
   const key = normSetName(typed);
-  const pool = following && index.display.has(normSetName(following))
-    ? ancestorsOf(index, following)
-    : [...index.sets].map(set => index.display.get(set) ?? set);
+  const linked = following && index.display.has(normSetName(following)) ? ancestorsOf(index, following) : [];
+  // 뒤따르는 셀이 든 집합이 없으면(어느 집합에도 없는 셀 · 아직 없는 셀) 있는 집합을 모두 보인다(1일 요청: `[` 안이면 늘 뜬다)
+  const pool = linked.length ? linked : knownSetNames(index);
   return unique(pool.filter(name => normSetName(name) !== normSetName(following ?? '\u0000') && (!key || normSetName(name).includes(key))));
 };
+
+/**
+ * 있는 집합 이름들: 토글 제목 · 아래 항목이 있는 셀(쓴 순서) 다음에, 토글로 쓰지 않고 `[과일] 사과`처럼 셀 왼쪽에만 쓴 집합(위치 표시)도 든다
+ * (1일 요청: 토글 제목에 쓰든 안 쓰든 집합이다). 쓰는 중인 `[`가 든 이름(빈 토글 제목에 `[`만 쓴 것 등)은 뺀다.
+ */
+export const knownSetNames = (index: NoteSetIndex): string[] => unique([
+  ...[...index.sets].map(set => index.display.get(set) ?? set),
+  // 위치 사슬(`[A:C]`)·집합식(`[급수.[A:C]]`)은 이름 하나가 아니라서 이름 자리에 넣지 않는다
+  ...[...index.placements.values()].map(mark => canonicalMark(mark.display)).filter(name => !/[:;<=.,%()]/.test(name))
+].filter(name => name.trim() && !/[\[\]]/.test(name)));
 
 /**
  * 이 칸(맨 앞 셀 head, 토글 경로 path)에 걸리는 능력 정의들.
@@ -708,6 +720,8 @@ export interface BracketDetail extends BracketContext {
   followingEnd?: number;
   /** 뒤따르는 단어 셀 뒤에 다른 글이 없는가(줄 끝이나 `//` 앞) */
   standalone: boolean;
+  /** `[`부터 쓰던 이름 앞까지의 글(`[동물:개념:|` → `동물:개념:`) */
+  before: string;
 }
 
 /** `[ ]` 안에서 이름과 이름을 가르는 논리어(겹친 `[ ]`도 이름을 가른다) */
@@ -767,7 +781,7 @@ export const bracketDetail = (text: string, caret: number): BracketDetail | null
     tokenStart, tokenEnd, typed: written.trim(), following,
     open, close,
     inner: text.slice(open + 1, close >= 0 ? close : caret).trim(),
-    followingEnd, standalone
+    followingEnd, standalone, before: text.slice(open + 1, tokenStart)
   };
 };
 
@@ -785,7 +799,8 @@ export interface BracketSuggestion {
   from: number;
   to: number;
   /** 오른쪽에 작게 보이는 종류 */
-  tag: '토글' | '교집합' | '상위' | '정의' | '위치';
+  /** 셀·값 추천이면 그 칸의 분류기준 이름(예: 정의)이 보인다 */
+  tag: '토글' | '집합' | '교집합' | '상위' | '정의' | '위치' | '분류' | '셀' | (string & {});
   /** 넣은 뒤 커서 자리: 넣은 글 앞에서부터의 글자 수(없으면 넣은 글 바로 뒤).  */
   caret?: number;
 }
@@ -817,10 +832,16 @@ export const bracketSuggestions = (index: NoteSetIndex, detail: BracketDetail): 
     seen.add(id);
     result.push({ ...item, label: item.label ?? item.text });
   };
-  const linked = (typed: string) => suggestSetNames(index, typed, detail.following).filter(name => normSetName(name) !== normSetName(typed));
-  const names = linked(detail.typed);
   const from = detail.tokenStart;
-  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: '토글' }));
+  // `[동물:`처럼 있는 집합 뒤에 `:`를 쓰면 그다음 자리의 분류기준(그 집합 줄들의 칸 이름)을 먼저 추천한다: `[동물:개념:` → 정의
+  nextCriteriaAfter(index, detail.before).filter(name => normSetName(name) !== normSetName(detail.typed) && normSetName(name).includes(normSetName(detail.typed)))
+    .forEach(text => add({ text, from, to: detail.tokenEnd, tag: '분류' }));
+  const linked = (typed: string) => suggestSetNames(index, typed, detail.following).filter(name => normSetName(name) !== normSetName(typed));
+  // 이미 `[` 안에 쓴 이름(`[과일:`의 과일)은 다시 추천하지 않는다
+  const written = new Set(detail.before.split(/[.,%:;<=()\[\]]/).map(normSetName).filter(Boolean));
+  const names = linked(detail.typed).filter(name => !written.has(normSetName(name)));
+  // 토글 제목·아래 항목이 있는 셀은 `토글`, 셀 왼쪽에만 쓴 집합은 `집합`
+  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: index.sets.has(normSetName(text)) ? '토글' : '집합' }));
   // 구조 추천은 `[ ]` 안쪽 내용 전체를 바꾼다: `[A:C] 급수` → `[급수.[A:C]] 급수`. 닫는 `]`와 그 뒤의 글은 그대로 둔다.
   if (detail.close >= 0 && detail.following && !/[\[\]]/.test(detail.inner) && /[:;<=]/.test(detail.inner)) {
     const cell = detail.following;
@@ -841,6 +862,146 @@ export const bracketSuggestions = (index: NoteSetIndex, detail: BracketDetail): 
       }
     }
   }
+  return result;
+};
+
+/** 집합 안의 한 줄: 칸 글(맨 앞은 위치 표시를 뺀 셀)과 그 줄에 걸린 분류기준 칸 이름들 */
+export interface SetRow { cells: string[]; criteria: string[] }
+
+const findSetKey = (index: NoteSetIndex, name: string): string | null => {
+  const key = normSetName(name);
+  if (!key || /[\[\]().,%]/.test(name)) return null;
+  if (index.sets.has(key) || index.placements.has(markKeyOf(name))) return key;
+  return null;
+};
+
+/**
+ * 집합 안에 있는 줄들: 그 이름의 토글 아래 줄, 셀 왼쪽에 `[그 집합]`을 쓴 줄, 맨 앞 셀이 그 집합의 요소인 줄.
+ * 분류기준은 줄 앞에 쓴 `[개념:정의]` → 가장 가까운 토글 제목의 기준 → 능력 정의 `[집합]:[기준]` → 노트 전체 기준 순으로 정한다.
+ */
+export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
+  const key = findSetKey(index, name);
+  if (!key) return [];
+  const mark = markKeyOf(name);
+  const ability = index.abilities.find(item => normSetName(item.expression) === key && !looksLikeCriterion(item.expression))?.criterion;
+  const rows: SetRow[] = [];
+  (index.sources ?? []).forEach(memo => {
+    const noteWide = noteWideCriterionOf(memo) ?? undefined;
+    const stack: { key: string; criterion?: string }[] = [];
+    expandOpenLines(memo).split('\n').forEach(line => {
+      if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
+        const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
+        stack.push({ key: normSetName(toggleName(title)), criterion: splitTitleCriteria(title).criteria.at(-1) });
+        return;
+      }
+      if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
+      segmentsOf(line).forEach(segment => {
+        if (readNoteSetLine(segment) || readNoteTemplate(segment)) return;
+        const { cell, marks } = splitHeadMarks(segment);
+        if (!cell) return;
+        const inside = stack.some(item => item.key === key) || marks.some(item => markKeyOf(item) === mark)
+          || (index.parents.get(normSetName(cell)) ?? []).includes(key);
+        if (!inside) return;
+        const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide;
+        const cuts = topLevelCuts(segment, relationMarks());
+        const cells = [cell, ...cuts.map((cut, at) => splitHeadMarks(segment.slice(cut + 1, cuts[at + 1] ?? segment.length)).cell.replace(/\{[^{}\n]*\}/g, '').trim())];
+        rows.push({ cells, criteria: parseCriterionLabels(criterion) });
+      });
+    });
+  });
+  return rows;
+};
+
+/** 집합에 걸린 분류기준 사슬들(칸 이름 목록): 능력 정의와 그 집합 줄들의 기준 */
+const criteriaChainsOf = (index: NoteSetIndex, name: string): string[][] => {
+  const key = findSetKey(index, name);
+  if (!key) return [];
+  const chains = [
+    ...index.abilities.filter(item => normSetName(item.expression) === key).map(item => parseCriterionLabels(item.criterion)),
+    ...rowsOfSet(index, name).map(row => row.criteria)
+  ].filter(chain => chain.length);
+  const seen = new Set<string>();
+  return chains.filter(chain => { const id = chain.join('\u0000'); if (seen.has(id)) return false; seen.add(id); return true; });
+};
+
+/**
+ * `[` 안에서 쓰던 이름 앞의 글이 `집합:` · `집합:기준1:`처럼 있는 집합과 그 분류기준을 이은 꼴이면, 그다음 자리의 분류기준 이름들.
+ * `[도형:개념:정의]`는 능력 `[도형]:[개념:정의]`가 걸리는 자리라서 집합 뒤로는 그 기준의 칸 이름이 차례로 온다.
+ */
+export const nextCriteriaAfter = (index: NoteSetIndex, before: string): string[] => {
+  const cuts = topLevelCuts(before, ':;<');
+  if (!cuts.length || before.slice(cuts[cuts.length - 1] + 1).trim()) return [];
+  const bounds = [-1, ...cuts];
+  const parts = bounds.slice(1).map((end, at) => before.slice(bounds[at] + 1, end).trim());
+  const [setName, ...path] = parts;
+  if (!setName || path.some(part => !part)) return [];
+  return unique(criteriaChainsOf(index, setName)
+    .filter(chain => chain.length > path.length && path.every((part, at) => normSetName(chain[at]) === normSetName(part)))
+    .map(chain => chain[path.length])
+    .filter(Boolean));
+};
+
+/**
+ * `[집합]`을 닫은 뒤 이어 쓰는 칸의 추천(1일 요청). 줄(또는 `//` 칸) 맨 앞이 `[집합]`이고 커서가 그 뒤에 있으면,
+ *  - 맨 앞 셀 자리: 그 집합에 든 셀들(텍스트 셀)
+ *  - `:` 뒤 k번째 칸: 그 집합 줄들의 k번째 칸에 쓴 값들(오른쪽에 그 칸의 분류기준 이름)
+ * 을 추천한다. 바꾸는 범위는 쓰던 칸 글(앞뒤 띄어쓰기 뺌)이다.
+ */
+export const followingCellSuggestions = (index: NoteSetIndex, text: string, caret: number): BracketSuggestion[] => {
+  const lineStart = caret === 0 ? 0 : text.lastIndexOf('\n', caret - 1) + 1;
+  const lineBreak = text.indexOf('\n', caret);
+  const line = text.slice(lineStart, lineBreak < 0 ? text.length : lineBreak);
+  const at = caret - lineStart;
+  const slashes = topLevelCuts(line, '/').filter(cut => isReviewSlash(line, cut));
+  const segmentStart = slashes.filter(cut => cut < at).reduce((last, cut) => cut + 1, 0);
+  const segmentEnd = slashes.find(cut => cut >= at) ?? line.length;
+  const segment = line.slice(segmentStart, segmentEnd);
+  const local = at - segmentStart;
+  // 칸 맨 앞의 `[ ]`들
+  let cursor = /^\s*/.exec(segment)![0].length;
+  const marks: string[] = [];
+  for (let end = matchingBracket(segment, cursor); segment[cursor] === '[' && end > 0; end = matchingBracket(segment, cursor)) {
+    marks.push(segment.slice(cursor + 1, end).trim());
+    cursor = end + 1;
+    cursor += /^\s*/.exec(segment.slice(cursor))![0].length;
+  }
+  const markEnd = marks.length ? segment.lastIndexOf(']', cursor) + 1 : -1;
+  if (!marks.length || local < markEnd) return [];
+  const sets = marks.filter(item => findSetKey(index, item));
+  if (!sets.length) return [];
+  const written = segment.slice(markEnd, local);
+  if (/[\[\]()'"{}]/.test(written)) return [];
+  const cuts = topLevelCuts(written, relationMarks());
+  const column = cuts.length;
+  let tokenStart = markEnd + (cuts.length ? cuts[cuts.length - 1] + 1 : 0);
+  while (tokenStart < local && /\s/.test(segment[tokenStart])) tokenStart += 1;
+  let tokenEnd = local;
+  while (tokenEnd < segment.length && !relationMarks().includes(segment[tokenEnd]) && segment[tokenEnd] !== ',') tokenEnd += 1;
+  while (tokenEnd > local && /\s/.test(segment[tokenEnd - 1])) tokenEnd -= 1;
+  const typed = normSetName(segment.slice(tokenStart, local));
+  const current = normSetName(segment.slice(tokenStart, tokenEnd));
+  const from = lineStart + segmentStart + tokenStart;
+  const to = lineStart + segmentStart + tokenEnd;
+  const glued = column === 0 && tokenStart === markEnd;
+  const result: BracketSuggestion[] = [];
+  const offer = (name: string, tag: BracketSuggestion['tag']) => {
+    const key = normSetName(name);
+    if (!key || key === current || (typed && !key.includes(typed)) || result.some(item => normSetName(item.text) === key)) return;
+    // `[과일]|`처럼 `]` 바로 뒤에서 고르면 한 칸 띄우고 넣는다
+    result.push({ text: glued ? ` ${name}` : name, label: name, from, to, tag });
+  };
+  sets.forEach(name => {
+    if (column === 0) {
+      const key = findSetKey(index, name)!;
+      [...(index.children.get(key) ?? []), ...(index.placements.get(markKeyOf(name))?.cells ?? [])]
+        .forEach(cell => offer(index.display.get(cell) ?? cell, '셀'));
+      return;
+    }
+    rowsOfSet(index, name).forEach(row => {
+      const value = row.cells[column];
+      if (value) offer(value, row.criteria[column] || '값');
+    });
+  });
   return result;
 };
 

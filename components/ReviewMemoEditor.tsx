@@ -9,7 +9,7 @@ import { getReviewMemoDoubleSpaceEdit } from '../utils/reviewMemoInput';
 import { getReviewFieldOverrides } from '../utils/reviewFieldOverride';
 import { getToggleChildOffset } from '../utils/reviewQuestions';
 import { NoteSymbolBar } from './NoteSymbolBar';
-import { bracketDetail, bracketSuggestions, buildNoteSetIndex, cellLocationSuggestions, headCellAtCaret, setContents, setMembersTrigger, toggleName } from '../utils/noteSets';
+import { bracketDetail, bracketSuggestions, buildNoteSetIndex, cellLocationSuggestions, followingCellSuggestions, headCellAtCaret, setContents, setMembersTrigger, toggleName } from '../utils/noteSets';
 import type { SetMemberRow } from '../utils/noteSets';
 import type { BracketSuggestion } from '../utils/noteSets';
 import { caretPositionIn } from '../utils/caretPosition';
@@ -70,8 +70,9 @@ const MEMBERS_MAX_HEIGHT = 330;
 
 interface SetSuggestion {
   blockId: string; part: 'text' | 'title'; items: BracketSuggestion[];
-  /** `bracket`: `[ ]` 안에서 뜬 추천 · `cell`: 노트 셀을 쓰면 뜨는 위치 추천(탭하면 셀 앞에 `[위치]`가 붙는다) */
-  kind: 'bracket' | 'cell';
+  /** `bracket`: `[ ]` 안에서 뜬 추천 · `cell`: 노트 셀을 쓰면 뜨는 위치 추천(탭하면 셀 앞에 `[위치]`가 붙는다)
+   *  · `follow`: `[집합]`을 닫은 뒤 이어 쓰는 칸의 추천(그 집합의 셀, `:` 뒤에는 그 칸에 쓴 값) */
+  kind: 'bracket' | 'cell' | 'follow';
   /** 고른 줄(탭을 누르면 이 줄이 들어간다) */
   active: number;
   /** 커서 바로 아래(화면 좌표): 종이가 잘라내지 않도록 문서 맨 위에 그린다 */
@@ -358,7 +359,12 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     if (detail) {
       const index = buildNoteSetIndex(setSource && setSource.length ? setSource : [read.value]);
       items = bracketSuggestions(index, detail).slice(0, 40);
-    } else if (part === 'text' && read.end === caret && (typing || (suggestion?.blockId === blockId && suggestion.kind === 'cell'))) {
+    } else if (part === 'text' && read.end === caret && read.value.includes(']') && (typing || (suggestion?.blockId === blockId && suggestion.kind === 'follow'))) {
+      // `[집합]`을 닫은 뒤에도 이어 쓰는 칸을 추천한다(1일 요청). 쓰는 중에 뜨고, 떠 있으면 커서가 그 칸에 있는 동안 유지된다
+      kind = 'follow';
+      items = followingCellSuggestions(buildNoteSetIndex(setSource && setSource.length ? setSource : [read.value]), read.value, caret).slice(0, 40);
+    }
+    if (!items.length && !detail && part === 'text' && read.end === caret && (typing || (suggestion?.blockId === blockId && suggestion.kind === 'cell'))) {
       const located = headCellAtCaret(read.value, caret);
       if (located) {
         kind = 'cell';
@@ -570,7 +576,7 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
     // 노트 셀 위치 추천이 하나뿐이면 ↑↓는 그냥 커서 이동이다(글을 쓰다 줄을 옮길 때 가로채지 않는다)
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
-      && !(suggestion.kind === 'cell' && count < 2)) {
+      && !((suggestion.kind === 'cell' || suggestion.kind === 'follow') && count < 2)) {
       event.preventDefault();
       suppressKeyUp.current = true;
       const step = event.key === 'ArrowDown' ? 1 : -1;

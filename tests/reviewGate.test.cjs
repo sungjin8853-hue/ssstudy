@@ -7482,7 +7482,7 @@ test('location marks: [ ] left of a word cell places it, and ":" inside [ ] stil
   assert.deepEqual(splitHeadMarks('[A:C].급수'), { cell: '.급수', marks: ['A:C'] });
   assert.equal(headCellOf('문제 [3]'), '문제 [3]', 'a bracket after the word without a dot is just text');
   // `:` 가 있어도 쓰던 이름은 마지막 논리어 뒤, 뒤따르는 단어 셀도 읽는다
-  assert.deepEqual(detailAt('[A:C|] 급수'), { tokenStart: 3, tokenEnd: 4, typed: 'C', following: '급수', open: 0, close: 4, inner: 'A:C', followingEnd: 8, standalone: true });
+  assert.deepEqual(detailAt('[A:C|] 급수'), { tokenStart: 3, tokenEnd: 4, typed: 'C', following: '급수', open: 0, close: 4, inner: 'A:C', followingEnd: 8, standalone: true, before: 'A:' });
   assert.equal(detailAt('[급수 A|:C] V:D').typed, '급수 A', 'a space is part of a name, never an operator');
   // 토글 연결값은 논리어 뒤에서도 뜬다
   const index = buildNoteSetIndex([[...toggles, '[A:C] 급수'].join('\n')]);
@@ -11036,4 +11036,28 @@ test('31st checks: follow-up fields survive loading the app; a follow-up chain g
   assert.equal(getStageMinutesPerPage([owner, src], logs, owner, 'f2'), 10, 'current follow-up measured 5 × (8 ÷ its temp 4, from the subject it was made from)');
   const next = { ...owner, followUpSubjects: owner.followUpSubjects.map(item => item.id === 'f2' ? { ...item, initialAverageTimePerPage: 2 } : item) };
   assert.equal(sch.withPlanRestart({ ...owner, planResetDate: '2026-10-01' }, { ...next, planResetDate: '2026-10-01' }, '2026-10-31').planResetDate, '2026-10-01');
+});
+
+test('[ ] suggestions (1일): sets written only left of cells count, criteria follow "집합:", and closing ] keeps suggesting the next cells', () => {
+  const { bracketDetail, bracketSuggestions, buildNoteSetIndex, followingCellSuggestions } = loadSource('utils/noteSets.ts');
+  const memo = [':::toggle 동물 [개념:정의:예시]', '고래:바다 포유류:흰수염고래', '사자:초원 맹수:수사자', ':::end', '[과일] 사과:빨강', '[과일] 배:노랑', '[과일]:[이름:색]', ':::toggle [', ':::end'].join('\n');
+  const index = buildNoteSetIndex([memo]);
+  const inside = (text) => { const at = text.indexOf('|'); return bracketSuggestions(index, bracketDetail(text.replace('|', ''), at)).map(item => [item.text, item.tag]); };
+  const after = (text) => { const at = text.indexOf('|'); const plain = text.replace('|', ''); return followingCellSuggestions(index, plain, at).map(item => [item.text, item.tag]); };
+  // 토글로 쓰지 않은 집합(`[과일] 사과`)도 뜨고, 쓰는 중인 빈 토글 제목 `[`는 집합이 아니다
+  assert.deepEqual(inside('[|'), [['동물', '토글'], ['과일', '집합']]);
+  // 있는 집합 뒤 `:` → 그다음 자리의 분류기준
+  assert.deepEqual(inside('[동물:|')[0], ['개념', '분류']);
+  assert.deepEqual(inside('[동물:개념:|')[0], ['정의', '분류']);
+  assert.deepEqual(inside('[과일:|')[0], ['이름', '분류'], 'an ability [과일]:[이름:색] gives the criterion');
+  // `]`를 닫은 뒤: 셀 자리에는 집합의 셀, `:` 뒤에는 그 칸의 값과 분류기준
+  assert.deepEqual(after('[과일]|'), [[' 사과', '셀'], [' 배', '셀']], 'right after ] a space is put before the cell');
+  assert.deepEqual(after('[과일] 사|'), [['사과', '셀']]);
+  assert.deepEqual(after('[과일] 귤:|'), [['빨강', '색'], ['노랑', '색']]);
+  assert.deepEqual(after('[동물] 고래:바다:|'), [['흰수염고래', '예시'], ['수사자', '예시']]);
+  assert.deepEqual(after('운동량:|'), [], 'no [set] in front: nothing');
+  const text = '[과일] 사|:빨강';
+  const [pick] = followingCellSuggestions(index, text.replace('|', ''), text.indexOf('|'));
+  const plain = text.replace('|', '');
+  assert.equal(`${plain.slice(0, pick.from)}${pick.text}${plain.slice(pick.to)}`, '[과일] 사과:빨강', 'only the cell being written is replaced');
 });
