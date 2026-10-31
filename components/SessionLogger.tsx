@@ -269,46 +269,13 @@ type GateReviewResult = ReviewGrade;
 
 const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
 const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
-const getSoundSrc = (path: string) => {
-  const basePath = new URL('.', window.location.href).pathname;
-  return `${basePath}${path}`;
-};
-const PAGE_TURN_SOUND_SRC = getSoundSrc('sounds/page-turn.mp3');
 const DEFAULT_SESSION_TIMER: SessionTimer = {
   id: 'none',
   name: '중간 타이머'
 };
 
-const soundCache = new Map<string, HTMLAudioElement>();
-
-const getSound = (src: string) => {
-  const cached = soundCache.get(src);
-  if (cached) return cached;
-
-  const audio = new Audio(src);
-  audio.preload = 'auto';
-  audio.volume = 1;
-  soundCache.set(src, audio);
-  return audio;
-};
-
-const unlockSound = async (src: string) => {
-  const audio = getSound(src);
-  try {
-    audio.muted = true;
-    audio.currentTime = 0;
-    await audio.play();
-    audio.pause();
-    audio.currentTime = 0;
-  } catch {
-    // iOS Safari may still reject until a direct tap; the normal play call will retry later.
-  } finally {
-    audio.muted = false;
-  }
-};
-
-// 뽀모도로가 끝났을 때 내는 소리: 코드로 만든 "삐삐삐삐" 알람(파일 없음).
-// 파일이 없어도 나고, 브라우저가 소리를 막으면(사용자가 누른 적이 없을 때) 쪽 넘김 소리로 대신한다.
+// 뽀모도로가 끝났을 때 내는 소리: 코드로 만든 "삐삐삐삐" 알람(파일 없음). 쪽 넘김 소리는 쓰지 않는다(31일: 복습과목 · 기본 복습에서도
+// 쪽 넘김 · 시간 알림 소리가 나지 않게, 소리를 막으면 대신 내던 쪽 넘김 소리까지 없앴다).
 type ChimeWindow = Window & { webkitAudioContext?: typeof AudioContext };
 let chimeContext: AudioContext | null = null;
 
@@ -363,49 +330,16 @@ const ringBeep = (context: AudioContext, startAt: number) => {
 
 const unlockSounds = () => {
   unlockChime();
-  void (async () => {
-    await unlockSound(PAGE_TURN_SOUND_SRC);
-  })();
 };
 
-const playSound = (src: string, startAtSeconds = 0, durationSeconds?: number) => {
-  const audio = getSound(src);
-  audio.volume = 1;
-  audio.muted = false;
-
-  const play = () => {
-    audio.pause();
-    audio.currentTime = startAtSeconds;
-    void audio.play().catch(() => undefined);
-    if (durationSeconds) {
-      window.setTimeout(() => {
-        audio.pause();
-        audio.currentTime = startAtSeconds;
-      }, durationSeconds * 1000);
-    }
-  };
-
-  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    play();
-    return;
-  }
-
-  audio.addEventListener('loadedmetadata', play, { once: true });
-  audio.load();
-};
-
-const playPageTurnSound = () => playSound(PAGE_TURN_SOUND_SRC);
 const playPomodoroEndSound = () => {
   const context = getChimeContext();
-  if (!context) {
-    playPageTurnSound();
-    return;
-  }
+  if (!context) return;
   if (context.state === 'running') {
     ringChime(context);
     return;
   }
-  context.resume().then(() => ringChime(context), () => playPageTurnSound());
+  context.resume().then(() => ringChime(context), () => undefined);
 };
 
 const formatPageNumber = (value: number) => {
@@ -1562,11 +1496,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const reviewCompletedRounds = reviewPomodoro?.completedRounds ?? 0;
   const reviewRoundsSeenRef = useRef(0);
   const [dismissedReviewRound, setDismissedReviewRound] = useState(0);
+  // 소리는 뽀모도로 시간(기본 25분)이 다 지날 때만 낸다(31일: 예상 시간이 끝나는 때 등 다른 때는 소리 없이 글자 · 안내 띠로만 알린다)
+  const reviewFullRounds = isPreSessionReviewRunning || preSessionReviewSeconds > 0 ? Math.floor(preSessionReviewSeconds / (pomodoroMinutes * 60)) : 0;
+  const reviewSoundRoundsRef = useRef(0);
+  useEffect(() => {
+    if (reviewFullRounds === 0) { reviewSoundRoundsRef.current = 0; return; }
+    if (reviewFullRounds > reviewSoundRoundsRef.current) playPomodoroEndSound();
+    reviewSoundRoundsRef.current = reviewFullRounds;
+  }, [reviewFullRounds]);
   useEffect(() => {
     if (reviewCompletedRounds === 0) { reviewRoundsSeenRef.current = 0; setDismissedReviewRound(0); return; }
     if (reviewCompletedRounds > reviewRoundsSeenRef.current) {
       reviewRoundsSeenRef.current = reviewCompletedRounds;
-      playPomodoroEndSound();
     } else if (reviewCompletedRounds < reviewRoundsSeenRef.current) {
       // 복습 도중 뽀모도로 시간을 늘려 끝난 회차 수가 줄었다: 그 값부터 다시 센다.
       reviewRoundsSeenRef.current = reviewCompletedRounds;

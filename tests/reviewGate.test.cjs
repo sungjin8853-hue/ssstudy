@@ -5797,6 +5797,8 @@ test('basic review screen: the countdown is the pomodoro, shown large, and only 
   const start = logger.indexOf('const reviewPomodoro = getPomodoroProgress(');
   const effect = logger.slice(start, logger.indexOf('}, [reviewCompletedRounds]);', start));
   assert.ok(effect.includes('playPomodoroEndSound()') && effect.includes('reviewRoundsSeenRef'));
+  // 31일: 기본 복습의 소리는 뽀모도로 시간이 다 지날 때만(예상 시간이 끝나는 때는 소리 없이 글자 · 안내 띠)
+  assert.ok(effect.includes('Math.floor(preSessionReviewSeconds / (pomodoroMinutes * 60))'));
   ['clearPreSessionReview', 'setIsPreSessionReviewRunning', 'finishPreSessionReview', 'onFinish'].forEach(name => assert.ok(!effect.includes(name), `time up never calls ${name}`));
   assert.ok(logger.includes('timeUp={isReviewTimeUp}'));
   assert.ok(logger.includes('const isReviewTimeUp = Boolean(reviewPomodoro?.finished);') && !logger.includes('stopsAtGateCompletion'), 'the review keeps timing until it is finished, also after the questions (28일)');
@@ -5972,9 +5974,10 @@ test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked w
   assert.ok(/const unlockSounds = \(\) => \{\s*unlockChime\(\);/.test(logger), 'the chime is unlocked together with the other sounds');
   assert.ok(/const openPreSessionReview = [^\n]*\n\s*unlockSounds\(\);/.test(logger), 'starting a review unlocks the sounds too');
   assert.ok(/const startMeasurementNow = \(\) => \{\s*unlockSounds\(\);/.test(logger));
-  // 소리 막힘이면 쪽 넘김 소리로 대신한다
+  // 31일: 쪽 넘김 소리는 어디에서도 쓰지 않는다(소리가 막혀도 대신 내지 않는다). 소리 파일도 없다
   const play = logger.slice(logger.indexOf('const playPomodoroEndSound'), logger.indexOf('const formatPageNumber'));
-  assert.ok(play.includes('playPageTurnSound()') && play.includes('ringChime(context)') && play.includes('context.resume()'));
+  assert.ok(!play.includes('playPageTurnSound') && play.includes('ringChime(context)') && play.includes('context.resume()'));
+  assert.ok(!logger.includes('page-turn.mp3') && !logger.includes('new Audio(') && !fs.existsSync(path.resolve(__dirname, '../public/sounds/page-turn.mp3')));
   // 학습·복습 모두 회차가 끝나면 이 종소리를 낸다. 측정 중 장마다 나던 소리(반쯤 · 1분 전 · 장 넘김)는 없다(29일)
   assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 2);
   assert.ok(!logger.includes('pageTurnSoundPagesRef') && !logger.includes('playHalfwayPenSound') && !logger.includes('playMarkerSound') && !logger.includes('marker.mp3'));
