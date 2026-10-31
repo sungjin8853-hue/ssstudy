@@ -7,7 +7,7 @@ import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
-import { buildPlanReviewCells, buildReviewWeekCells, buildWeekPlan, currentPlanStageId, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withPlanTimes } from '../utils/weekPlan';
+import { buildDueReviewWeekCells, buildPlanReviewCells, buildWeekPlan, currentPlanStageId, getWeekdayMinutesPerPage, mergeWeekCells, resolveSavedWeekdayPages, setWeekdayMinutes, stepWeekdayMinutes, stepWeekdayPages, toggleStudyWeekday, WeekCell, withPlanTimes } from '../utils/weekPlan';
 import { DEFAULT_PAGE_LABEL, getPageLabel, MAX_PAGE_LABEL_LENGTH, normalizePageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { DAY_MS, estimateReviewSubjectCompletion, estimateStageSchedule, formatEstimatedDate, SubjectStage } from '../utils/completionEstimate';
 import {
@@ -660,9 +660,10 @@ export const Analytics: React.FC<Props> = ({
         if (!review || counted.has(reviewId)) return;
         const finished = stage.status === 'completed';
         if (finished && getSubjectRemainingPageCount(review) <= 0) return;
-        // 지금 단계 복습과목은 공부를 따라온 몫, 끝난 단계에서 남은 복습과목은 전처럼 남은 양을 마감까지 나눈 몫
+        // 지금 단계 복습과목은 계획한 공부를 따라온 몫, 끝난 단계에서 남은 복습과목은 기록마다 잡힌 복습 일정을 따라 앞으로 7일 동안 돌아올 몫
+        // (복습은 목표 날짜까지 끝내지 않아도 된다: 남은 양을 마감까지 나누지 않는다)
         const cells = (stage.id === currentStage?.id && derived?.reviews.find(item => item.id === reviewId)?.cells)
-          || buildReviewWeekCells(logs, subject, review, parentEfficiency);
+          || buildDueReviewWeekCells(logs, subject, review, parentEfficiency);
         reviews[`${subject.id}:${reviewId}`] = toDays(cells);
         if (finished || stage.id === currentStage?.id) { counted.add(reviewId); working.push({ id: reviewId, name: review.name, cells }); }
       }));

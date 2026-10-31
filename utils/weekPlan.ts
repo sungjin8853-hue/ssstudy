@@ -3,6 +3,7 @@ import { calculateBasicReviewAverageTimePerPage, calculateRecentTimedPageAverage
 import { estimateSubjectEndDate } from './completionEstimate';
 import { getSubjectFamily, isFamilyStudyLog } from './subjectChain';
 import { getPageLabel } from './pageLabel';
+import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from './review';
 import {
   calculateFreshWeekdayPagePlan,
   cleanWeekdayPagePlan,
@@ -93,24 +94,52 @@ export const getWeekPlanSubjects = (subjects: Subject[]) => {
 };
 
 /**
- * 복습과목 하나의 요일별 권장량과 필요 시간. 복습과목은 설정 화면 목록에 따로 나오지 않으므로(getWeekPlanSubjects),
- * 그것을 거느린 과목 카드에 합쳐 보여 줄 때만 쓴다. 효율은 복습과목이 따로 잰 값이고, 재지 않았으면 거느린 과목의 효율을 그대로 쓴다.
- * 오늘 칸에 밀린 양은 더하지 않는다(복습은 정해진 날에 밀리는 일이 아니라 남은 양을 마감까지 나눈 것).
+ * 복습과목 하나의 앞으로 7일(오늘부터) 요일별 복습량. 복습은 목표 날짜까지 끝내지 않아도 되므로(31일) 남은 양을 마감까지 나누지 않고,
+ * 기록마다 잡힌 다음 복습 시각을 따라 돌아오는 양을 센다(지난 차례는 오늘에 모은다. 그 뒤로는 복습 간격대로 다시 돌아온다고 본다).
+ * 복습과목에 남은 쪽수보다 많이 세지 않는다. 시간 = 쪽수 × 복습과목 효율(잰 값, 재기 전에는 공부의 2/3배).
  */
-export const buildReviewWeekCells = (
+export const buildDueReviewWeekCells = (
   logs: StudyLog[], parent: Subject, review: Subject, parentEfficiency: number, now = new Date()
 ): Record<number, WeekCell> => {
-  const remaining = getSubjectRemainingPageCount(review);
-  const plan = remaining > 0 ? getWeekdayPagePlan(review, remaining, getDiffDays(review.targetDate, now), now) : {};
+  const DAY = 24 * 60 * 60 * 1000;
+  const start = parseStudyDate(getLocalDateKey(now)).getTime();
+  const end = start + 7 * DAY;
+  const nowMs = now.getTime();
+  const stages = getSubjectStages(parent);
+  const events = logs
+    .filter(log => log.subjectId === parent.id && !log.isCondensed && log.reviewEnabled !== false && !log.reviewParentSubjectId && log.pagesRead > 0)
+    .filter(log => {
+      const stage = stages.find(item => item.id === (log.subjectStageId || parent.id));
+      const ids = log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot : stage?.reviewSubjectIds || [];
+      return ids.includes(review.id);
+    })
+    .map(log => ({
+      at: log.nextReviewDate ? new Date(log.nextReviewDate).getTime() : new Date(log.timestamp).getTime() + INITIAL_REVIEW_DELAY_MS,
+      pages: Math.max(0, log.pagesRead),
+      step: Math.max(0, log.reviewStep || 0)
+    }))
+    .filter(event => Number.isFinite(event.at));
+  const bucket = [0, 0, 0, 0, 0, 0, 0];
+  let left = getSubjectRemainingPageCount(review);
+  for (let guard = 0; guard < 5000 && events.length > 0 && left > 0; guard += 1) {
+    events.sort((a, b) => a.at - b.at);
+    const event = events.shift()!;
+    if (event.at >= end) break;
+    const index = Math.max(0, Math.min(6, Math.floor((Math.max(event.at, nowMs, start) - start) / DAY)));
+    const pages = Math.min(left, event.pages);
+    bucket[index] += pages;
+    left -= pages;
+    events.push({ ...event, at: event.at + getNextReviewIntervalMs(event.step), step: event.step + 1 });
+  }
   const own = calculateRecentTimedPageAverage(getReviewEfficiencySamples(logs, parent.id, review.id));
   const measured = own.averageTimePerPage > 0;
-  const efficiency = measured ? own.averageTimePerPage : parentEfficiency;
+  const efficiency = measured ? own.averageTimePerPage : parentEfficiency * REVIEW_SUBJECT_PLAN_RATIO;
   const sigma = measured ? own.standardDeviation : 0;
   const scheduled = normalizeWeekdays(review.scheduledWeekdays);
   const cells: Record<number, WeekCell> = {};
-  WEEKDAYS.forEach(({ id }) => {
-    const pages = Math.max(0, (plan as Record<number, number>)[id] || 0);
-    cells[id] = { weekday: id, pages, carryover: 0, minutes: roundMinutes(pages * efficiency), spreadMinutes: roundMinutes(pages * sigma), scheduled: scheduled.includes(id) };
+  bucket.forEach((pages, index) => {
+    const weekday = new Date(start + index * DAY + 12 * 60 * 60 * 1000).getDay();
+    cells[weekday] = { weekday, pages, carryover: 0, minutes: roundMinutes(pages * efficiency), spreadMinutes: roundMinutes(pages * sigma), scheduled: scheduled.includes(weekday) };
   });
   return cells;
 };

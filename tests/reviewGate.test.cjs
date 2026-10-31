@@ -5541,7 +5541,7 @@ test('"과목·폴더 관리" subjects: weekday need in % under the weekly total
 
 test('card = current stage + its review subjects: title [+names], combined speed/efficiency on time-attack, week need added up; each subject alone behind › in the 전체 과목 list', () => {
   const { buildSpeedSeries, analyzeSubjectSpeed } = loadSource('utils/speedGrowth.ts');
-  const { buildReviewWeekCells, mergeWeekCells } = loadSource('utils/weekPlan.ts');
+  const { buildDueReviewWeekCells, mergeWeekCells } = loadSource('utils/weekPlan.ts');
   const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} vs ${b}`);
   const mk = (id, name, extra = {}) => ({ id, name, createdAt: '2026-09-01T00:00:00.000Z', planResetDate: '2026-09-01', startPage: 1, totalPages: 100, completedPages: 30,
     targetDate: '2026-12-31', isRequired: false, scheduledWeekdays: [1, 2, 3, 4, 5], growthPageUnit: 10, pageLabel: 'P', tagIds: [], ...extra });
@@ -5577,17 +5577,30 @@ test('card = current stage + its review subjects: title [+names], combined speed
   assert.equal(alone.series.points.length, 5);
   near(alone.efficiency, alone.own.efficiency);
 
-  // 요일별 필요량: 복습과목의 남은 양을 그 과목 요일로 나눠 현재 과목 칸에 더한다
+  // 끝난 단계에 남은 복습과목의 요일별 양(31일): 목표 날짜와 상관없이 기록마다 잡힌 복습 일정을 따라 앞으로 7일 동안 돌아오는 양
   const now = new Date('2026-10-12T12:00:00+09:00');
-  const reviewCells = buildReviewWeekCells(logs, subjects[0], subjects[1], 3.3, now);
-  assert.deepEqual(Object.keys(reviewCells).map(Number).sort(), [0, 1, 2, 3, 4, 5, 6]);
-  assert.ok(reviewCells[1].pages > 0 && reviewCells[3].pages > 0 && reviewCells[2].pages === 0 && reviewCells[0].pages === 0, 'only the review subject\'s own weekdays have pages');
-  near(reviewCells[1].minutes, Math.round(reviewCells[1].pages * (25 / 9) * 10) / 10 + 0 * 1);
-  const unmeasured = buildReviewWeekCells([], subjects[0], subjects[1], 3.3, now);
-  near(unmeasured[1].minutes, Math.round(unmeasured[1].pages * 3.3 * 10) / 10);
-  const merged = mergeWeekCells([unmeasured, reviewCells]);
-  assert.equal(merged[1].pages, unmeasured[1].pages + reviewCells[1].pages);
-  near(merged[1].minutes, Math.round((unmeasured[1].minutes + reviewCells[1].minutes) * 10) / 10);
+  const at = (days) => new Date(now.getTime() + days * 86400e3).toISOString();
+  const dueLogs = [
+    { id: 'd1', subjectId: 'm', pagesRead: 4, timeSpentMinutes: 10, timestamp: at(-3), studyDate: '2026-10-09', nextReviewDate: at(-1), reviewStep: 2, reviewSubjectIdsSnapshot: ['r'] },
+    { id: 'd2', subjectId: 'm', pagesRead: 3, timeSpentMinutes: 8, timestamp: at(-1), studyDate: '2026-10-11', nextReviewDate: at(2), reviewStep: 3, reviewSubjectIdsSnapshot: ['r'] },
+    { id: 'd3', subjectId: 'm', pagesRead: 5, timeSpentMinutes: 12, timestamp: at(-1), studyDate: '2026-10-11', nextReviewDate: at(10), reviewStep: 3, reviewSubjectIdsSnapshot: ['r'] },
+    { id: 'd4', subjectId: 'm', pagesRead: 6, timeSpentMinutes: 12, timestamp: at(-1), studyDate: '2026-10-11', nextReviewDate: at(1), reviewStep: 1, reviewSubjectIdsSnapshot: ['other'] }
+  ];
+  const due = buildDueReviewWeekCells(dueLogs, subjects[0], subjects[1], 3.3, now);
+  assert.deepEqual(Object.keys(due).map(Number).sort(), [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(due[1].pages, 4, 'an overdue review comes today (Monday)');
+  assert.equal(due[3].pages, 3, 'a review due in two days comes on Wednesday');
+  assert.equal(due[4].pages, 4, 'the overdue one comes back after its next interval (step 2 → 4 days from its due time: Thursday)');
+  assert.equal(Object.values(due).reduce((sum, cell) => sum + cell.pages, 0), 11, 'nothing beyond seven days, and only logs that carry this review subject');
+  near(due[1].minutes, Math.round(4 * 3.3 * (2 / 3) * 10) / 10);
+  const pastDeadline = buildDueReviewWeekCells(dueLogs, subjects[0], { ...subjects[1], targetDate: '2026-10-01' }, 3.3, now);
+  assert.deepEqual(pastDeadline, due, 'the review subject\'s target date does not matter: reviews need not finish by it');
+  const capped = buildDueReviewWeekCells(dueLogs, subjects[0], { ...subjects[1], completedPages: 18 }, 3.3, now);
+  assert.equal(Object.values(capped).reduce((sum, cell) => sum + cell.pages, 0), 2, 'never more than the pages the review subject has left');
+  const measuredDue = buildDueReviewWeekCells([...dueLogs, ...reviewLogs], subjects[0], subjects[1], 3.3, now);
+  near(measuredDue[1].minutes, Math.round(4 * (25 / 9) * 10) / 10);
+  const merged = mergeWeekCells([due, measuredDue]);
+  assert.equal(merged[1].pages, due[1].pages + measuredDue[1].pages);
 
   // 화면: 제목에 [+복습과목들], 예측 영역엔 과목별 줄이 없고, 전체 과목 목록의 과목마다 이름 왼쪽 ›
   const React = require('react');
