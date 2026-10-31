@@ -151,7 +151,7 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '그리고 · 등호', accent: 'teal', symbol: ', =', title: '그리고 · 등호',
-    lead: '쉼표(,)는 “둘 다”, 등호(=)는 한 칸 안에서 “서로 같다”고 잇는 말이에요. 한 칸 안에서는 -나 ,보다 먼저 물어요.',
+    lead: '쉼표(,)는 “둘 다”, 등호(=)는 한 칸 안에서 “서로 같다”고 잇는 말이에요. 한 칸 안에서는 -나 ,보다 먼저 물어요. 다른 연결어 없이 =나 -만 쓴 줄에서는 =가 :, -가 ;처럼 칸을 나눠요. 이때 = 뒤에 쉼표로 여러 값을 쓰면 구성요소로, 값 하나면 같은 것으로 물어요.',
     body: <>
       <NoteSample lines={[
         <><span>삼각형</span><Mono tone="colon">:</Mono><span>세 변이 있다</span><Mono tone="logic">,</Mono><span>세 각이 있다</span></>,
@@ -159,19 +159,19 @@ const NOTE_STEPS: TutorialStep[] = [
       ]} />
       <QuestionSamples items={[
         { kind: '기본 관계', q: '삼각형', a: '세 변이 있다 그리고 세 각이 있다' },
-        { kind: '기본 관계', q: '정사각형', a: '네 각이 직각' }
+        { kind: '같은 것', q: '정사각형', a: '네 각이 직각' }
       ]} />
     </>
   },
   {
     label: '묶어서 써요', accent: 'teal', symbol: '( )', title: '묶어서 써요',
-    lead: '괄호(( ))로 묶으면, 묶음 하나를 한 덩어리로 보고 문제를 만들어요. A:(B:C)는 "A의 B는 C"로 읽어요.',
+    lead: '괄호(( ))로 묶으면, 묶음 하나를 한 덩어리로 보고 문제를 만들어요. 괄호 안은 놓인 자리의 :번째 이름(분류기준)을 이어받고, 안에서 이름을 직접 쓰면 그 이름을 써요.',
     body: <>
       <NoteSample lines={[<><span>수열의 합</span><Mono tone="colon">:</Mono><Mono tone="logic">(</Mono><span>등차수열</span><Mono tone="colon">:</Mono><span>항의 개수와 첫항과 끝항</span><Mono tone="logic">)</Mono><Mono tone="logic">,</Mono><Mono tone="logic">(</Mono><span>등비수열</span><Mono tone="colon">:</Mono><span>첫항과 공비</span><Mono tone="logic">)</Mono></>]} />
       <QuestionSamples items={[
         { kind: '기본 관계', q: '수열의 합', a: '등차수열 그리고 등비수열' },
         { kind: '전체 재구성', q: '수열의 합', a: '(등차수열 → 항의 개수와 첫항과 끝항) 그리고 (등비수열 → 첫항과 공비)' },
-        { kind: '괄호 안 관계', q: '‘수열의 합’의 ‘등차수열’에 이어지는 것은?', a: '항의 개수와 첫항과 끝항' }
+        { kind: '괄호 안 관계', q: '‘수열의 합’에서 ‘등차수열’ 다음 값은?', a: '항의 개수와 첫항과 끝항' }
       ]} />
     </>
   },
@@ -200,8 +200,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Logic>[수열]</Logic><span> 등차수열</span><Mono tone="colon">:</Mono><span>이웃한 두 항의 차가 일정한 수열</span></>
       ]} />
       <QuestionSamples items={[
-        { kind: '이름이 붙은 문제', q: '‘개념:정의’에서 개념 ‘증기기관’에 이어지는 정의 값은?', a: '열로 피스톤을 움직이는 기관' },
-        { kind: '집합 안의 문제', q: '‘수열’에서 ‘등차수열’에 이어지는 것은?', a: '이웃한 두 항의 차가 일정한 수열' }
+        { kind: '이름이 붙은 문제', q: '‘개념:정의’에서 개념 ‘증기기관’의 정의는?', a: '열로 피스톤을 움직이는 기관' },
+        { kind: '집합 안의 문제', q: '‘수열’에서 ‘등차수열’ 다음 값은?', a: '이웃한 두 항의 차가 일정한 수열' }
       ]} />
     </>
   },
@@ -215,8 +215,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Logic>[삼각형.특수한 도형]</Logic><span> 이등변삼각형</span><Mono tone="colon">:</Mono><span>두 변의 길이가 같다</span></>
       ]} note="[삼각형.특수한 도형]() 괄호 사이에서 Enter를 누르면, 두 집합에 모두 든 이등변삼각형만 보여요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘삼각형.특수한 도형’에서 ‘이등변삼각형’에 이어지는 것은?', a: '두 변의 길이가 같다' },
-        { kind: '역방향', q: '‘삼각형.특수한 도형’에서 ‘두 변의 길이가 같다’에 앞서 이어진 것은?', a: '이등변삼각형' }
+        { kind: '기본 관계', q: '‘삼각형.특수한 도형’에서 ‘이등변삼각형’ 다음 값은?', a: '두 변의 길이가 같다' },
+        { kind: '역방향', q: '‘삼각형.특수한 도형’에서 ‘두 변의 길이가 같다’ 앞의 값은?', a: '이등변삼각형' }
       ]} />
     </>
   },
@@ -230,8 +230,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Logic>[도형.%삼각형]</Logic><span> 정사각형</span><Mono tone="colon">:</Mono><span>네 변이 같다</span></>
       ]} note="[도형.%삼각형]() 괄호 사이에서 Enter를 누르면, 도형에는 들고 삼각형에는 들지 않은 정사각형만 보여요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘도형.%삼각형’에서 ‘정사각형’에 이어지는 것은?', a: '네 변이 같다' },
-        { kind: '역방향', q: '‘도형.%삼각형’에서 ‘네 변이 같다’에 앞서 이어진 것은?', a: '정사각형' }
+        { kind: '기본 관계', q: '‘도형.%삼각형’에서 ‘정사각형’ 다음 값은?', a: '네 변이 같다' },
+        { kind: '역방향', q: '‘도형.%삼각형’에서 ‘네 변이 같다’ 앞의 값은?', a: '정사각형' }
       ]} />
     </>
   },
@@ -244,8 +244,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><span>인사</span><Mono tone="colon">:</Mono><Logic>{'{사람}'}</Logic><span>아 반가워</span></>
       ]} note="{사람} 자리에 철수와 영희가 차례로 들어가요. 글에 쉼표가 있으면 '{사람}아, 반가워'처럼 따옴표로 묶어요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘인사’에 이어지는 것은?', a: '철수아 반가워 (영희아 반가워도 따로 나와요)' },
-        { kind: '역방향', q: '‘영희아 반가워’에 앞서 이어진 것은?', a: '인사' }
+        { kind: '기본 관계', q: '‘인사’ 다음 값은?', a: '철수아 반가워 (영희아 반가워도 따로 나와요)' },
+        { kind: '역방향', q: '‘영희아 반가워’ 앞의 값은?', a: '인사' }
       ]} />
     </>
   },
@@ -258,8 +258,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Mono tone="logic">'</Mono><span>3-2</span><Mono tone="logic">'</Mono><Mono tone="colon">:</Mono><span>1</span></>
       ]} />
       <QuestionSamples items={[
-        { kind: '같은 칸 안', q: '‘주제’에서 ‘서울’에 대응하는 것은?', a: '부산' },
-        { kind: '글자 그대로', q: '‘3-2’에 이어지는 것은?', a: '1' }
+        { kind: '같은 칸 안', q: '‘주제’에서 ‘서울’과 같은 것은?', a: '부산' },
+        { kind: '글자 그대로', q: '‘3-2’ 다음 값은?', a: '1' }
       ]} />
     </>
   },
@@ -285,8 +285,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Mono tone="logic">[A]</Mono><span> </span><Mono tone="logic">#'</Mono><span>-</span><Mono tone="logic">'#</Mono><Mono tone="colon">:</Mono><span> </span><Mono tone="logic">#</Mono><span>+</span><Mono tone="logic">#</Mono></>
       ]} note="B-C와 X-Y가 각각 B+C, X+Y로 이어져요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘A’에서 ‘B-C’에 이어지는 것은?', a: 'B+C' },
-        { kind: '역방향', q: '‘A’에서 ‘X+Y’에 앞서 이어진 것은?', a: 'X-Y' }
+        { kind: '기본 관계', q: '‘A’에서 ‘B-C’ 다음 값은?', a: 'B+C' },
+        { kind: '역방향', q: '‘A’에서 ‘X+Y’ 앞의 값은?', a: 'X-Y' }
       ]} />
     </>
   },
@@ -333,8 +333,8 @@ const NOTE_STEPS: TutorialStep[] = [
         <><span>고래</span><Mono tone="colon">:</Mono><span>포유류</span></>
       ]} note="토글 제목을 !로 쓰면 그 아래 줄이 모두 빠져요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘고래’에 이어지는 것은?', a: '포유류' },
-        { kind: '역방향', q: '‘포유류’에 앞서 이어진 것은?', a: '고래' }
+        { kind: '기본 관계', q: '‘고래’ 다음 값은?', a: '포유류' },
+        { kind: '역방향', q: '‘포유류’ 앞의 값은?', a: '고래' }
       ]} />
     </>
   }

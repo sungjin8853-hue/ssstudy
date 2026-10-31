@@ -50,7 +50,7 @@ export interface ProseInput {
   direction: 'forward' | 'reverse';
   distance?: number;
   /** 한 칸 안의 `=`로 이은 이웃 쌍 */
-  form?: 'equal';
+  form?: 'equal' | 'components';
 }
 export interface Prose { statement: string; solution?: string }
 
@@ -64,13 +64,32 @@ const solutionOf = (answer: string): string | undefined => {
 export const SATISFIED = / 충족$/;
 /** `p 이후`: 순서에서 p 다음 자리에 놓인 값이다 */
 export const AFTER = / 이후$/;
-/** `A:(B:C)`의 A처럼 괄호 칸의 주인: "‘A’의 ‘B’에 이어지는 것은?"으로 읽는다(27일 요청). 조건 글 끝에 붙는 표시다. */
-export const OWNER_MARK = ' 의';
+/** 예전 "A의 B" 표시(31일에 없앰). 남아 있는 조건 글을 읽을 때만 쓴다 */
 export const OWNER = / 의$/;
+
+/** 받침이 있으면 앞, 없으면 뒤 조사(한글이 아닌 글자로 끝나면 둘 다 적는다) */
+/** 조사를 고를 글자: 따옴표 · 괄호 · 빈칸은 건너뛴 마지막 글자 */
+const lastLetter = (word: string) => word.replace(/[\s‘’'"()\[\]]+$/g, '').slice(-1);
+const josa = (word: string, withFinal: string, withoutFinal: string) => {
+  const last = lastLetter(word);
+  const code = last.charCodeAt(0) - 0xac00;
+  if (!(code >= 0 && code < 11172)) return `${withFinal}(${withoutFinal})`;
+  return code % 28 ? withFinal : withoutFinal;
+};
+/** 은/는 · 을/를 · 과/와 · 으로/로를 붙인 말 */
+export const topic = (word: string) => `${word}${josa(word, '은', '는')}`;
+export const object = (word: string) => `${word}${josa(word, '을', '를')}`;
+const withAnd = (word: string) => `${word}${josa(word, '과', '와')}`;
+const madeOf = (word: string) => {
+  const last = lastLetter(word);
+  const code = last.charCodeAt(0) - 0xac00;
+  // ㄹ 받침 · 받침 없음은 "로", 다른 받침은 "으로"
+  return `${word}${code >= 0 && code < 11172 && code % 28 && code % 28 !== 8 ? '으로' : '로'}`;
+};
 
 /**
  * 줄글 안에서 값의 속성(세션 노트의 분류기준 `개념:정의:예시`)이 드러나게 하는 이름들. 이름이 있으면 값 앞에 붙는다:
- * `개념 ‘A’에서 정의 ‘p’에 이어지는 예시 값은?` — 맞힐 값은 "것" 대신 속성 이름(`예시 값`)으로 묻는다.
+ * `개념 ‘A’에서 정의 ‘p’의 예시는?` — 맞힐 값은 속성 이름(`예시`)으로 묻는다(31일: "이어지는"은 없앴다).
  * `conditions`는 문제의 `conditions`와 같은 순서다.
  */
 export interface ProseAttrs { prompt: string[]; answer: string[]; conditions: string[][] }
@@ -89,10 +108,8 @@ export const withoutAnswerPlace = (conditions: readonly string[], answer?: strin
 export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string): string => {
   const entries = withoutAnswerPlace(conditions, answer);
   const afters = entries.filter(item => AFTER.test(item.text));
-  const owners = entries.filter(item => OWNER.test(item.text));
-  const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text));
-  return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text), labels?.[item.index])).join(', ')}에서 ` : ''}${owners.length
-    ? `${owners.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}의 ` : ''}${afters.length
+  const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text));
+  return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
     ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(', ')} 다음 자리의 ` : ''}`;
 };
 
@@ -112,7 +129,14 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
   const givenOperator = operatorOf(prompt);
   const answerOperator = operatorOf(answer);
   const solution = solutionOf(answer);
-  const noun = attrs?.answer.length ? `${attrs.answer.join('·')} 값` : '것';
+  // 31일: "이어지는"을 빼고 속성 이름으로 바로 묻는다(`개념 ‘자동차’의 정의는?`). 속성 이름이 없으면 "다음 값" · "앞의 값"
+  const attr = attrs?.answer.length ? attrs.answer.join('·') : '';
+  const noun = attr ? `${attr} 값` : '것';
+  const ask = (direction: 'forward' | 'reverse') => attr || (direction === 'forward' ? '다음 값' : '앞의 값');
+  // 속성 이름이 있으면 "‘A’의 정의", 없으면 "‘A’ 다음 값" · "‘A’ 앞의 값"
+  const of = attr ? '의 ' : ' ';
+  const tailOf = (word: string, operator: ReturnType<typeof operatorOf>) => (operator === 'and' ? `${object(word)} 모두 쓰시오.`
+    : operator === 'sequence' ? `${object(word)} 순서대로 쓰시오.` : operator === 'or' ? `${word} 중 하나를 쓰시오.` : `${topic(word)}?`);
 
   if (kind === 'blank') {
     // 줄 안의 칸을 가린 문제(`＿ → B → C`): 가린 자리를 ㉠ ㉡ …로 바꾸고, `…`는 묻지 않는 부분이다
@@ -124,27 +148,31 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
     return { statement: `${where}${quote(shown)}에서 ${tail}${prompt.includes('…') ? ' (…는 생략)' : ''}`,
       solution: order > 1 && hidden.length === order ? hidden.map((item, index) => `${blankMark(index)} ${item}`).join('   ') : undefined };
   }
-  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${givenTag}에 대응하는 ${noun}은?`, solution };
-  if (kind === 'direct') {
-    const lead = `${where}${givenTag}에 이어지는 ${noun}`;
-    return { statement: answerOperator === 'and' ? `${lead}을 모두 쓰시오.` : answerOperator === 'sequence' ? `${lead}을 순서대로 쓰시오.`
-      : answerOperator === 'or' ? `${lead} 중 하나를 쓰시오.` : `${lead}은?`, solution };
+  // 홀로 쓴 `=`(31일): 뒤가 값 하나면 같은 것, `,`로 여러 값이면 구성요소로 묻는다
+  if (input.form === 'components' && kind === 'remaining') {
+    return { statement: `${where}${givenTag}의 구성요소 중 ${done}남은 ${answerOperator === 'and' ? object(attr || '것') + ' 모두 쓰시오.' : topic(attr || '것') + '?'}`, solution };
   }
+  if (input.form === 'components') {
+    return kind === 'direct'
+      ? { statement: `${where}${givenTag}의 ${object('구성요소')} 모두 쓰시오.`, solution }
+      : { statement: `${where}${madeOf(givenTag)} 이루어진 ${topic(attr || '것')}?`, solution };
+  }
+  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${withAnd(givenTag)} 같은 것은?`, solution };
+  if (kind === 'direct') return { statement: `${where}${givenTag}${of}${tailOf(ask('forward'), answerOperator)}`, solution };
   if (kind === 'reverse') {
-    const lead = givenOperator === 'and' ? `${where}${givenTag} 모두에 앞서 이어진 ${noun}`
-      : givenOperator === 'sequence' ? `${where}${givenTag} 순서에 앞서 이어진 ${noun}` : `${where}${givenTag}에 앞서 이어진 ${noun}`;
-    return { statement: answerOperator === 'or' ? `${lead} 중 하나를 쓰시오.` : `${lead}은?`, solution };
+    const lead = givenOperator === 'and' ? `${where}${givenTag} 모두의 ` : givenOperator === 'sequence' ? `${where}${givenTag} 순서의 ` : `${where}${givenTag}${of}`;
+    return { statement: `${lead}${answerOperator === 'or' ? `${ask('reverse')} 중 하나를 쓰시오.` : `${topic(ask('reverse'))}?`}`, solution };
   }
   if (kind === 'remaining') {
     const lead = `${where}${givenTag}에 필요한 것 중 ${done}남은 ${noun}`;
     return { statement: answerOperator === 'and' ? `${lead}을 모두 쓰시오.` : answerOperator === 'sequence' ? `${lead}을 순서대로 쓰시오.` : `${lead}은?`, solution };
   }
   if (kind === 'reconstruct') {
-    return { statement: `${where}${givenTag}에서 이어지는 ${noun}을 끝까지 순서대로 쓰시오.`, solution };
+    return { statement: `${where}${givenTag} 다음의 ${object(attr || '값')} 끝까지 순서대로 쓰시오.`, solution };
   }
   if (kind === 'far') {
     const steps = input.distance && input.distance >= 2 ? count(input.distance) : '몇 걸음';
-    return { statement: `${where}${givenTag}부터 ${steps} ${direction === 'reverse' ? '앞에' : '뒤에'} 이어지는 ${noun}은?`, solution };
+    return { statement: `${where}${givenTag}부터 ${steps} ${direction === 'reverse' ? '앞' : '뒤'}의 ${topic(attr || '값')}?`, solution };
   }
   if (kind === 'order-next') return { statement: `${where}${givenTag} 바로 다음에 오는 ${noun}은?`, solution };
   if (kind === 'order-previous') return { statement: `${where}${givenTag} 바로 앞에 오는 ${noun}은?`, solution };
@@ -186,11 +214,11 @@ export const convertStatement = (convert: ConvertProseInput, attrs?: ConvertAttr
   if (given.length === 1) {
     // 같은 집합 안의 단위 변환(`[번호] 1 : @+1`)은 "대응"만으로는 앞뒤가 안 드러나, 연결어 방향대로 다음/앞을 쓴다
     const sameSet = convert.direction && convert.required.length === 1 && convert.steps.every(step => step.set === convert.steps[0].set);
-    if (sameSet) return `${refs} ${convert.direction === 'reverse' ? '앞에 놓인' : '다음에 이어지는'} 집합 ${sets}의 ${noun}은?`;
-    return convert.required.length === 1 ? `${refs}에 대응하는 집합 ${sets}의 ${noun}은?` : `${refs}에서 이어지는 집합 ${sets}의 ${noun}을 차례로 쓰시오.`;
+    if (sameSet) return `${refs} ${convert.direction === 'reverse' ? '앞' : '다음'}의 집합 ${sets}의 ${noun}은?`;
+    return convert.required.length === 1 ? `${refs}에 대응하는 집합 ${sets}의 ${noun}은?` : `${refs}에 대응하는 집합 ${sets}의 ${noun}을 차례로 쓰시오.`;
   }
   const lowest = Math.min(...given);
   const highest = Math.max(...given);
-  const place = convert.required.every(index => index > highest) ? '다음에 이어지는' : convert.required.every(index => index < lowest) ? '앞에 놓인' : '사이에 놓인';
-  return `${refs} ${place} 집합 ${sets}의 ${noun}${convert.required.length === 1 ? '은?' : '을 차례로 쓰시오.'}`;
+  const place = convert.required.every(index => index > highest) ? '다음' : convert.required.every(index => index < lowest) ? '앞' : '사이';
+  return `${refs} ${place}의 집합 ${sets}의 ${noun}${convert.required.length === 1 ? '은?' : '을 차례로 쓰시오.'}`;
 };

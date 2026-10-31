@@ -17,15 +17,13 @@ import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorth
 import { quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
-import { convertStatement, OWNER_MARK, placeOf, proseOf } from './questionProse';
+import { convertStatement, placeOf, proseOf } from './questionProse';
 import type { CellKind, CellPiece } from './questionStatement';
 
 /** generated: `#` 틀이 펼쳐 만든 줄의 글(노트에 쓴 글이 아니다). 글자 범위는 틀 줄을 가리킨다. */
 export interface AnswerSpan { nodeId: string; start: number; end: number; generated?: string }
 export interface QuestionNoteNode { id: string; parentId: string | null; type: 'text' | 'toggle'; text: string }
 type QuestionColumn = number | string;
-/** `( )` 안의 칸 번호 시작값: 위쪽 분류기준(칸 이름)이 닿지 않는 번호라서 괄호 안 `:`는 이름 없이 읽힌다. 안에서 직접 쓴 `:{이름}`은 그대로 쓰인다. */
-const DETACHED_COLUMN = 1000;
 type Expression =
   /** raw: 칸 글 사이의 `( )`를 그 자리의 값으로 바꾸기 전 글(바꾼 칸에만 있다) */
   | { type: 'text'; text: string; raw?: string; span: AnswerSpan }
@@ -46,7 +44,8 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   /** 정답 칸에 보일 글: 정답에 논리어(AND·OR)가 있을 때 풀어 쓴 것. 없으면 `answer` 그대로. */
   solution?: string;
   /** 한 칸 안의 `=`로 이은 이웃 쌍이면 'equal'(문장에서 "대응하는 것"으로 묻는다) */
-  form?: 'equal';
+  /** `components`: 홀로 쓴 `=` 뒤에 `,`로 여러 값이 온 것(구성요소로 묻는다). `=` 뒤가 값 하나면 'equal'(같은 것) */
+  form?: 'equal' | 'components';
   /** 덩어리 칸 빈칸 문제의 재료: 문장에 속성 이름을 넣어 다시 쓸 때 쓴다 */
   cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] };
   /** 빈칸 문제에서 첫 빈칸의 칸 번호. 같은 빈칸 수라면 빈칸이 오른쪽일수록 어렵다. */
@@ -95,9 +94,13 @@ const rank = (a: number, b: number) => ({
   priority: 1 + (a > IMPORTANT_UNTIL ? 1 : 0) + (b > IMPORTANT_UNTIL ? 1 : 0),
   importance: Math.max(a, b)
 });
-/** `:`·`=`는 앞으로도 거꾸로도, `;`는 앞으로만(충분조건), `<`는 거꾸로만(역관계), `>`(괄호 안으로 들어가는 이음)은 앞으로만 갈 수 있다. */
+/**
+ * `:`·`=`는 앞으로도 거꾸로도, `;`는 앞으로만(충분조건), `<`는 거꾸로만(역관계), `>`(괄호 안으로 들어가는 이음)은 앞으로만 갈 수 있다.
+ * 다른 연결어 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할이다.
+ */
 const goesForward = (separator: string) => separator !== '<';
-const goesBackward = (separator: string) => separator !== '>' && separator !== ';';
+const forwardOnly = (separator: string) => separator === ';' || separator === '-';
+const goesBackward = (separator: string) => separator !== '>' && !forwardOnly(separator);
 
 // Only top-level delimiters split a column. Nested groups restart column numbering.
 const splitAt = (text: string, from: number, to: number, delimiters: string) => {
@@ -173,9 +176,12 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
     if (from < to && edges.has(from)) { from += 1; changed = true; }
     if (to > from && edges.has(to - 1)) { to -= 1; changed = true; }
   }
-  // 칸 전체가 `( )`면 그 안의 `:`는 위쪽 분류기준과 이어지지 않는다(18:16 규칙: 괄호 안은 기본적으로 상위값과 분리). `[ ]` 안은 따로 처음부터 센다.
-  if (reviewGroups(text).closed.get(from) === to - 1) return parseExpression(text, nodeId, from + 1, to - 1, text[from] === '(' ? new Map() : inherited, text[from] === '(' ? DETACHED_COLUMN : 0);
-  const allCuts = splitAt(text, from, to, relationMarks());
+  // 칸 전체가 `( )`면 그 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙): 안쪽 첫 값은 그 칸, `:` 뒤는 그다음 칸들의 기준이다.
+  // 안에서 분류기준을 직접 쓰면(`:{이름}` · `[ ]`) 그것을 쓴다. `[ ]` 안은 따로 처음부터 센다.
+  if (reviewGroups(text).closed.get(from) === to - 1) return parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
+  let allCuts = splitAt(text, from, to, relationMarks());
+  // 다른 연결어(`:` `;` `<`) 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할로 칸을 나눈다
+  if (!allCuts.length && isNoteShorthandOn() && splitAt(text, 0, text.length, relationMarks()).length === 0) allCuts = splitAt(text, from, to, '=-');
   if (allCuts.length) {
     // 붙여 쓴 같은 연결어(`::` `;;`)는 칸 하나를 건너뛴다: 마지막 기호에서 칸을 자르고, 앞의 기호 수만큼 칸 번호가 더 늘어난다.
     const relationCuts: number[] = [];
@@ -203,8 +209,7 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
       // 칸 전체가 `( )`인 칸(`X : (A:B)`)의 안쪽 `:`는 그 칸 번호부터 이어서 센다
       const placed = classifications[classifications.length - 1];
       const field = parseExpression(text, nodeId, override?.end ?? start, end, inherited, typeof placed === 'number' ? placed : column);
-      // 칸 전체가 `( )`인 칸(`A:(B:C)` · `(d:e):x`)의 안쪽 값들은 그 칸의 하위다(`[A.d]` `[A.e]`): 다른 분류기준을 쓰지 않았으면 그 칸의 이름을 쓴다
-      return field.type !== 'text' && hasGroupIn(field) ? underColumn(field, placed) : field;
+      return field;
     });
     return { type: 'relation', separators: relationCuts.map(i => text[i]), fields, classifications, ...(skips.some(Boolean) ? { skips } : {}) };
   }
@@ -281,16 +286,6 @@ const attachedLine = (expression: Expression, attach: CriterionAttach | undefine
 const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (expression.type === 'text' ? { ...expression, span }
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
-
-/** 칸이 `( )` 관계를 품었는가: 칸 전체가 `(B:C)`이거나 `(B:C),(d:f)`처럼 `,`로 이은 괄호들 */
-const hasGroupIn = (field: Expression): boolean => field.type === 'relation' || (field.type !== 'text' && field.items.some(item => item.type === 'relation'));
-/** 괄호 안(분리된 칸 번호)의 칸 이름을 괄호가 놓인 칸의 이름으로 바꾼다. 안쪽에 `{이름}`·`[ ]`로 직접 쓴 이름은 그대로 둔다. */
-const underColumn = (expression: Expression, column: QuestionColumn): Expression => {
-  if (expression.type === 'text') return expression;
-  if (expression.type !== 'relation') return { ...expression, items: expression.items.map(item => underColumn(item, column)) };
-  return { ...expression, fields: expression.fields.map(field => underColumn(field, column)),
-    classifications: expression.classifications.map(placed => (typeof placed === 'number' && placed >= DETACHED_COLUMN ? column : placed)) };
-};
 
 const head = (expression: Expression): Expression => {
   if (expression.type === 'relation') return head(expression.fields[0]);
@@ -1189,21 +1184,23 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
             convert: { steps, required: [1], unitKeys: [], form: 'unit' } });
         };
         if (goesForward(separator)) unit(false);
-        if (separator !== ';') unit(true);
+        if (!forwardOnly(separator)) unit(true);
         if (goesForward(separator)) cellVariations(index + 1, index);
-        if (separator !== ';') cellVariations(index, index + 1);
+        if (!forwardOnly(separator)) cellVariations(index, index + 1);
         return;
       }
       // 논리 덩어리 칸이면 그 안쪽 세부 칸마다 한 번씩은 빈칸이 되도록 줄글 문제를 더한다(한 문제에 빈칸이 둘일 때도 포함)
       if (goesForward(separator)) plainCellBlanks(index + 1, index, separator);
       if (goesBackward(separator)) plainCellBlanks(index, index + 1, separator);
-      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const,
+      // 홀로 쓴 `=` 뒤에 `,`로 여러 값이 오면 구성요소, 값 하나면 같은 것으로 묻는다(31일)
+      const equalForm = separator === '=' ? { form: (right.type === 'and' ? 'components' : 'equal') as 'equal' | 'components' } : {};
+      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm,
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
       if (goesForward(separator)) add({ ...base, kind: 'direct' });
       // 오른쪽이 여러 대안(토글 아래 `<`)이면 대안 하나하나를 보고 왼쪽을 떠올린다.
-      if (separator !== ';') for (const source of right.type === 'or' ? right.items : [right]) {
+      if (!forwardOnly(separator)) for (const source of right.type === 'or' ? right.items : [right]) {
         add({ ...base, prompt: expressionLabel(source), answer: base.prompt, direction: 'reverse',
           kind: 'reverse', answerSpans: base.promptSpans, promptSpans: spans(source),
           columns: { ...base.columns, prompt: base.columns.answer, answer: base.columns.prompt } });
@@ -1292,11 +1289,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (convertible && field.type !== 'relation') return;
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
-      // `A:(B:C)`는 "A의 B는 C"다: 괄호 칸 바로 앞 칸이 괄호 안 문제의 주인(`‘A’의 ‘B’에 이어지는 것은?`)이다. 그보다 앞 칸이 있으면 첫 칸은 전처럼 자리다.
-      const owner = hasGroupIn(field) && index > 0
-        ? [{ text: `${expressionLabel(columns[index - 1])}${OWNER_MARK}`, columns: [expression.classifications[index - 1]], spans: spans(columns[index - 1]) }] : [];
+      // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 안쪽 관계는 첫 칸을 자리로 두고 묻는다
       visit(field, index > 0
-        ? [...context, ...(owner.length && index === 1 ? [] : [{ text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]), ...owner]
+        ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
         : context, expression.classifications[index], scores[index]);
     });
   };
@@ -1334,8 +1329,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (source[index] !== '(') continue;
       const close = closed.get(index);
       if (close === undefined || close >= end) continue;
-      // 괄호 안의 `:`는 위쪽 분류기준과 이어지지 않는다(18:16 규칙)
-      const inner = parseExpression(source, node.id, index + 1, close, new Map(), DETACHED_COLUMN);
+      // 괄호 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙). 안에서 직접 쓴 기준이 먼저다
+      const inner = parseExpression(source, node.id, index + 1, close, inheritedByNode.get(node.id) ?? new Map(), typeof column === 'number' ? column : 0);
       if (inner.type !== 'text') {
         const { expression: scopedInner, scope: innerScope } = scopeOf(inner, sets);
         const scoped = labelLoneSets(scopedInner, sets);

@@ -101,16 +101,22 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
     });
     return { ...base, given: null, relation: null, chain: filled, ask: { label: askLabel, mode: blanks > 1 ? '차례로' : null } };
   }
-  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') {
-    return { ...base, relation: { word: '대응하는', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
+  // 31일: "이어지는"을 빼고 짧게(문장과 같은 규칙)
+  if (input.form === 'components') {
+    return kind === 'direct'
+      ? { ...base, relation: { word: '구성요소', arrow: 'forward' }, ask: { label: askLabel, mode: '모두' } }
+      : { ...base, relation: { word: '로 이루어진', arrow: 'back' }, ask: { label: askLabel, mode: null } };
   }
-  if (kind === 'direct') return { ...base, relation: { word: '이어지는', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
+  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') {
+    return { ...base, relation: { word: '같은', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
+  }
+  if (kind === 'direct') return { ...base, relation: { word: '다음', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
   if (kind === 'reverse') {
-    const lead = givenOperator === 'and' ? '모두에 ' : givenOperator === 'sequence' ? '순서에 ' : '';
-    return { ...base, relation: { word: `${lead}앞서 이어진`, arrow: 'back' }, ask: { label: askLabel, mode: answerOperator === 'or' ? '하나만' : null } };
+    const lead = givenOperator === 'and' ? '모두의 ' : givenOperator === 'sequence' ? '순서의 ' : '';
+    return { ...base, relation: { word: `${lead}앞`, arrow: 'back' }, ask: { label: askLabel, mode: answerOperator === 'or' ? '하나만' : null } };
   }
   if (kind === 'remaining') return { ...base, done, relation: { word: '필요한 것 중 남은', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
-  if (kind === 'reconstruct') return { ...base, relation: { word: '끝까지 이어지는', arrow: 'forward' }, ask: { label: askLabel, mode: '순서대로' } };
+  if (kind === 'reconstruct') return { ...base, relation: { word: '끝까지', arrow: 'forward' }, ask: { label: askLabel, mode: '순서대로' } };
   if (kind === 'far') {
     const steps = input.distance && input.distance >= 2 ? stepWords(input.distance) : '몇 걸음';
     return { ...base, relation: { word: `${steps} ${direction === 'reverse' ? '앞' : '뒤'}`, arrow: direction === 'reverse' ? 'back' : 'forward' }, ask: { label: askLabel, mode: null } };
