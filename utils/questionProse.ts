@@ -50,7 +50,7 @@ export interface ProseInput {
   direction: 'forward' | 'reverse';
   distance?: number;
   /** 한 칸 안의 `=`로 이은 이웃 쌍 */
-  form?: 'equal' | 'components';
+  form?: 'equal' | 'components' | 'match';
 }
 export interface Prose { statement: string; solution?: string }
 
@@ -158,6 +158,8 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
       : { statement: `${where}${madeOf(givenTag)} 이루어진 ${topic(attr || '것')}?`, solution };
   }
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${withAnd(givenTag)} 같은 것은?`, solution };
+  // 칸 안의 `=`(다른 연결어가 있는 줄): 예전처럼 "대응하는 것"으로 묻는다(1일). 같은 것은 홀로 쓴 `=`만
+  if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') return { statement: `${where}${givenTag}에 대응하는 ${topic(attr || '것')}?`, solution };
   if (kind === 'direct') return { statement: `${where}${givenTag}${of}${tailOf(ask('forward'), answerOperator)}`, solution };
   if (kind === 'reverse') {
     const lead = givenOperator === 'and' ? `${where}${givenTag} 모두의 ` : givenOperator === 'sequence' ? `${where}${givenTag} 순서의 ` : `${where}${givenTag}${of}`;

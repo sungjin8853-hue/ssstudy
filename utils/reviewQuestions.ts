@@ -45,7 +45,8 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   solution?: string;
   /** 한 칸 안의 `=`로 이은 이웃 쌍이면 'equal'(문장에서 "대응하는 것"으로 묻는다) */
   /** `components`: 홀로 쓴 `=` 뒤에 `,`로 여러 값이 온 것(구성요소로 묻는다). `=` 뒤가 값 하나면 'equal'(같은 것) */
-  form?: 'equal' | 'components';
+  /** equal: 홀로 쓴 `=`(같은 것) · components: 홀로 쓴 `=` 뒤 여러 값(구성요소) · match: 칸 안의 `=`(대응하는 것, 1일: 예전 그대로) */
+  form?: 'equal' | 'components' | 'match';
   /** 덩어리 칸 빈칸 문제의 재료: 문장에 속성 이름을 넣어 다시 쓸 때 쓴다 */
   cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] };
   /** 빈칸 문제에서 첫 빈칸의 칸 번호. 같은 빈칸 수라면 빈칸이 오른쪽일수록 어렵다. */
@@ -1094,7 +1095,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const inCell = rank(placed, placed);
       items.slice(1).forEach((right, index) => {
         const left = items[index];
-        const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, form: 'equal' as const,
+        const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, form: 'match' as const,
           ...inCell, conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
           columns: { prompt: [inheritedColumn], answer: [inheritedColumn], conditions: conditionColumns } };
         add({ ...base, kind: 'direct' });

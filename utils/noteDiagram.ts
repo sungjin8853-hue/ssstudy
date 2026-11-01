@@ -198,11 +198,21 @@ const DEFINE_MEMBERS_COLON = /^\s*:\s*\(([^()\n]*)\)$/;
 export const looksLikeCriterion = (inner: string) => topLevelCuts(inner, ':;<').length > 0;
 
 export type NoteSetLine =
-  | { kind: 'ability'; expression: string; criterion: string }
+  /**
+   * `[집합식]:[기준]` 꼴의 줄. 능력적 집합은 이름 끝에 `#`을 붙여 쓴다(1일 요청: 능력적 집합과 분류기준을 나눈다).
+   * expression · criterion은 `#`을 뗀 글이고, abilitySets · criterionSets는 각 쪽에서 `#`을 붙인 이름들이다.
+   * 왼쪽에 `#` 집합이 없으면 능력 정의가 아니다(그 줄은 집합 줄로만 남는다).
+   */
+  | { kind: 'ability'; expression: string; criterion: string; abilitySets: string[]; criterionSets: string[] }
   | { kind: 'set'; expression: string }
   | { kind: 'criterion'; criterion: string }
   /** `[A:C]:(D,급수)`: 위치 표시 `[A:C]` 아래에 있는 단어 셀들을 직접 정의한다 */
   | { kind: 'define'; mark: string; members: string[] };
+
+/** 능력적 집합 표시 `#`: 이름(또는 `[ ]` 묶음) 바로 뒤(띄어쓰기는 괜찮다)에 붙고 그다음은 집합 기호·`]`·연결어·끝이다. `[A.B#]` → B, `[급수.[A:C]#]` → [A:C] */
+const ABILITY_MARK = /(\[[^\[\]\n]*\]|[^\s.,%()\[\]:;<#][^.,%()\[\]:;<#]*?)\s*#(?=\s*(?:$|[.,%()\[\]:;<]))/g;
+export const abilityMarkedNames = (text: string): string[] => [...text.matchAll(ABILITY_MARK)].map(match => match[1].trim()).filter(Boolean);
+export const stripAbilityMarks = (text: string): string => text.replace(ABILITY_MARK, (_, name: string) => name).trim();
 
 /** 한 칸(줄 또는 `//`로 나눈 칸)이 집합 줄인가: 능력 정의, `[X]` 홀로, 노트 전체 분류 기준 `[개념:정의]` */
 export const readNoteSetLine = (segment: string): NoteSetLine | null => {
@@ -217,7 +227,8 @@ export const readNoteSetLine = (segment: string): NoteSetLine | null => {
       const secondStart = firstEnd + 1 + colon[0].length;
       const secondEnd = matchingBracket(text, secondStart);
       if (secondEnd === text.length - 1 && text.slice(secondStart + 1, secondEnd).trim()) {
-        return { kind: 'ability', expression: first.trim(), criterion: text.slice(secondStart + 1, secondEnd).trim() };
+        const second = text.slice(secondStart + 1, secondEnd).trim();
+        return { kind: 'ability', expression: stripAbilityMarks(first.trim()), criterion: stripAbilityMarks(second), abilitySets: abilityMarkedNames(first), criterionSets: abilityMarkedNames(second) };
       }
     }
     const defined = DEFINE_MEMBERS_COLON.exec(after);

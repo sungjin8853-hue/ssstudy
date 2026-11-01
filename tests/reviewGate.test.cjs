@@ -3926,7 +3926,7 @@ test('tutorials walk through every step and open from a help button', () => {
   has(asked('a:{원인}b'), '‘a’의 원인은?', 'b');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 개념 ‘산업혁명’의 원인은?', '증기기관');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 원인 ‘증기기관’의 개념은?', '산업혁명');
-  has(asked("주제:'서울:부산'"), '‘주제’에서 ‘서울’과 같은 것은?', '부산');
+  has(asked("주제:'서울:부산'"), '‘주제’에서 ‘서울’에 대응하는 것은?', '부산');
   has(asked("'3-2':1"), '‘3-2’ 다음 값은?', '1');
   assert.ok(buildReviewQuestions('1 : @+1 : @+1').questions.some(q => q.prompt === '1' && q.answer === '1+1'));
   has(asked(":::toggle A\n'B-C'\n'X-Y'\n:::end\n[A] #'-'#: #+#"), '‘A’에서 ‘B-C’ 다음 값은?', 'B+C');
@@ -7186,8 +7186,8 @@ test('every question kind is asked as a workbook sentence: no AND/OR in the ques
   // 줄 안의 칸을 가린 문제
   assert.ok(questionsFor('A:B:C:D').some(q => q.kind === 'blank' && q.statement === '‘A → ( ㉠ ) → ( ㉡ ) → D’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.' && q.answer === 'B → C'));
   // 한 칸 안의 `=` 이웃 쌍과 위쪽 토글 칸
-  assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’에서 ‘p’과(와) 같은 것은?');
-  assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’에서 ‘p’ 다음 자리의 ‘q’과(와) 같은 것은?'));
+  assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’에서 ‘p’에 대응하는 것은?');
+  assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’에서 ‘p’ 다음 자리의 ‘q’에 대응하는 것은?'));
   assert.equal(questionsFor(':::toggle 자동차 :\n엔진:동력\n:::end').find(q => q.kind === 'direct' && q.prompt === '엔진').statement, '‘자동차’에서 ‘엔진’ 다음 값은?');
   // 노트 회상은 그대로
   assert.equal(questionsFor('그냥 글').find(q => q.kind === 'recall').statement, undefined);
@@ -7365,7 +7365,7 @@ test('sets: a toggle title is a set, [X] alone is the set itself with every nest
   assert.deepEqual(readNoteSetLine('[포유류]'), { kind: 'set', expression: '포유류' });
   assert.deepEqual(readNoteSetLine('[동물.%어류]'), { kind: 'set', expression: '동물.%어류' });
   assert.deepEqual(readNoteSetLine('[개념:정의]'), { kind: 'criterion', criterion: '개념:정의' });
-  assert.deepEqual(readNoteSetLine('[도형]:[개념:정의]'), { kind: 'ability', expression: '도형', criterion: '개념:정의' });
+  assert.deepEqual(readNoteSetLine('[도형#]:[개념:정의]'), { kind: 'ability', expression: '도형', criterion: '개념:정의', abilitySets: ['도형'], criterionSets: [] });
   assert.equal(readNoteSetLine('B:[분류기준] F'), null);
   assert.equal(readNoteSetLine('고래:바다'), null);
   assert.equal(headCellOf('[포유류] 고래:바다'), '고래');
@@ -7374,9 +7374,9 @@ test('sets: a toggle title is a set, [X] alone is the set itself with every nest
 test('abilities: [집합식]:[기준] applies to the data inside the set expression, within its toggle scope only', () => {
   const { buildNoteSetIndex, abilitiesFor } = loadSource('utils/noteSets.ts');
   const memo = [
-    '[도형.%삼각형]:[개념:정의]',
+    '[도형.%삼각형#]:[개념:정의]',
     ':::toggle 도형 :', '정사각형:네 변이 같다', '직각삼각형', ':::toggle 삼각형 :', '직각삼각형', '이등변삼각형', ':::end', ':::end',
-    ':::toggle 수 :', '[소수]:[수:성질]', ':::toggle 소수 :', '2', '3', ':::end', '4', ':::end'
+    ':::toggle 수 :', '[소수#]:[수:성질]', ':::toggle 소수 :', '2', '3', ':::end', '4', ':::end'
   ].join('\n');
   const index = buildNoteSetIndex([memo]);
   assert.equal(index.abilities.length, 2);
@@ -7410,7 +7410,7 @@ test('a question card shows which ability set the prompt and answer cells belong
   const { renderToStaticMarkup } = require('react-dom/server');
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
-  const memo = ['[도형]:[개념:정의]', ':::toggle 도형 :', '정사각형:네 변이 같다', ':::end', '원:한 점에서 같은 거리'].join('\n');
+  const memo = ['[도형#]:[개념:정의]', ':::toggle 도형 :', '정사각형:네 변이 같다', ':::end', '원:한 점에서 같은 거리'].join('\n');
   const { questions } = buildReviewQuestions(memo);
   const forSquare = questions.find(q => q.prompt === '정사각형' || q.answer === '정사각형');
   assert.ok(forSquare, 'the square relation makes a question');
@@ -7424,7 +7424,7 @@ test('a question card shows which ability set the prompt and answer cells belong
   const lone = ':::toggle 도형 :\n정사각형:네 변이 같다\n:::end';
   const loneQuestion = buildReviewQuestions(lone).questions[0];
   assert.ok(!renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: loneQuestion, revealed: false, memo: lone })).includes('data-ability-chip'));
-  assert.ok(renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: loneQuestion, revealed: false, memo: lone, setMemos: ['[도형]:[개념:정의]', lone] })).includes('data-ability-chip'));
+  assert.ok(renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: loneQuestion, revealed: false, memo: lone, setMemos: ['[도형#]:[개념:정의]', lone] })).includes('data-ability-chip'));
   // 노트 맨 위의 [개념:정의]가 세션 기준이 없을 때의 분류 기준이 된다
   const noted = '[개념:정의]\n정사각형:네 변이 같다';
   const q = buildReviewQuestions(noted).questions[0];
@@ -7437,7 +7437,7 @@ test('the relation map shows [X] with every nested subset, ability definitions, 
   const { renderToStaticMarkup } = require('react-dom/server');
   const { NoteDiagram } = loadSource('components/NoteTab.tsx');
   const memo = [
-    '[도형.%삼각형]:[개념:정의]', '[도형]', '[개념:정의]',
+    '[도형.%삼각형#]:[개념:정의]', '[도형]', '[개념:정의]',
     ':::toggle 도형 :', '정사각형:네 변이 같다', ':::toggle 삼각형 :', '직각삼각형:한 각이 직각', ':::end', ':::end',
     '원:한 점에서 같은 거리'
   ].join('\n');
@@ -7506,7 +7506,7 @@ test('location marks: [ ] left of a word cell places it, and ":" inside [ ] stil
 
 test('set expressions with [A:C] marks, parentheses and ".." evaluate over the cells located at the mark', () => {
   const { buildNoteSetIndex, evaluateSetExpression, readNoteSetLine, abilitiesFor } = loadSource('utils/noteSets.ts');
-  const memo = [':::toggle 수열 :', ':::toggle 급수 :', '1', '2', ':::end', ':::end', '[A:C] 급수', '[A:C] D', '[급수.[A:C]] V:D', '[도형]:[개념:정의]', ':::toggle 도형 :', '정사각형', ':::end', '[도형:개념:정의] 원'].join('\n');
+  const memo = [':::toggle 수열 :', ':::toggle 급수 :', '1', '2', ':::end', ':::end', '[A:C] 급수', '[A:C] D', '[급수.[A:C]] V:D', '[도형#]:[개념:정의]', ':::toggle 도형 :', '정사각형', ':::end', '[도형:개념:정의] 원'].join('\n');
   const index = buildNoteSetIndex([memo]);
   const names = expression => evaluateSetExpression(index, expression);
   assert.deepEqual(names('[A:C]'), ['1', '2', 'V', 'D'], 'cells at the mark, a set contributes the cells inside it');
@@ -7591,7 +7591,7 @@ test('suggestions appear only inside [ ], follow nested brackets, and replace on
   // 겹친 대괄호도 한 덩어리로 읽는다
   assert.deepEqual(splitHeadMarks('[급수.[A:C]] 급수'), { cell: '급수', marks: ['급수.[A:C]'] });
   assert.deepEqual(readNoteSetLine('[급수.[A:C]]'), { kind: 'set', expression: '급수.[A:C]' });
-  assert.deepEqual(readNoteSetLine('[급수.[A:C]]:[개념:정의]'), { kind: 'ability', expression: '급수.[A:C]', criterion: '개념:정의' });
+  assert.deepEqual(readNoteSetLine('[급수.[A:C]#]:[개념:정의]'), { kind: 'ability', expression: '급수.[A:C]', criterion: '개념:정의', abilitySets: ['[A:C]'], criterionSets: [] });
   // 교집합 위치에 둔 셀은 식 안의 위치 [A:C] 안에도 있다
   const placed = buildNoteSetIndex(['[급수.[A:C]] 급수', '[A:C] D']);
   assert.deepEqual(evaluateSetExpression(placed, '[A:C]'), ['D', '급수']);
@@ -8249,7 +8249,7 @@ test('the = and - shorthand can be turned off: both become plain letters everywh
 
 test('a standalone [X] is the set itself: it holds every nested subset, so an ability on [도형] also covers a cell two levels down', () => {
   const { buildNoteSetIndex, evaluateSetExpression, abilitiesFor } = loadSource('utils/noteSets.ts');
-  const memo = [':::toggle 도형 :', ':::toggle 삼각형 :', '직각삼각형', '예각삼각형', ':::end', '정사각형', '원', ':::end', '[도형]:[개념:정의]'].join('\n');
+  const memo = [':::toggle 도형 :', ':::toggle 삼각형 :', '직각삼각형', '예각삼각형', ':::end', '정사각형', '원', ':::end', '[도형#]:[개념:정의]'].join('\n');
   const index = buildNoteSetIndex([memo]);
   assert.deepEqual(evaluateSetExpression(index, '도형'), ['삼각형', '직각삼각형', '예각삼각형', '정사각형', '원'], 'subsets and the cells of subsets of subsets, in written order');
   assert.deepEqual(evaluateSetExpression(index, '삼각형'), ['직각삼각형', '예각삼각형']);
@@ -8634,22 +8634,25 @@ test('( ) inherits the criterion of its place (31st): inside, the first value ta
   assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’에서 정의 ‘원인’의 예시는?');
 });
 
-test('[집합(1)] : [집합(2)] connects the sub-values of the two sets: relation lines between them become ability-convert questions', () => {
+test('[집합(1)#]:[집합(2)#] connects the sub-values of the two sets: relation lines between them become ability-convert questions', () => {
   const convertSteps = memo => questionBuilder.buildReviewQuestions(memo).questions.filter(q => q.convert).map(q => q.convert.steps.map(step => `${step.set}/${step.cell}`).join(' > '));
   // values stored as `[집합] 텍스트`
-  assert.deepEqual(convertSteps('[도형] 삼각형\n[도형] 원\n[색] 빨강\n[색] 파랑\n[도형]:[색]\n삼각형 : 빨강\n원 : 파랑'),
+  assert.deepEqual(convertSteps('[도형] 삼각형\n[도형] 원\n[색] 빨강\n[색] 파랑\n[도형#]:[색#]\n삼각형 : 빨강\n원 : 파랑'),
     ['도형/삼각형 > 색/빨강', '색/빨강 > 도형/삼각형', '도형/원 > 색/파랑', '색/파랑 > 도형/원']);
   // values stored under toggles; the order of the two cells in the line does not matter
-  assert.deepEqual(convertSteps(':::toggle 도형\n삼각형\n원\n:::end\n:::toggle 색\n빨강\n파랑\n:::end\n[도형]:[색]\n파랑 : 원'),
+  assert.deepEqual(convertSteps(':::toggle 도형\n삼각형\n원\n:::end\n:::toggle 색\n빨강\n파랑\n:::end\n[도형#]:[색#]\n파랑 : 원'),
     ['색/파랑 > 도형/원', '도형/원 > 색/파랑']);
   // without the link line the same relation stays an ordinary pair
   assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n삼각형 : 빨강'), []);
   // the second [ ] is a column list (not a set in the note): still an ability definition, nothing changes
-  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형]:[개념]\n삼각형 : 빨강'), []);
+  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형#]:[개념]\n삼각형 : 빨강'), []);
   // a cell outside the sets is not pulled in
-  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형]:[색]\n사각형 : 빨강'), []);
+  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형#]:[색#]\n사각형 : 빨강'), []);
+  // 1일: 능력적 집합은 `#`으로 쓴다. 오른쪽에 `#`이 없으면 분류기준(잇는 줄이 아니다), 둘 다 없으면 능력 정의도 아니다
+  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형#]:[색]\n삼각형 : 빨강'), []);
+  assert.deepEqual(convertSteps('[도형] 삼각형\n[색] 빨강\n[도형]:[색]\n삼각형 : 빨강'), []);
   // the link line itself is not a question
-  assert.ok(!questionBuilder.buildReviewQuestions('[도형] 삼각형\n[색] 빨강\n[도형]:[색]\n삼각형 : 빨강').questions.some(q => q.prompt.includes('[도형]')));
+  assert.ok(!questionBuilder.buildReviewQuestions('[도형] 삼각형\n[색] 빨강\n[도형#]:[색]\n삼각형 : 빨강').questions.some(q => q.prompt.includes('[도형]')));
 });
 
 test('merging reaches words inside ( ): a line that starts with such a word is tied to that one word', () => {
@@ -8902,21 +8905,21 @@ test('removing a question made by a # template blocks only that one made line, a
 
 test('the removal panel finds the ability definition and the note line a question came from, and edits them where they stand', () => {
   const removal = loadSource('utils/reviewRemoval.ts');
-  const memo = '[도형]:[개념:정의]\n:::toggle 도형 :\n정사각형:네 변이 같다\n:::end';
+  const memo = '[도형#]:[개념:정의]\n:::toggle 도형 :\n정사각형:네 변이 같다\n:::end';
   const target = questionsFor(memo).find(q => q.kind === 'direct' && q.prompt === '정사각형');
   const cover = { logId: 'a', questionKey: target.key };
   const defs = removal.questionDefinitions({ covers: [cover], memos: [{ logId: 'a', memo }], setMemos: [{ logId: 'a', memo }] });
-  assert.deepEqual(defs.abilities.map(line => [line.lineIndex, line.text]), [[0, '[도형]:[개념:정의]']]);
+  assert.deepEqual(defs.abilities.map(line => [line.lineIndex, line.text]), [[0, '[도형#]:[개념:정의]']]);
   assert.deepEqual(defs.lines.map(line => [line.lineIndex, line.text]), [[2, '정사각형:네 변이 같다']]);
   assert.deepEqual(defs.values, ['정사각형', '네 변이 같다']);
   // a definition kept on another page is found through the other notes of the subject
   const lone = ':::toggle 도형 :\n정사각형:네 변이 같다\n:::end';
   const loneKey = questionsFor(lone).find(q => q.kind === 'direct' && q.prompt === '정사각형').key;
-  const other = removal.questionDefinitions({ covers: [{ logId: 'b', questionKey: loneKey }], memos: [{ logId: 'b', memo: lone }], setMemos: [{ logId: 'a', memo: '[도형]:[개념:정의]' }, { logId: 'b', memo: lone }] });
+  const other = removal.questionDefinitions({ covers: [{ logId: 'b', questionKey: loneKey }], memos: [{ logId: 'b', memo: lone }], setMemos: [{ logId: 'a', memo: '[도형#]:[개념:정의]' }, { logId: 'b', memo: lone }] });
   assert.deepEqual(other.abilities.map(line => [line.logId, line.lineIndex]), [['a', 0]]);
   // replacing a line checks that it is still the line shown (the note may have changed meanwhile)
-  assert.equal(removal.replaceMemoLine(memo, 0, '[도형]:[개념:정의]', '[도형]:[개념:이름]', false), memo.replace('정의]', '이름]'));
-  assert.equal(removal.replaceMemoLine('x\n[도형]:[개념:정의]', 0, '[도형]:[개념:정의]', '[도형]:[개념:이름]', false), 'x\n[도형]:[개념:이름]', 'found by its text when the line moved');
+  assert.equal(removal.replaceMemoLine(memo, 0, '[도형#]:[개념:정의]', '[도형#]:[개념:이름]', false), memo.replace('정의]', '이름]'));
+  assert.equal(removal.replaceMemoLine('x\n[도형#]:[개념:정의]', 0, '[도형#]:[개념:정의]', '[도형#]:[개념:이름]', false), 'x\n[도형#]:[개념:이름]', 'found by its text when the line moved');
   assert.equal(removal.replaceMemoLine(memo, 0, '없는 줄', 'x', false), null);
   assert.equal(removal.replaceMemoLine(memo, 1, '도형 :', '도형2 :', true), memo.replace(':::toggle 도형 :', ':::toggle 도형2 :'));
   // earlier values that mention the same words are fetched too
@@ -9152,7 +9155,7 @@ test('[a:b:c] is short for [[a]:[b]:[c]]: marks, toggle titles and the ability d
 
 test('an ability definition is itself a set: [소수]:[수:성질] is the position 소수:수:성질 and holds the cells the definition covers', () => {
   const { buildNoteSetIndex, evaluateSetExpression, abilitiesFor } = loadSource('utils/noteSets.ts');
-  const memo = [':::toggle 수 :', '[소수]:[수:성질]', ':::toggle 소수 :', '2', '3', ':::end', '4', ':::end'].join('\n');
+  const memo = [':::toggle 수 :', '[소수#]:[수:성질]', ':::toggle 소수 :', '2', '3', ':::end', '4', ':::end'].join('\n');
   const index = buildNoteSetIndex([memo]);
   assert.deepEqual([...evaluateSetExpression(index, '[소수:수:성질]')].sort(), ['2', '3']);
   assert.deepEqual([...evaluateSetExpression(index, '[[소수]:[수:성질]]')].sort(), ['2', '3'], 'the long form is the same set');
@@ -10203,9 +10206,9 @@ test('layers: a plain toggle title is a position, not a criterion cell, so no ce
     ['개념 ‘증기기관’의 정의는?', '정의 ‘열로 물을 끓인다’의 개념은?']);
 });
 
-test('layers: the second cell of an ability definition `[동물]:[개념:정의]` is the position of the cells in the set, so its names reach the sentence', () => {
+test('layers: the second cell of an ability definition `[동물#]:[개념:정의]` is the position of the cells in the set, so its names reach the sentence', () => {
   const { getReviewQuestionSentence } = questionBuilder;
-  const memo = '[동물]:[개념:정의]\n:::toggle 동물\n고래:새끼를 낳는다\n:::end';
+  const memo = '[동물#]:[개념:정의]\n:::toggle 동물\n고래:새끼를 낳는다\n:::end';
   const qs = questionsFor(memo);
   assert.deepEqual(qs.map(q => q.criterion), ['개념:정의', '개념:정의']);
   assert.equal(getReviewQuestionSentence(null, qs[0]).statement, '‘동물’에서 개념 ‘고래’의 정의는?');
@@ -11041,7 +11044,7 @@ test('31st checks: follow-up fields survive loading the app; a follow-up chain g
 
 test('[ ] suggestions (1일): sets written only left of cells count, criteria follow "집합:", and closing ] keeps suggesting the next cells', () => {
   const { bracketDetail, bracketSuggestions, buildNoteSetIndex, followingCellSuggestions } = loadSource('utils/noteSets.ts');
-  const memo = [':::toggle 동물 [개념:정의:예시]', '고래:바다 포유류:흰수염고래', '사자:초원 맹수:수사자', ':::end', '[과일] 사과:빨강', '[과일] 배:노랑', '[과일]:[이름:색]', ':::toggle [', ':::end'].join('\n');
+  const memo = [':::toggle 동물 [개념:정의:예시]', '고래:바다 포유류:흰수염고래', '사자:초원 맹수:수사자', ':::end', '[과일] 사과:빨강', '[과일] 배:노랑', '[과일#]:[이름:색]', ':::toggle [', ':::end'].join('\n');
   const index = buildNoteSetIndex([memo]);
   const inside = (text) => { const at = text.indexOf('|'); return bracketSuggestions(index, bracketDetail(text.replace('|', ''), at)).map(item => [item.text, item.tag]); };
   const after = (text) => { const at = text.indexOf('|'); const plain = text.replace('|', ''); return followingCellSuggestions(index, plain, at).map(item => [item.text, item.tag]); };
@@ -11110,4 +11113,21 @@ test('1일: chapters for "복습에 넣기" — only never-registered records, a
   assert.deepEqual(result.range, { start: 11, end: 20 });
   const today = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   assert.ok(today.includes('swp_chapter_review_prompted') && today.includes('복습에 넣는 걸 추천해요'), 'a finished chapter opens the dialog once as a recommendation');
+});
+
+test('1일: ability sets are marked with # — [A.B#]:[B.C#]; without # a [X]:[Y] line is no ability; a sub-set\'s own ability wins; = in a cell asks "대응하는 것", a lone = asks "같은 것"', () => {
+  const { readNoteSetLine } = loadSource('utils/noteDiagram.ts');
+  const ns = loadSource('utils/noteSets.ts');
+  assert.deepEqual(readNoteSetLine('[A.B#]:[B.C#]'), { kind: 'ability', expression: 'A.B', criterion: 'B.C', abilitySets: ['B'], criterionSets: ['C'] });
+  const noMark = ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형]:[개념:정의]']);
+  assert.equal(noMark.abilities.length, 0, 'without # it is not an ability definition');
+  const marked = ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형#]:[개념:정의]']);
+  assert.deepEqual(marked.abilities.map(item => [item.expression, item.criterion]), [['도형', '개념:정의']]);
+  // 하위 집합에 능력 정의를 새로 쓰면 상위 능력은 받지 않는다
+  const nested = ns.buildNoteSetIndex([':::toggle 도형\n:::toggle 삼각형\n정삼각형\n:::end\n원\n:::end\n[도형#]:[개념:정의]\n[삼각형#]:[이름:특징]']);
+  assert.deepEqual(ns.abilitiesFor(nested, '정삼각형').map(item => item.criterion), ['이름:특징']);
+  assert.deepEqual(ns.abilitiesFor(nested, '원').map(item => item.criterion), ['개념:정의']);
+  const asked = (memo) => questionsFor(memo).filter(q => q.kind === 'direct' && (q.form === 'match' || q.form === 'equal')).map(q => q.statement);
+  assert.deepEqual(asked('사과:빨강=둥글다'), ['‘사과’에서 ‘빨강’에 대응하는 것은?']);
+  assert.deepEqual(asked('물 = H2O'), ['‘물’과 같은 것은?']);
 });

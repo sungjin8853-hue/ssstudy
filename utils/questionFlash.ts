@@ -110,6 +110,9 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') {
     return { ...base, relation: { word: '같은', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
   }
+  if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') {
+    return { ...base, relation: { word: '대응하는', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
+  }
   if (kind === 'direct') return { ...base, relation: { word: '다음', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
   if (kind === 'reverse') {
     const lead = givenOperator === 'and' ? '모두의 ' : givenOperator === 'sequence' ? '순서의 ' : '';

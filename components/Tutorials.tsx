@@ -151,7 +151,7 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '그리고 · 등호', accent: 'teal', symbol: ', =', title: '그리고 · 등호',
-    lead: '쉼표(,)는 “둘 다”, 등호(=)는 한 칸 안에서 “서로 같다”고 잇는 말이에요. 한 칸 안에서는 -나 ,보다 먼저 물어요. 다른 연결어 없이 =나 -만 쓴 줄에서는 =가 :, -가 ;처럼 칸을 나눠요. 이때 = 뒤에 쉼표로 여러 값을 쓰면 구성요소로, 값 하나면 같은 것으로 물어요.',
+    lead: '쉼표(,)는 “둘 다”, 등호(=)는 한 칸 안에서 서로 대응하는 값을 잇는 말이에요(“~에 대응하는 것은?”). 한 칸 안에서는 -나 ,보다 먼저 물어요. 다른 연결어 없이 =나 -만 쓴 줄에서는 =가 :, -가 ;처럼 칸을 나눠요. 이때 = 뒤에 쉼표로 여러 값을 쓰면 구성요소로, 값 하나면 같은 것으로 물어요.',
     body: <>
       <NoteSample lines={[
         <><span>삼각형</span><Mono tone="colon">:</Mono><span>세 변이 있다</span><Mono tone="logic">,</Mono><span>세 각이 있다</span></>,
@@ -258,7 +258,7 @@ const NOTE_STEPS: TutorialStep[] = [
         <><Mono tone="logic">'</Mono><span>3-2</span><Mono tone="logic">'</Mono><Mono tone="colon">:</Mono><span>1</span></>
       ]} />
       <QuestionSamples items={[
-        { kind: '같은 칸 안', q: '‘주제’에서 ‘서울’과 같은 것은?', a: '부산' },
+        { kind: '같은 칸 안', q: '‘주제’에서 ‘서울’에 대응하는 것은?', a: '부산' },
         { kind: '글자 그대로', q: '‘3-2’ 다음 값은?', a: '1' }
       ]} />
     </>
