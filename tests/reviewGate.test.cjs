@@ -7389,14 +7389,17 @@ test('abilities: [집합식]:[기준] applies to the data inside the set express
   assert.deepEqual(abilitiesFor(index, '2', []), []);
 });
 
-test('set lines ([X] alone, [집합식]:[기준], [개념:정의]) are not turned into questions, other lines are unchanged', () => {
+test('set lines ([X] alone, [집합식#]:[기준], [개념:정의]) are not turned into questions, other lines are unchanged; a #-less [A]:[B] is the relation A : (B)', () => {
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const plain = buildReviewQuestions('정사각형:네 변이 같다').questions.map(q => q.key);
   assert.ok(plain.length > 0);
-  const withSetLines = buildReviewQuestions(['[도형]:[개념:정의]', '[동물.%어류]', '[포유류]', '[개념:정의]', '정사각형:네 변이 같다'].join('\n')).questions.map(q => q.key);
+  const withSetLines = buildReviewQuestions(['[도형#]:[개념:정의]', '[동물.%어류]', '[포유류]', '[개념:정의]', '정사각형:네 변이 같다'].join('\n')).questions.map(q => q.key);
   assert.deepEqual(withSetLines, plain, 'only the real relation makes questions');
   // 같은 줄 안 `//` 칸도 마찬가지
-  assert.deepEqual(buildReviewQuestions('[도형]:[개념:정의] // 정사각형:네 변이 같다').questions.map(q => q.key), plain);
+  assert.deepEqual(buildReviewQuestions('[도형#]:[개념:정의] // 정사각형:네 변이 같다').questions.map(q => q.key), plain);
+  // 1일: `#` 없는 `[도형]:[개념:정의]`는 `도형 : (개념:정의)`와 같은 관계 줄이다
+  const asStatements = memo => buildReviewQuestions(memo).questions.filter(q => q.kind !== 'recall').map(q => `${q.kind}:${q.prompt}>${q.answer}`);
+  assert.deepEqual(asStatements('[도형]:[개념:정의]'), asStatements('도형 : (개념:정의)'));
   // 위치 표시가 붙은 셀은 예전 그대로 문제가 된다
   assert.ok(buildReviewQuestions('B:D:[분류기준] F').questions.length > 0);
   const { noteCriterionOf } = loadSource('utils/noteSets.ts');

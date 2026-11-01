@@ -284,6 +284,17 @@ const attachedLine = (expression: Expression, attach: CriterionAttach | undefine
 };
 
 /** 펼친 줄의 모든 글자 범위를 원래 줄 하나로 모은다 */
+/**
+ * `#` 없는 `[A]:[B]` 줄(1일 요청): 능력 정의가 아니라 그냥 관계 줄 `A : (B)`이다. `[ ]` 안이 칸 둘 이상이면 `( )`로 묶어
+ * 그 자리의 분류기준을 이어받는다(위쪽 능력적 집합을 거쳐서): `[도형]:[개념:정의]` → `도형 : (개념:정의)`. 해당하지 않으면 null.
+ */
+export const unmarkedSetRelationOf = (text: string): string | null => {
+  const parsed = readNoteSetLine(text);
+  if (parsed?.kind !== 'ability' || parsed.abilitySets.length) return null;
+  const part = (inner: string) => (splitAt(inner, 0, inner.length, ':;<').length ? `(${inner})` : inner);
+  return `${part(parsed.expression)} : ${part(parsed.criterion)}`;
+};
+
 const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (expression.type === 'text' ? { ...expression, span }
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
@@ -781,7 +792,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const templateOf = (segment: { start: number; end: number }) => (block.type === 'toggle' ? null : readNoteTemplate(value.slice(segment.start, segment.end)));
       const slotsOf = (segment: { start: number; end: number }) => (block.type === 'toggle' || !slotIndex ? [] : readNoteSlots(value.slice(segment.start, segment.end), slotIndex));
       const segments = everySegment
-        .filter(segment => block.type === 'toggle' || (!readNoteSetLine(value.slice(segment.start, segment.end)) && !hasLogicMark(value.slice(segment.start, segment.end)) && !templateOf(segment) && slotsOf(segment).length === 0));
+        .filter(segment => block.type === 'toggle' || ((!readNoteSetLine(value.slice(segment.start, segment.end)) || unmarkedSetRelationOf(value.slice(segment.start, segment.end)) !== null) && !hasLogicMark(value.slice(segment.start, segment.end)) && !templateOf(segment) && slotsOf(segment).length === 0));
       if (!blockedHere) everySegment.forEach(segment => { const template = templateOf(segment); if (template) templates.push({ id, ...segment, text: value.slice(segment.start, segment.end), template, inherited, offset, previous }); });
       if (!blockedHere) everySegment.forEach(segment => {
         const slots = slotsOf(segment);
@@ -798,7 +809,14 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),
             { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
         }).filter(nonempty)
-        : segments.map(segment => spellOutColumnSets(attachedLine(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), block.type === 'text' ? upperAttach : undefined), criteria)).filter(nonempty);
+        : segments.map(segment => {
+          // `#` 없는 `[A]:[B]`는 `A : (B)`로 읽는다(글자 자리는 그 칸 전체)
+          const relation = block.type === 'text' ? unmarkedSetRelationOf(value.slice(segment.start, segment.end)) : null;
+          const read = relation !== null
+            ? withSpanAll(parseExpression(relation, id, 0, relation.length, inherited, offset), { nodeId: id, start: segment.start, end: segment.end, generated: relation })
+            : parseExpression(value, id, segment.start, segment.end, inherited, offset);
+          return spellOutColumnSets(attachedLine(resolveReferences(read, previous), block.type === 'text' ? upperAttach : undefined), criteria);
+        }).filter(nonempty);
       expressions.set(id, parsed);
       if (!blockedHere) segments.forEach(segment => {
         const lineCriterion = leadingCriterionOf(value.slice(segment.start, segment.end));
