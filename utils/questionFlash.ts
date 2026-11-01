@@ -102,6 +102,8 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
     return { ...base, given: null, relation: null, chain: filled, ask: { label: askLabel, mode: blanks > 1 ? '차례로' : null } };
   }
   // 31일: "이어지는"을 빼고 짧게(문장과 같은 규칙)
+  // 남은 구성요소(‘물’의 구성요소 중 ‘H’ 외에 남은 것): 앞으로 묻는 구성요소다(2일 점검: "로 이루어진 ←"으로 보이던 것)
+  if (input.form === 'components' && kind === 'remaining') return { ...base, done, relation: { word: '구성요소 중 남은', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
   if (input.form === 'components') {
     return kind === 'direct'
       ? { ...base, relation: { word: '구성요소', arrow: 'forward' }, ask: { label: askLabel, mode: '모두' } }

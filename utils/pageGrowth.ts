@@ -39,6 +39,9 @@ export interface PageEfficiencySample {
   /** 푼 페이지 범위. 페이지 단위로 효율을 나눌 때만 쓴다(없으면 단위와 상관없이 이어진다). */
   startPage?: number;
   endPage?: number;
+  /** 학습 기록이면: 복습에 넣은 때(그 단위에 든다) · 아직 기다리는 중(지금 채우는 단위). 단원을 골라 넣으면 시각 순서와 단위가 다를 수 있다 */
+  reviewRegisteredAt?: string;
+  unitReviewPending?: boolean;
 }
 
 export const hasMeasurementOnDate = (logs: PageEfficiencySample[], date: string) => logs.some(log => (
@@ -201,7 +204,9 @@ export interface EfficiencyScope {
 export const buildBoundaryUnits = (samples: PageEfficiencySample[], boundaries: readonly number[]): PageEfficiencyUnit[] => {
   const groups = new Map<number, PageEfficiencySample[]>();
   chronological(samples).forEach(log => {
-    const index = unitIndexAt(Date.parse(log.timestamp), boundaries);
+    // 복습에 넣은 기록은 넣은 때의 단위, 기다리는 기록은 지금 채우는 단위다(1일: 단원을 골라 넣으면 앞 단원 기록이 뒤에 들어갈 수 있다)
+    const at = log.unitReviewPending ? Infinity : log.reviewRegisteredAt && Number.isFinite(Date.parse(log.reviewRegisteredAt)) ? Date.parse(log.reviewRegisteredAt) : Date.parse(log.timestamp);
+    const index = unitIndexAt(at, boundaries);
     groups.set(index, [...(groups.get(index) ?? []), log]);
   });
   return [...groups.entries()].sort(([a], [b]) => a - b).map(([index, logs], order) => {

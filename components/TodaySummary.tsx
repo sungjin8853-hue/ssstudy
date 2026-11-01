@@ -734,6 +734,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const detailIsReview = Boolean(detailData && (detailData.owner || detailData.isBasicReviewDetail));
   // 임시값 창(1일 요청): 측정 전인 지금 단계와 남은 후행과목
   const [editingTemp, setEditingTemp] = useState(false);
+  useEffect(() => { setEditingTemp(false); }, [detailData?.subject.id]);
   const tempRows = useMemo(() => (detailData && !detailIsReview ? getTempStageRows(subjects, logs, detailData.subject) : []), [detailData, detailIsReview, subjects, logs]);
   const pageLabel = getPageLabel(detailData?.subject);
   const pagePos = pagePositionLabel(pageLabel);

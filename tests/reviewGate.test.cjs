@@ -11119,3 +11119,24 @@ test('1일: = in a cell asks "대응하는 것" (as before), a lone = asks "같�
   const ns = loadSource('utils/noteSets.ts');
   assert.deepEqual(ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형]:[개념:정의]']).abilities.map(item => [item.expression, item.criterion]), [['도형', '개념:정의']]);
 });
+
+test('2일 checks: skipping to a later chapter does not finish the earlier one; a record registered later by chapter belongs to the unit it was registered in', () => {
+  const cr = loadSource('utils/chapterReview.ts');
+  const { getEfficiencyScope } = loadSource('utils/pageGrowth.ts');
+  const { registrationBoundaries } = loadSource('utils/reviewUnits.ts');
+  const subject = { id: 's', name: '수학', startPage: 1, totalPages: 40, completedPages: 0, chapters: [{ startPage: 1, endPage: 20 }, { startPage: 21, endPage: 40 }] };
+  const at = (day) => new Date(Date.UTC(2026, 9, day, 10)).toISOString();
+  const log = (id, start, end, day, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', startPage: start, endPage: end, pagesRead: end - start + 1, timeSpentMinutes: 30, timestamp: at(day), studyDate: at(day).slice(0, 10), unitReviewPending: true, ...extra });
+  const logs = [log('a', 1, 10, 1), log('b', 21, 40, 2)];
+  assert.deepEqual(cr.pendingChapterGroups(subject, logs).map(group => [group.number, group.finished]), [[1, false], [2, true]], 'chapter 1 was only half done');
+  // 단원 2만 넣은 뒤: 단원 1 기록(더 이른 시각)은 아직 지금 채우는 단위다
+  const registered = [log('a', 1, 10, 1), log('b', 21, 40, 2, { unitReviewPending: undefined, reviewRegisteredAt: at(3) })];
+  const scope = getEfficiencyScope(registered, registrationBoundaries(registered));
+  assert.equal(scope.units.length, 2);
+  assert.deepEqual(scope.units.map(unit => [unit.pages, unit.complete]), [[20, true], [10, false]], 'the registered chapter is the finished unit, the waiting one is open');
+  assert.equal(scope.progress.done, 10);
+  // 남은 구성요소 플래시카드는 앞으로 묻는 구성요소다
+  const { flashOf } = loadSource('utils/questionFlash.ts');
+  const remaining = questionsFor('물 = H, O').find(q => q.kind === 'remaining');
+  assert.deepEqual(flashOf(remaining, { prompt: [], answer: [], conditions: [] }).relation, { word: '구성요소 중 남은', arrow: 'forward' });
+});
