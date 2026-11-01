@@ -368,6 +368,15 @@ export const getStageMinutesPerPage = (subjects: Subject[], logs: StudyLog[], su
   return base;
 };
 
+/** 그 단계(과목 자신 · 후행과목)의 공부를 한 번이라도 재었는가(잰 한 페이지 시간이 있는가) */
+export const isStageMeasured = (subjects: Subject[], logs: StudyLog[], subject: Subject, stageId: string) => {
+  if (stageId === subject.id) {
+    return calculateRecentTimedPageAverage(logs.filter(log => log.subjectId === subject.id && !log.reviewParentSubjectId && (log.subjectStageId || subject.id) === subject.id)).averageTimePerPage > 0;
+  }
+  const family = getSubjectFamily(subjects, subject.id, stageId);
+  return calculateRecentTimedPageAverage(logs.filter(log => isFamilyStudyLog(family, log))).averageTimePerPage > 0;
+};
+
 export interface StagePlanTime {
   /** 공부 한 페이지(분) */
   study: number;

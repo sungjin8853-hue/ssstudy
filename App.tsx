@@ -916,6 +916,7 @@ const App: React.FC = () => {
                         onAddLog={handleLogSession}
                         onReplaceLogs={handleReplaceLogs}
                         onDeleteLogs={handleDeleteLogs}
+                        onUpdateSubjects={handleUpdateSubjects}
                       />
                     )}
                     onLogSession={handleLogSession}

@@ -10998,7 +10998,7 @@ test('31st: follow-up time is guessed from the temporary values ratio and follow
   const sch = loadSource('utils/schedule.ts');
   const { getStageMinutesPerPage, getStagePlanTime } = loadSource('utils/weekPlan.ts');
   const { analyzeSubjectSpeed } = loadSource('utils/speedGrowth.ts');
-  const { FollowUpTempEditor } = loadSource('components/SessionLogger.tsx');
+  const { FollowUpTempEditor } = loadSource('components/StageTempEditor.tsx');
   const owner = { id: 'o', name: '본', startPage: 1, totalPages: 40, completedPages: 10, targetDate: '2026-12-20', scheduledWeekdays: [1, 2, 3, 4, 5], initialAverageTimePerPage: 3,
     followUpSubjects: [{ id: 'f', name: '후행', startPage: 1, endPage: 30, completedPage: 0, initialAverageTimePerPage: 6 }] };
   assert.equal(sch.getStageInitialMinutesPerPage([owner], owner, 'f'), 6);
@@ -11015,11 +11015,12 @@ test('31st: follow-up time is guessed from the temporary values ratio and follow
   // 복습 시간 임시값 없음
   const time = getStagePlanTime([owner], [log(40)], owner, 'o');
   assert.equal(time.basicReview, 4 / 4, 'not measured: the basic review temp (study 4 min/p × 1/4)'); assert.equal(time.total, 4);
-  // 학습 측정 화면의 후행과목 임시값 칸
+  // 임시값 칸(1일: 학습 실행의 "임시값" 창으로 옮김)
   const html = renderToStaticMarkup(React.createElement(FollowUpTempEditor, { pageLabel: 'P', stages: [{ id: 'f', name: '후행', temp: 6, estimate: 8 }], onSave() {} }));
   assert.ok(html.includes('data-testid="follow-up-temp"') && html.includes('예상 8.0분/p') && html.includes('value="6"') && html.includes('후행 한 장당 시간(분)'));
-  const source = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
-  assert.ok(source.includes("item.id === stageId ? { ...item, initialAverageTimePerPage: minutes } : item"), 'saving writes the follow-up temp on the subject');
+  const temp = loadSource('components/StageTempEditor.tsx');
+  assert.equal(temp.withStageTemp(owner, 'f', 7).followUpSubjects[0].initialAverageTimePerPage, 7, 'saving writes the follow-up temp on the subject');
+  assert.equal(temp.withStageTemp(owner, 'o', 2.5).initialAverageTimePerPage, 2.5, 'the subject itself keeps its own temp');
 });
 
 test('31st checks: follow-up fields survive loading the app; a follow-up chain guesses from the current follow-up; editing a temp alone does not restart the plan', () => {
@@ -11060,4 +11061,19 @@ test('[ ] suggestions (1일): sets written only left of cells count, criteria fo
   const [pick] = followingCellSuggestions(index, text.replace('|', ''), text.indexOf('|'));
   const plain = text.replace('|', '');
   assert.equal(`${plain.slice(0, pick.from)}${pick.text}${plain.slice(pick.to)}`, '[과일] 사과:빨강', 'only the cell being written is replaced');
+});
+
+test('1일: temp values are edited from the study run (not while measuring); the current subject can get one until it is measured; the measuring row never hides "이번 측정"', () => {
+  const temp = loadSource('components/StageTempEditor.tsx');
+  const owner = { id: 'o', name: '본', startPage: 1, totalPages: 40, completedPages: 0, targetDate: '2026-12-20', scheduledWeekdays: [1, 2, 3, 4, 5], initialAverageTimePerPage: 3,
+    followUpSubjects: [{ id: 'f', name: '후행', startPage: 1, endPage: 30, completedPage: 0, initialAverageTimePerPage: 6 }] };
+  const rows = temp.getTempStageRows([owner], [], owner);
+  assert.deepEqual(rows.map(row => [row.id, row.temp, Boolean(row.current)]), [['o', 3, true], ['f', 6, false]], 'not measured yet: the current subject and the follow-up');
+  const measured = [{ id: 'l', subjectId: 'o', subjectStageId: 'o', pagesRead: 10, timeSpentMinutes: 40, timestamp: '2026-10-30T10:00:00.000Z', studyDate: '2026-10-30' }];
+  assert.deepEqual(temp.getTempStageRows([owner], measured, owner).map(row => row.id), ['f'], 'once measured the current subject leaves the list');
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(!logger.includes('<FollowUpTempEditor'), 'the measuring screen no longer has the temp editor');
+  const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('data-testid="stage-temp"') && summary.includes('<StageTempDialog'), 'the study run has an "임시값" button');
+  assert.ok(logger.includes('lg:flex-[2_0_auto]'), 'the measuring group never shrinks under its numbers (the progress box wraps instead)');
 });

@@ -33,6 +33,7 @@ import { NoteSheet } from './NoteSheet';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
+import { getTempStageRows, StageTempDialog } from './StageTempEditor';
 import { pendingFeedbackOf } from '../utils/subjectFeedback';
 import type { SubjectGrade } from '../utils/subjectFeedback';
 
@@ -59,6 +60,8 @@ interface Props {
   onAddLog: (log: StudyLog) => void;
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
   onDeleteLogs: (logIds: string[]) => void;
+  /** 주면 학습과목 위쪽에 "임시값" 버튼이 생긴다: 측정 전인 지금 과목과 남은 후행과목의 한 장당 시간(임시값)을 고친다 */
+  onUpdateSubjects?: (subjects: Subject[]) => void;
 }
 
 type ModalMode = 'add' | 'edit';
@@ -505,7 +508,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -728,6 +731,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     : 0;
 
   const detailIsReview = Boolean(detailData && (detailData.owner || detailData.isBasicReviewDetail));
+  // 임시값 창(1일 요청): 측정 전인 지금 단계와 남은 후행과목
+  const [editingTemp, setEditingTemp] = useState(false);
+  const tempRows = useMemo(() => (detailData && !detailIsReview ? getTempStageRows(subjects, logs, detailData.subject) : []), [detailData, detailIsReview, subjects, logs]);
   const pageLabel = getPageLabel(detailData?.subject);
   const pagePos = pagePositionLabel(pageLabel);
   const detailMatchesTask = Boolean(idle && detailData && idle.selectedDetailKey === detailSubjectId);
@@ -1050,6 +1056,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{pendingReviewCount}</span>
             </button>
           )}
+          {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
+            <button type="button" data-testid="stage-temp" onClick={() => setEditingTemp(true)} aria-label="한 장당 시간 임시값" className={headerButton}>
+              <span aria-hidden="true">⏱</span>임시값
+            </button>
+          )}
           {!detailIsReview && (
             <button type="button" data-testid="amount-change" onClick={openAmountDialog} aria-label="학습 기록 추가" className={headerButton}>
               <span aria-hidden="true" className="text-base leading-none">+</span>추가
@@ -1057,6 +1068,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           )}
         </div>
       </div>
+
+      {editingTemp && onUpdateSubjects && detailData && !detailIsReview && (
+        <StageTempDialog subject={detailData.subject} subjects={subjects} logs={logs} pageLabel={pageLabel}
+          onUpdateSubjects={onUpdateSubjects} onClose={() => setEditingTemp(false)} />
+      )}
 
       {choosingReview && onRegisterReview && detailData && !detailIsReview && pendingReviewCount > 0 && (
         <RegisterReviewDialog info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
