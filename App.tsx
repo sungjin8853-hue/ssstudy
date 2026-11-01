@@ -15,6 +15,7 @@ import { resizeSessionTimes } from './utils/measurement';
 import { getLogProgressPages } from './utils/measurement';
 import { fsrsIntervalMs } from './utils/fsrs';
 import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
+import { gradeSelectedPending } from './utils/chapterReview';
 import type { SubjectGrade } from './utils/subjectFeedback';
 import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, skipEditIntake, updateReviewGateMemo } from './utils/reviewGate';
 import { readEditIntake } from './utils/reviewEditIntake';
@@ -726,10 +727,10 @@ const App: React.FC = () => {
   };
 
   // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
-  const handleRegisterReview = (subjectId: string, grade: SubjectGrade) => {
+  const handleRegisterReview = (subjectId: string, grade: SubjectGrade, logIds?: string[]) => {
     // 대기 기록의 새 노트는 이때 이전 쪽 노트에 연결·첨가로 합친다(저장할 때가 아니라, 29일 버그). 오래된 대기 기록부터 차례로
     let merged = logs;
-    getPendingReviewLogs(logs, subjectId).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(pending => {
+    getPendingReviewLogs(logs, subjectId).filter(log => !logIds || logIds.includes(log.id)).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(pending => {
       const memo = pending.reviewMemo ?? '';
       if (!memo.trim()) return;
       const earlier = merged
@@ -742,8 +743,12 @@ const App: React.FC = () => {
       const after = new Map(updates.map(update => [update.logId, update.after]));
       merged = merged.map(log => (after.has(log.id) ? updateReviewGateMemo(log, after.get(log.id)!, undefined, { intake: readEditIntake() }) : log));
     });
-    // 난도는 이때 고른다: 대기 기록 모두에 그 난도를 매기고(첫 복습 날짜는 FSRS-6가 정한다) 한꺼번에 복습에 넣는다
+    // 난도는 이때 고른다. 단원을 골랐으면(1일 요청) 그 기록들을 공부한 때마다 복습한 것으로 보고 FSRS-6로 계산하며, 마지막 평가가 고른 난도다
     const now = Date.now();
+    if (logIds) {
+      setLogs(registerPendingReviews(subjectId, gradeSelectedPending(merged, subjectId, logIds, grade), now, logIds).logs);
+      return;
+    }
     setLogs(registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now).logs);
   };
 

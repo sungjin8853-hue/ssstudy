@@ -229,8 +229,9 @@ export interface PendingReviewRegistration {
  * 사용자가 "복습에 넣기"를 눌렀을 때: 이 과목에서 쌓인 대기 기록을 모두 복습으로 등록한다(그 기록들의 노트가 새 복습 문제가 된다).
  * 대기 기록이 없으면 아무것도 바꾸지 않는다. 다른 과목의 기록은 건드리지 않는다.
  */
-export const registerPendingReviews = (subjectId: string, logs: StudyLog[], nowMs = Date.now()): PendingReviewRegistration => {
-  const pending = getPendingReviewLogs(logs, subjectId);
+export const registerPendingReviews = (subjectId: string, logs: StudyLog[], nowMs = Date.now(), onlyIds?: readonly string[]): PendingReviewRegistration => {
+  // onlyIds: 고른 단원의 대기 기록만 넣는다(1일 요청). 나머지 대기 기록은 그대로 기다린다
+  const pending = getPendingReviewLogs(logs, subjectId).filter(log => !onlyIds || onlyIds.includes(log.id));
   if (!pending.length) return { logs, logIds: [] };
   const starts = pending.map(log => log.startPage ?? log.endPage).filter((page): page is number => Number.isFinite(page));
   const ends = pending.map(log => log.endPage ?? log.startPage).filter((page): page is number => Number.isFinite(page));

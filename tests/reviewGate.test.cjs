@@ -5727,7 +5727,7 @@ test('page unit review registration: exceptions keep the old behaviour', () => {
   assert.ok(app.includes('registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now)') && app.includes('onRegisterReview={handleRegisterReview}'));
   const today = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.equal((today.match(/\|\| log\.unitReviewPending/g) || []).length, 2, 'a waiting record counts as a review-included record in the edit modal');
-  assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('onRegisterReview(detailData.subject.id, grade)') && today.includes('<RegisterReviewDialog'), '복습에 넣기는 난도 창을 열고, 난도를 고르면 등록한다');
+  assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('onRegisterReview(detailData.subject.id, grade, logIds)') && today.includes('<RegisterReviewDialog'), '복습에 넣기는 난도 창을 열고, 난도를 고르면 등록한다');
 });
 
 test('all-subjects panel: the review card tools wrap inside a narrow card instead of sticking out of it', () => {
@@ -11076,4 +11076,38 @@ test('1일: temp values are edited from the study run (not while measuring); the
   const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes('data-testid="stage-temp"') && summary.includes('<StageTempDialog'), 'the study run has an "임시값" button');
   assert.ok(logger.includes('lg:flex-[2_0_auto]'), 'the measuring group never shrinks under its numbers (the progress box wraps instead)');
+});
+
+test('1일: chapters for "복습에 넣기" — only never-registered records, a finished chapter is recommended, study times count as reviews and the last grade is the average', () => {
+  const cr = loadSource('utils/chapterReview.ts');
+  const { registerPendingReviews } = loadSource('utils/review.ts');
+  const subject = { id: 's', name: '수학', startPage: 1, totalPages: 30, completedPages: 0, chapters: [{ startPage: 1, endPage: 10 }, { startPage: 11, endPage: 20 }, { startPage: 21, endPage: 30 }] };
+  const at = (day, hour = 10) => new Date(Date.UTC(2026, 9, day, hour)).toISOString();
+  const log = (id, start, end, minutes, day, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', startPage: start, endPage: end, pagesRead: end - start + 1, timeSpentMinutes: minutes, timestamp: at(day), studyDate: at(day).slice(0, 10), unitReviewPending: true, ...extra });
+  const done = log('d0', 1, 10, 50, 1, { unitReviewPending: undefined, reviewRegisteredAt: at(2), reviewEnabled: true });
+  const logs = [done, log('a', 11, 15, 25, 3), log('b', 16, 20, 25, 5), log('c', 21, 24, 40, 6)];
+  const groups = cr.pendingChapterGroups(subject, logs);
+  assert.deepEqual(groups.map(group => [group.label, group.logs.map(item => item.id), group.finished]), [['단원 2 · p.11~20', ['a', 'b'], true], ['단원 3 · p.21~30', ['c'], false]], 'chapter 1 was already registered: only chapters with waiting records, chapter 2 is finished');
+  // 공부 한 번의 난도: 그 전 기록의 평균 속도와 비교(같으면 보통, 훨씬 느리면 어려움)
+  assert.equal(cr.sessionGradeOf(logs, 's', logs[1]), 'good');
+  assert.equal(cr.sessionGradeOf(logs, 's', logs[3]), 'hard');
+  assert.equal(cr.averageGradeOf(['good', 'hard', 'easy']), 'good');
+  assert.equal(cr.averageGradeOf(['hard', 'hard', 'good']), 'hard');
+  // 공부한 때마다 복습한 것으로 보고 계산: a(보통) → b(마지막 평가) — 기억은 b의 시각에서 이어진다
+  const chapter2 = groups[0].logs;
+  const card = cr.simulateStudyCard(logs, 's', chapter2, 'good');
+  assert.equal(card.lastReviewMs, Date.parse(at(5)), 'the last study time is the last review');
+  assert.equal(card.reps, 2, 'two study sessions = two reviews');
+  const info = cr.chapterFeedbackOf(logs, 's', chapter2, Date.parse(at(5, 12)));
+  assert.deepEqual(info.sessionGrades, ['good', 'good']); assert.equal(info.recommended, 'good');
+  assert.ok(info.intervals.easy > info.intervals.good && info.intervals.good > info.intervals.hard, 'easier last grade, longer interval');
+  // 고른 단원만 넣는다: 단원 3의 기록은 계속 기다린다
+  const graded = cr.gradeSelectedPending(logs, 's', ['a', 'b'], 'good');
+  const result = registerPendingReviews('s', graded, Date.parse(at(5, 12)), ['a', 'b']);
+  const byId = Object.fromEntries(result.logs.map(item => [item.id, item]));
+  assert.ok(!byId.a.unitReviewPending && !byId.b.unitReviewPending && byId.c.unitReviewPending, 'chapter 3 keeps waiting');
+  assert.equal(Date.parse(byId.a.nextReviewDate), cr.simulatedDueMs(card), 'the next review follows the simulated memory');
+  assert.deepEqual(result.range, { start: 11, end: 20 });
+  const today = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(today.includes('swp_chapter_review_prompted') && today.includes('복습에 넣는 걸 추천해요'), 'a finished chapter opens the dialog once as a recommendation');
 });

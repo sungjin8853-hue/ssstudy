@@ -35,6 +35,7 @@ import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
 import { pendingFeedbackOf } from '../utils/subjectFeedback';
+import { pendingChapterGroups } from '../utils/chapterReview';
 import type { SubjectGrade } from '../utils/subjectFeedback';
 
 interface Props {
@@ -54,7 +55,7 @@ interface Props {
   onRestoreReviewQuestion?: (logId: string, questionKey: string) => void;
   onSkipEditIntake?: (logIds: string[]) => void;
   /** 주면 복습을 기다리는 기록이 있는 학습과목 위쪽에 "복습에 넣기" 버튼이 생긴다. 누르면 난도를 고르는 창이 뜨고, 난도를 고르면 그 과목의 대기 기록이 모두 그 난도로 복습에 들어간다 */
-  onRegisterReview?: (subjectId: string, grade: SubjectGrade) => void;
+  onRegisterReview?: (subjectId: string, grade: SubjectGrade, logIds?: string[]) => void;
   activeWeekday: number;
   activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
@@ -786,6 +787,24 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 복습에 넣기를 기다리는 기록(학습을 저장해도 사용자가 "복습에 넣기"를 눌러 난도를 고를 때까지 복습에 들어가지 않는다)
   const pendingReviewCount = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.subjectId === detailData.subject.id).length : 0), [logs, detailData, detailIsReview]);
   const [choosingReview, setChoosingReview] = useState(false);
+  // 단원별 복습에 넣기(1일 요청): 아직 복습에 넣지 않은 기록을 단원으로 묶는다. 창을 열 때 처음 고를 단원과 알림 글
+  const chapterGroups = useMemo(() => (detailData && !detailIsReview && pendingReviewCount > 0 ? pendingChapterGroups(detailData.subject, logs, pagePos) : []), [detailData, detailIsReview, pendingReviewCount, logs, pagePos]);
+  const [reviewPick, setReviewPick] = useState<{ keys: string[]; notice?: string } | null>(null);
+  const openRegisterReview = () => { setReviewPick({ keys: chapterGroups.map(group => group.key) }); setChoosingReview(true); };
+  // 단원 하나를 끝내면 복습에 넣기를 추천한다: 끝낸 단원마다 한 번 창이 뜨고 그 단원이 골라져 있다(학습 실행 첫 화면에서만)
+  useEffect(() => {
+    if (!idle || !detailData || choosingReview) return;
+    const finished = chapterGroups.filter(group => group.finished && group.number !== null);
+    if (!finished.length) return;
+    const seenKey = 'swp_chapter_review_prompted';
+    let seen: string[] = [];
+    try { seen = JSON.parse(localStorage.getItem(seenKey) || '[]'); } catch { seen = []; }
+    const fresh = finished.filter(group => !seen.includes(`${detailData.subject.id}:${group.key}`));
+    if (!fresh.length) return;
+    try { localStorage.setItem(seenKey, JSON.stringify([...seen, ...fresh.map(group => `${detailData.subject.id}:${group.key}`)].slice(-500))); } catch { /* 기억하지 못해도 추천은 한다 */ }
+    setReviewPick({ keys: finished.map(group => group.key), notice: `${fresh.map(group => group.label).join(', ')}을(를) 끝냈어요. 복습에 넣는 걸 추천해요.` });
+    setChoosingReview(true);
+  }, [idle, detailData, chapterGroups, choosingReview]);
   // "학습량 변경" 창: 학습량 추가와 오늘 한 기록(고치기 · 지우기)이 한곳에 모인다
   const [changingAmount, setChangingAmount] = useState(false);
   useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
@@ -1051,7 +1070,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </button>
           )}
           {!detailIsReview && onRegisterReview && pendingReviewCount > 0 && (
-            <button type="button" data-testid="register-review" onClick={() => setChoosingReview(true)} aria-label="복습에 넣기" className={headerButton}>
+            <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="복습에 넣기" className={headerButton}>
               <span aria-hidden="true">↻</span>복습에 넣기
               <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{pendingReviewCount}</span>
             </button>
@@ -1075,9 +1094,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       )}
 
       {choosingReview && onRegisterReview && detailData && !detailIsReview && pendingReviewCount > 0 && (
-        <RegisterReviewDialog info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
+        <RegisterReviewDialog key={`${detailData.subject.id}:${(reviewPick?.keys ?? []).join(',')}`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
+          chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
           onClose={() => setChoosingReview(false)}
-          onChoose={grade => { onRegisterReview(detailData.subject.id, grade); setChoosingReview(false); }} />
+          onChoose={(grade, logIds) => { onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />
       )}
 
       {/* 기본 복습 화면에서는 뒷순서 할 일 한 줄(이어서 · 학습 범위)을 두지 않는다: 아래 지표와 겹친다(21:55) */}
