@@ -6,7 +6,7 @@ import type { NoteSetRewriter } from './ReviewMemoEditor';
 import type { SymbolTarget } from './ReviewMemoEditor';
 import { NoteSymbolBar } from './NoteSymbolBar';
 import { NoteTutorial } from './Tutorials';
-import { parseNoteDiagram, parseCriterionRelation, parseLogicText } from '../utils/noteDiagram';
+import { parseNoteDiagram, parseCriterionRelation, parseCriterionLabels, parseLogicText } from '../utils/noteDiagram';
 import type { LogicNode, DiagramLogicOperator as ReviewLogicalOperator } from '../utils/noteDiagram';
 import { groupLogsByReviewUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS, paginateNoteSections } from '../utils/noteUnits';
 import type { NoteSheetPage, NoteSheetSection } from '../utils/noteUnits';
@@ -238,7 +238,7 @@ const AbilityBadge: React.FC<{ heads: string[]; inside?: string[] }> = ({ heads,
   const [open, setOpen] = useState<string | null>(null);
   const found = useMemo(() => {
     if (!index) return [];
-    const byKey = new Map<string, { expression: string; criterion: string; written?: string }>();
+    const byKey = new Map<string, { expression: string; criterion: string }>();
     heads.forEach(head => abilitiesFor(index, headCellOf(head), [...path, ...inside]).forEach(ability => byKey.set(`${ability.expression}|${ability.criterion}`, ability)));
     return [...byKey.entries()];
   }, [index, heads.join('\u0001'), path.join('\u0001'), inside.join('\u0001')]);
@@ -249,13 +249,12 @@ const AbilityBadge: React.FC<{ heads: string[]; inside?: string[] }> = ({ heads,
         <span key={key} className="inline-flex flex-wrap items-center gap-2">
           <button type="button" data-ability-button="true" aria-expanded={open === key} onClick={() => setOpen(open === key ? null : key)}
             className="rounded-md border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs font-black text-indigo-900 hover:bg-indigo-100">
-            능력적 집합 · {ability.written ?? `${ability.expression}#`}
+            능력 · {parseCriterionLabels(ability.criterion).join(' → ')}
           </button>
           {open === key && (
-            // 능력적 정의에 적은 분류기준: 그 집합 안의 데이터가 받는 칸 이름(능력적 집합이 아니다)
             <span data-ability-criterion="true" className="inline-flex flex-wrap items-center gap-1.5 text-xs font-bold text-slate-600">
-              {ability.expression} 안의 데이터 · 분류기준
               <span className="scale-90"><CriterionFields criterion={ability.criterion} tone="scoped" /></span>
+              {ability.expression} 안의 데이터
             </span>
           )}
         </span>

@@ -37,14 +37,12 @@ export const ReviewQuestionContent: React.FC<{
   const prose = style === 'prose';
   if (question.convert) return <ConvertQuestionContent question={question} criterion={activeCriterion} revealed={revealed} />;
   const sentence = prose ? getReviewQuestionSentence(activeCriterion, question) : null;
-  // 능력적 집합만 보인다(`#` 붙은 그대로). 분류기준은 위쪽 능력적 정의를 품을 뿐 능력적 집합이 아니라서 여기에 쓰지 않는다(2일)
-  const abilityChips = abilities.filter((ability, at) => abilities.findIndex(other => other.cell === ability.cell && other.written === ability.written) === at);
-  const abilityPanel = abilities.length > 0 && <section aria-label="능력적 집합" className="w-full max-w-4xl rounded-2xl border-2 border-indigo-200 bg-indigo-50 px-4 py-3 md:px-5">
-    <h3 className="mb-2 text-sm font-black text-indigo-900">능력적 집합</h3>
+  const abilityPanel = abilities.length > 0 && <section aria-label="능력 집합" className="w-full max-w-4xl rounded-2xl border-2 border-indigo-200 bg-indigo-50 px-4 py-3 md:px-5">
+    <h3 className="mb-2 text-sm font-black text-indigo-900">능력 집합</h3>
     <div data-ability-chips="true" className="flex flex-wrap justify-center gap-2.5">
-      {abilityChips.map(ability => <span key={`${ability.cell}|${ability.written}`} data-ability-chip="true"
+      {abilities.map(ability => <span key={`${ability.cell}|${ability.expression}|${ability.criterion}`} data-ability-chip="true"
         className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">
-        {ability.cell} ∈ {ability.written}
+        {ability.cell} ∈ {ability.expression} <span className="text-indigo-600">→</span> {ability.criterion}
       </span>)}
     </div>
   </section>;

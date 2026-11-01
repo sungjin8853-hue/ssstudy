@@ -6,7 +6,7 @@ import type { ReviewQuestionDifficulty } from './reviewDifficulty';
 import { getReviewFieldOverrides, readReviewFieldOverride, reviewGroups, stripReviewFieldOverrides } from './reviewFieldOverride';
 import { buildNoteSetIndex, evaluateSetExpression, expandNoteSlots, fillNoteTemplate, leadingCriterionOf, normSetName, questionAbilities, readNoteSetLine, readNoteSlots, readNoteTemplate, setLinksOf, slotCellsOf } from './noteSets';
 import type { NoteSlot, NoteTemplate } from './noteSets';
-import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria, unmarkedRelationText } from './noteDiagram';
+import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria } from './noteDiagram';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
 import { hasLogicMark, isLogicToggleTitle, memoLineText, stripLogicMarks } from './noteLogicMarks';
 import { mergeNoteChains, parseNoteChain, scanNoteStatements } from './noteMerge';
@@ -284,14 +284,6 @@ const attachedLine = (expression: Expression, attach: CriterionAttach | undefine
 };
 
 /** 펼친 줄의 모든 글자 범위를 원래 줄 하나로 모은다 */
-/** `#` 없는 `[A]:[B]` 줄(1일 요청)은 관계 줄 `A : (B)`다: 같은 길이로 바꾼 글(noteDiagram.unmarkedRelationText). 겹친 `[ ]` 등 바꿀 수 없으면 만든 글(자리는 칸 전체) */
-export const unmarkedSetRelationOf = (text: string): string | null => {
-  const parsed = readNoteSetLine(text);
-  if (parsed?.kind !== 'ability' || parsed.abilitySets.length) return null;
-  const part = (inner: string) => (splitAt(inner, 0, inner.length, ':;<').length ? `(${inner})` : inner);
-  return `${part(parsed.expression)} : ${part(parsed.criterion)}`;
-};
-
 const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (expression.type === 'text' ? { ...expression, span }
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
@@ -789,7 +781,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const templateOf = (segment: { start: number; end: number }) => (block.type === 'toggle' ? null : readNoteTemplate(value.slice(segment.start, segment.end)));
       const slotsOf = (segment: { start: number; end: number }) => (block.type === 'toggle' || !slotIndex ? [] : readNoteSlots(value.slice(segment.start, segment.end), slotIndex));
       const segments = everySegment
-        .filter(segment => block.type === 'toggle' || ((!readNoteSetLine(value.slice(segment.start, segment.end)) || unmarkedSetRelationOf(value.slice(segment.start, segment.end)) !== null) && !hasLogicMark(value.slice(segment.start, segment.end)) && !templateOf(segment) && slotsOf(segment).length === 0));
+        .filter(segment => block.type === 'toggle' || (!readNoteSetLine(value.slice(segment.start, segment.end)) && !hasLogicMark(value.slice(segment.start, segment.end)) && !templateOf(segment) && slotsOf(segment).length === 0));
       if (!blockedHere) everySegment.forEach(segment => { const template = templateOf(segment); if (template) templates.push({ id, ...segment, text: value.slice(segment.start, segment.end), template, inherited, offset, previous }); });
       if (!blockedHere) everySegment.forEach(segment => {
         const slots = slotsOf(segment);
@@ -806,19 +798,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),
             { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
         }).filter(nonempty)
-        : segments.map(segment => {
-          // `#` 없는 `[A]:[B]`는 `A : (B)`로 읽는다(글자 자리는 그 칸 전체)
-          const written = value.slice(segment.start, segment.end);
-          const same = block.type === 'text' ? unmarkedRelationText(written) : null;
-          const relation = block.type === 'text' && same === null ? unmarkedSetRelationOf(written) : null;
-          const read = same !== null
-            // 글자 자리가 같은 글로 바꿔 읽으니 답 자리도 원래 글에 맞는다
-            ? parseExpression(value.slice(0, segment.start) + same + value.slice(segment.end), id, segment.start, segment.end, inherited, offset)
-            : relation !== null
-            ? withSpanAll(parseExpression(relation, id, 0, relation.length, inherited, offset), { nodeId: id, start: segment.start, end: segment.end, generated: relation })
-            : parseExpression(value, id, segment.start, segment.end, inherited, offset);
-          return spellOutColumnSets(attachedLine(resolveReferences(read, previous), block.type === 'text' ? upperAttach : undefined), criteria);
-        }).filter(nonempty);
+        : segments.map(segment => spellOutColumnSets(attachedLine(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), block.type === 'text' ? upperAttach : undefined), criteria)).filter(nonempty);
       expressions.set(id, parsed);
       if (!blockedHere) segments.forEach(segment => {
         const lineCriterion = leadingCriterionOf(value.slice(segment.start, segment.end));

@@ -1,6 +1,6 @@
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { isReviewSlash } from './reviewSlash';
-import { canonicalMark, looksLikeCriterion, noteCriterionOf as noteWideCriterionOf, parseCriterionLabels, readNoteSetLine, splitTitleCriteria, stripAbilityMarks, topLevelCuts, unmarkedRelationText } from './noteDiagram';
+import { canonicalMark, looksLikeCriterion, noteCriterionOf as noteWideCriterionOf, parseCriterionLabels, readNoteSetLine, splitTitleCriteria, topLevelCuts } from './noteDiagram';
 export { readNoteSetLine } from './noteDiagram';
 export type { NoteSetLine } from './noteDiagram';
 import type { NoteSetLine } from './noteDiagram';
@@ -24,10 +24,6 @@ export interface AbilityDefinition {
   scope: string[];
   /** 집합식의 결과(셀 이름, 띄어쓰기를 뺀 꼴) */
   members: string[];
-  /** 오른쪽에도 `#`을 붙인 능력적 집합(`[A#]:[B#]`)이면 그 이름들: 두 집합의 하위값을 잇는 줄이다. 없으면 오른쪽은 분류기준(왼쪽 능력적 집합을 받는다) */
-  criterionSets?: string[];
-  /** 쓴 그대로의 왼쪽(`#` 포함, 예: `도형#`): 능력적 집합을 보일 때 쓴다 */
-  written?: string;
 }
 
 export interface NoteSetIndex {
@@ -67,8 +63,7 @@ export const UNCONNECTED_NAME = '?';
 const isUnconnectedName = (text: string) => normSetName(text) === UNCONNECTED_NAME;
 
 /** 위치 표시(`[ ]` 안쪽 글)를 가리키는 열쇠. `[a:b:c]`는 `[[a]:[b]:[c]]`를 줄인 것이라 둘은 같은 위치다. */
-/** 능력적 집합 표시 `#`(1일)은 위치를 바꾸지 않는다: `[A.B#]`와 `[A.B]`는 같은 위치다 */
-export const markKeyOf = (inner: string) => normSetName(canonicalMark(stripAbilityMarks(inner)));
+export const markKeyOf = (inner: string) => normSetName(canonicalMark(inner));
 
 const isBracketGroup = (part: string) => { const end = matchingBracket(part, 0); return end > 0 && end === part.length - 1; };
 
@@ -352,7 +347,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   const children = new Map<string, string[]>();
   const sets = new Set<string>();
   const marks = new Map<string, { display: string; cells: string[] }>();
-  const pending: { expression: string; criterion: string; scope: string[]; criterionSets: string[]; written: string }[] = [];
+  const pending: { expression: string; criterion: string; scope: string[] }[] = [];
   const connected = new Set<string>();
   const see = (name: string) => { const key = normSetName(name); if (key && !display.has(key)) display.set(key, name.trim()); return key; };
   const link = (parent: string | undefined, child: string) => {
@@ -380,13 +375,9 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         return;
       }
       if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
-      segmentsOf(line).forEach(written => {
-        // `#` 없는 `[A]:[B]`는 관계 줄 `A : (B)`다(1일 요청): 그 글로 셀을 읽는다
-        const relation = unmarkedRelationText(written);
-        const segment = relation ?? written;
-        const parsed = relation ? null : readNoteSetLine(segment);
-        // 능력 정의는 왼쪽에 `#`을 붙인 능력적 집합이 있을 때만이다(1일 요청)
-        if (parsed?.kind === 'ability') { if (parsed.abilitySets.length) pending.push({ expression: parsed.expression, criterion: parsed.criterion, scope: stack.map(key => display.get(key) ?? key), criterionSets: parsed.criterionSets, written: parsed.written }); return; }
+      segmentsOf(line).forEach(segment => {
+        const parsed = readNoteSetLine(segment);
+        if (parsed?.kind === 'ability') { pending.push({ expression: parsed.expression, criterion: parsed.criterion, scope: stack.map(key => display.get(key) ?? key) }); return; }
         if (parsed?.kind === 'define') {
           parsed.members.forEach(member => { const key = see(member); connected.add(key); link(stack[stack.length - 1], key); place(parsed.mark, key); });
           return;
@@ -471,8 +462,6 @@ export const setLinksOf = (memo: string): SetLink[] => {
   const isSet = (name: string) => index.sets.has(normSetName(name)) || index.marks.has(markKeyOf(name));
   const links: SetLink[] = [];
   index.abilities.forEach(ability => {
-    // 두 집합을 잇는 줄은 오른쪽도 능력적 집합(`#`)일 때다: `[A#]:[B#]`. `#` 없는 오른쪽은 분류기준이다
-    if (!ability.criterionSets?.length) return;
     if (topLevelCuts(ability.criterion, ':;<').length) return;
     const names = [...namesIn(ability.criterion), ...namesIn(ability.expression)];
     if (!names.length || !names.every(isSet)) return;
@@ -536,7 +525,7 @@ const evaluateNode = (index: NoteSetIndex, node: SetExprNode): string[] => {
  * `%X`는 X의 상위 집합 안에서 X가 아닌 나머지다(상위 집합이 없으면 노트 전체에서).
  */
 export const evaluateSetExpression = (index: NoteSetIndex, expression: string): string[] => {
-  const text = stripAbilityMarks(expression.trim());
+  const text = expression.trim();
   if (!text) return [];
   const toDisplay = (keys: string[]) => keys.map(key => index.display.get(key) ?? key);
   if (isUnconnectedName(text)) return toDisplay(unconnectedCells(index));
@@ -672,19 +661,14 @@ export const abilitiesFor = (index: NoteSetIndex, head: string, path: readonly s
     && ability.scope.every((name, depth) => normSetName(name) === inside[depth]));
   const located = index.abilities.filter(ability => !direct.includes(ability)
     && (index.placements.get(markKeyOf(`${ability.expression}:${ability.criterion}`))?.cells ?? []).includes(key));
-  // 하위 집합(하위 토글)에 능력 정의를 새로 쓰면 상위 집합의 능력은 받지 않는다(1일 요청): 다른 능력 집합의 위쪽인 집합의 능력은 뺀다
-  const all = [...direct, ...located];
-  const setKey = (ability: AbilityDefinition) => normSetName(ability.expression);
-  const above = (upper: string, lower: string) => upper !== lower && ancestorsOf(index, lower).some(name => normSetName(name) === upper);
-  return all.filter(ability => !all.some(other => other !== ability && above(setKey(ability), setKey(other))));
+  return [...direct, ...located];
 };
 
 export const isNoteSetExpressionName = (index: NoteSetIndex, expression: string) => namesIn(expression).every(name => index.display.has(normSetName(name)));
 
 export { noteCriterionOf } from './noteDiagram';
 
-/** written: 능력적 집합을 쓴 그대로(`도형#`). criterion은 그 정의에 적은 분류기준이다(능력적 집합이 아니다) */
-export interface QuestionAbility { cell: string; expression: string; criterion: string; written: string }
+export interface QuestionAbility { cell: string; expression: string; criterion: string }
 
 /**
  * 문제의 앞(prompt)·정답 셀이 능력 집합 안에 있으면 그 능력을 돌려준다: "정사각형 ∈ 도형 → 개념:정의".
@@ -708,7 +692,7 @@ export const questionAbilities = (
     const cell = headCellOf(node.text.slice(span.start, span.end));
     abilitiesFor(index, cell, path).forEach(ability => {
       if (!result.some(item => item.cell === cell && item.criterion === ability.criterion && item.expression === ability.expression)) {
-        result.push({ cell, expression: ability.expression, criterion: ability.criterion, written: ability.written ?? `${ability.expression}#` });
+        result.push({ cell, expression: ability.expression, criterion: ability.criterion });
       }
     });
   });
@@ -911,9 +895,8 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         return;
       }
       if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
-      segmentsOf(line).forEach(written => {
-        const segment = unmarkedRelationText(written) ?? written;
-        if ((segment === written && readNoteSetLine(segment)) || readNoteTemplate(segment)) return;
+      segmentsOf(line).forEach(segment => {
+        if (readNoteSetLine(segment) || readNoteTemplate(segment)) return;
         const { cell, marks } = splitHeadMarks(segment);
         if (!cell) return;
         const inside = stack.some(item => item.key === key) || marks.some(item => markKeyOf(item) === mark)

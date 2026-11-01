@@ -198,46 +198,11 @@ const DEFINE_MEMBERS_COLON = /^\s*:\s*\(([^()\n]*)\)$/;
 export const looksLikeCriterion = (inner: string) => topLevelCuts(inner, ':;<').length > 0;
 
 export type NoteSetLine =
-  /**
-   * `[집합식]:[기준]` 꼴의 줄. 능력적 집합은 이름 끝에 `#`을 붙여 쓴다(1일 요청: 능력적 집합과 분류기준을 나눈다).
-   * expression · criterion은 `#`을 뗀 글이고, abilitySets · criterionSets는 각 쪽에서 `#`을 붙인 이름들이다.
-   * 왼쪽에 `#` 집합이 없으면 능력 정의가 아니다(그 줄은 집합 줄로만 남는다).
-   */
-  | { kind: 'ability'; expression: string; criterion: string; abilitySets: string[]; criterionSets: string[]; written: string }
+  | { kind: 'ability'; expression: string; criterion: string }
   | { kind: 'set'; expression: string }
   | { kind: 'criterion'; criterion: string }
   /** `[A:C]:(D,급수)`: 위치 표시 `[A:C]` 아래에 있는 단어 셀들을 직접 정의한다 */
   | { kind: 'define'; mark: string; members: string[] };
-
-/** 능력적 집합 표시 `#`: 이름(또는 `[ ]` 묶음) 바로 뒤(띄어쓰기는 괜찮다)에 붙고 그다음은 집합 기호·`]`·연결어·끝이다. `[A.B#]` → B, `[급수.[A:C]#]` → [A:C] */
-const ABILITY_MARK = /(\[[^\[\]\n]*\]|[^\s.,%()\[\]:;<#][^.,%()\[\]:;<#]*?)\s*#(?=\s*(?:$|[.,%()\[\]:;<]))/g;
-export const abilityMarkedNames = (text: string): string[] => [...text.matchAll(ABILITY_MARK)].map(match => match[1].trim()).filter(Boolean);
-export const stripAbilityMarks = (text: string): string => text.replace(ABILITY_MARK, (_, name: string) => name).trim();
-
-/**
- * `#` 없는 `[A]:[B]` 칸을 같은 길이의 관계 글로 바꾼다(1일 요청: `[도형]:[개념:정의]` = `도형 : (개념:정의)`).
- * 칸이 둘 이상인 `[ ]`는 `( )`로(그 자리의 분류기준을 이어받는 묶음), 이름 하나인 `[ ]`는 띄어쓰기로 바꾼다. 글자 자리는 그대로라 가림·위치가 원래 글에 맞는다.
- * 능력 정의(`#`)이거나 안쪽에 `[ ]`가 겹친 꼴이면 null.
- */
-export const unmarkedRelationText = (segment: string): string | null => {
-  const parsed = readNoteSetLine(segment);
-  if (parsed?.kind !== 'ability' || parsed.abilitySets.length) return null;
-  const lead = segment.length - segment.trimStart().length;
-  const firstEnd = matchingBracket(segment, lead);
-  const colon = segment.indexOf(':', firstEnd + 1);
-  const secondStart = segment.indexOf('[', colon + 1);
-  const secondEnd = secondStart >= 0 ? matchingBracket(segment, secondStart) : -1;
-  if (firstEnd < 0 || secondEnd < 0) return null;
-  const inners = [segment.slice(lead + 1, firstEnd), segment.slice(secondStart + 1, secondEnd)];
-  if (inners.some(inner => /[\[\]]/.test(inner))) return null;
-  const chars = segment.split('');
-  [[lead, firstEnd, inners[0]], [secondStart, secondEnd, inners[1]]].forEach(([open, close, inner]) => {
-    const group = topLevelCuts(inner as string, ':;<').length > 0;
-    chars[open as number] = group ? '(' : ' ';
-    chars[close as number] = group ? ')' : ' ';
-  });
-  return chars.join('');
-};
 
 /** 한 칸(줄 또는 `//`로 나눈 칸)이 집합 줄인가: 능력 정의, `[X]` 홀로, 노트 전체 분류 기준 `[개념:정의]` */
 export const readNoteSetLine = (segment: string): NoteSetLine | null => {
@@ -252,8 +217,7 @@ export const readNoteSetLine = (segment: string): NoteSetLine | null => {
       const secondStart = firstEnd + 1 + colon[0].length;
       const secondEnd = matchingBracket(text, secondStart);
       if (secondEnd === text.length - 1 && text.slice(secondStart + 1, secondEnd).trim()) {
-        const second = text.slice(secondStart + 1, secondEnd).trim();
-        return { kind: 'ability', expression: stripAbilityMarks(first.trim()), criterion: stripAbilityMarks(second), abilitySets: abilityMarkedNames(first), criterionSets: abilityMarkedNames(second), written: first.trim() };
+        return { kind: 'ability', expression: first.trim(), criterion: text.slice(secondStart + 1, secondEnd).trim() };
       }
     }
     const defined = DEFINE_MEMBERS_COLON.exec(after);
