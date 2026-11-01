@@ -11134,3 +11134,20 @@ test('1일: ability sets are marked with # — [A.B#]:[B.C#]; without # a [X]:[Y
   assert.deepEqual(asked('사과:빨강=둥글다'), ['‘사과’에서 ‘빨강’에 대응하는 것은?']);
   assert.deepEqual(asked('물 = H2O'), ['‘물’과 같은 것은?']);
 });
+
+test('1일: a #-less [A]:[B] line is read in place (answers hide the right words) and its cells join the sets; a closer criterion still carries the upper ability set', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const { unmarkedRelationText } = loadSource('utils/noteDiagram.ts');
+  assert.equal(unmarkedRelationText('[도형]:[개념:정의]'), ' 도형 :(개념:정의)');
+  assert.equal(unmarkedRelationText('[도형#]:[개념:정의]'), null);
+  const memo = '[도형]:[개념:정의]';
+  const direct = questionsFor(memo).filter(q => q.kind === 'direct').map(q => `${q.prompt}>${q.answer}@${q.answerSpans.map(span => memo.slice(span.start, span.end)).join(',')}`);
+  assert.deepEqual(direct, ['도형>개념@개념', '개념>정의@정의']);
+  const index = ns.buildNoteSetIndex([':::toggle 모양\n[도형]:[개념:정의]\n:::end']);
+  assert.deepEqual(ns.evaluateSetExpression(index, '모양'), ['도형'], 'the head cell is in the toggle set');
+  const withAbility = '[도형#]:[개념:정의]\n:::toggle 도형 [이름:뜻]\n원:둥글다\n:::end';
+  const built = questionBuilder.buildReviewQuestions(withAbility);
+  const q = built.questions.find(item => item.kind === 'direct');
+  assert.equal(q.criterion, '이름:뜻', 'the closer criterion names the columns');
+  assert.deepEqual(ns.questionAbilities(q, built.nodes, [withAbility]).map(item => item.expression), ['도형'], 'and the upper ability set still applies');
+});

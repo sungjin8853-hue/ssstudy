@@ -1,6 +1,6 @@
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { isReviewSlash } from './reviewSlash';
-import { canonicalMark, looksLikeCriterion, noteCriterionOf as noteWideCriterionOf, parseCriterionLabels, readNoteSetLine, splitTitleCriteria, stripAbilityMarks, topLevelCuts } from './noteDiagram';
+import { canonicalMark, looksLikeCriterion, noteCriterionOf as noteWideCriterionOf, parseCriterionLabels, readNoteSetLine, splitTitleCriteria, stripAbilityMarks, topLevelCuts, unmarkedRelationText } from './noteDiagram';
 export { readNoteSetLine } from './noteDiagram';
 export type { NoteSetLine } from './noteDiagram';
 import type { NoteSetLine } from './noteDiagram';
@@ -378,9 +378,12 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         return;
       }
       if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
-      segmentsOf(line).forEach(segment => {
-        const parsed = readNoteSetLine(segment);
-        // 능력 정의는 왼쪽에 `#`을 붙인 능력적 집합이 있을 때만이다(1일 요청). `#` 없는 `[A]:[B]`는 집합 줄로만 남는다
+      segmentsOf(line).forEach(written => {
+        // `#` 없는 `[A]:[B]`는 관계 줄 `A : (B)`다(1일 요청): 그 글로 셀을 읽는다
+        const relation = unmarkedRelationText(written);
+        const segment = relation ?? written;
+        const parsed = relation ? null : readNoteSetLine(segment);
+        // 능력 정의는 왼쪽에 `#`을 붙인 능력적 집합이 있을 때만이다(1일 요청)
         if (parsed?.kind === 'ability') { if (parsed.abilitySets.length) pending.push({ expression: parsed.expression, criterion: parsed.criterion, scope: stack.map(key => display.get(key) ?? key), criterionSets: parsed.criterionSets }); return; }
         if (parsed?.kind === 'define') {
           parsed.members.forEach(member => { const key = see(member); connected.add(key); link(stack[stack.length - 1], key); place(parsed.mark, key); });
@@ -905,8 +908,9 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         return;
       }
       if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
-      segmentsOf(line).forEach(segment => {
-        if (readNoteSetLine(segment) || readNoteTemplate(segment)) return;
+      segmentsOf(line).forEach(written => {
+        const segment = unmarkedRelationText(written) ?? written;
+        if ((segment === written && readNoteSetLine(segment)) || readNoteTemplate(segment)) return;
         const { cell, marks } = splitHeadMarks(segment);
         if (!cell) return;
         const inside = stack.some(item => item.key === key) || marks.some(item => markKeyOf(item) === mark)

@@ -214,6 +214,31 @@ const ABILITY_MARK = /(\[[^\[\]\n]*\]|[^\s.,%()\[\]:;<#][^.,%()\[\]:;<#]*?)\s*#(
 export const abilityMarkedNames = (text: string): string[] => [...text.matchAll(ABILITY_MARK)].map(match => match[1].trim()).filter(Boolean);
 export const stripAbilityMarks = (text: string): string => text.replace(ABILITY_MARK, (_, name: string) => name).trim();
 
+/**
+ * `#` 없는 `[A]:[B]` 칸을 같은 길이의 관계 글로 바꾼다(1일 요청: `[도형]:[개념:정의]` = `도형 : (개념:정의)`).
+ * 칸이 둘 이상인 `[ ]`는 `( )`로(그 자리의 분류기준을 이어받는 묶음), 이름 하나인 `[ ]`는 띄어쓰기로 바꾼다. 글자 자리는 그대로라 가림·위치가 원래 글에 맞는다.
+ * 능력 정의(`#`)이거나 안쪽에 `[ ]`가 겹친 꼴이면 null.
+ */
+export const unmarkedRelationText = (segment: string): string | null => {
+  const parsed = readNoteSetLine(segment);
+  if (parsed?.kind !== 'ability' || parsed.abilitySets.length) return null;
+  const lead = segment.length - segment.trimStart().length;
+  const firstEnd = matchingBracket(segment, lead);
+  const colon = segment.indexOf(':', firstEnd + 1);
+  const secondStart = segment.indexOf('[', colon + 1);
+  const secondEnd = secondStart >= 0 ? matchingBracket(segment, secondStart) : -1;
+  if (firstEnd < 0 || secondEnd < 0) return null;
+  const inners = [segment.slice(lead + 1, firstEnd), segment.slice(secondStart + 1, secondEnd)];
+  if (inners.some(inner => /[\[\]]/.test(inner))) return null;
+  const chars = segment.split('');
+  [[lead, firstEnd, inners[0]], [secondStart, secondEnd, inners[1]]].forEach(([open, close, inner]) => {
+    const group = topLevelCuts(inner as string, ':;<').length > 0;
+    chars[open as number] = group ? '(' : ' ';
+    chars[close as number] = group ? ')' : ' ';
+  });
+  return chars.join('');
+};
+
 /** 한 칸(줄 또는 `//`로 나눈 칸)이 집합 줄인가: 능력 정의, `[X]` 홀로, 노트 전체 분류 기준 `[개념:정의]` */
 export const readNoteSetLine = (segment: string): NoteSetLine | null => {
   const text = segment.trim();

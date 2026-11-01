@@ -6,7 +6,7 @@ import type { ReviewQuestionDifficulty } from './reviewDifficulty';
 import { getReviewFieldOverrides, readReviewFieldOverride, reviewGroups, stripReviewFieldOverrides } from './reviewFieldOverride';
 import { buildNoteSetIndex, evaluateSetExpression, expandNoteSlots, fillNoteTemplate, leadingCriterionOf, normSetName, questionAbilities, readNoteSetLine, readNoteSlots, readNoteTemplate, setLinksOf, slotCellsOf } from './noteSets';
 import type { NoteSlot, NoteTemplate } from './noteSets';
-import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria } from './noteDiagram';
+import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria, unmarkedRelationText } from './noteDiagram';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
 import { hasLogicMark, isLogicToggleTitle, memoLineText, stripLogicMarks } from './noteLogicMarks';
 import { mergeNoteChains, parseNoteChain, scanNoteStatements } from './noteMerge';
@@ -284,10 +284,7 @@ const attachedLine = (expression: Expression, attach: CriterionAttach | undefine
 };
 
 /** 펼친 줄의 모든 글자 범위를 원래 줄 하나로 모은다 */
-/**
- * `#` 없는 `[A]:[B]` 줄(1일 요청): 능력 정의가 아니라 그냥 관계 줄 `A : (B)`이다. `[ ]` 안이 칸 둘 이상이면 `( )`로 묶어
- * 그 자리의 분류기준을 이어받는다(위쪽 능력적 집합을 거쳐서): `[도형]:[개념:정의]` → `도형 : (개념:정의)`. 해당하지 않으면 null.
- */
+/** `#` 없는 `[A]:[B]` 줄(1일 요청)은 관계 줄 `A : (B)`다: 같은 길이로 바꾼 글(noteDiagram.unmarkedRelationText). 겹친 `[ ]` 등 바꿀 수 없으면 만든 글(자리는 칸 전체) */
 export const unmarkedSetRelationOf = (text: string): string | null => {
   const parsed = readNoteSetLine(text);
   if (parsed?.kind !== 'ability' || parsed.abilitySets.length) return null;
@@ -811,8 +808,13 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         }).filter(nonempty)
         : segments.map(segment => {
           // `#` 없는 `[A]:[B]`는 `A : (B)`로 읽는다(글자 자리는 그 칸 전체)
-          const relation = block.type === 'text' ? unmarkedSetRelationOf(value.slice(segment.start, segment.end)) : null;
-          const read = relation !== null
+          const written = value.slice(segment.start, segment.end);
+          const same = block.type === 'text' ? unmarkedRelationText(written) : null;
+          const relation = block.type === 'text' && same === null ? unmarkedSetRelationOf(written) : null;
+          const read = same !== null
+            // 글자 자리가 같은 글로 바꿔 읽으니 답 자리도 원래 글에 맞는다
+            ? parseExpression(value.slice(0, segment.start) + same + value.slice(segment.end), id, segment.start, segment.end, inherited, offset)
+            : relation !== null
             ? withSpanAll(parseExpression(relation, id, 0, relation.length, inherited, offset), { nodeId: id, start: segment.start, end: segment.end, generated: relation })
             : parseExpression(value, id, segment.start, segment.end, inherited, offset);
           return spellOutColumnSets(attachedLine(resolveReferences(read, previous), block.type === 'text' ? upperAttach : undefined), criteria);
