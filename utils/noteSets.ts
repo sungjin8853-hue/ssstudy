@@ -26,6 +26,8 @@ export interface AbilityDefinition {
   members: string[];
   /** 오른쪽에도 `#`을 붙인 능력적 집합(`[A#]:[B#]`)이면 그 이름들: 두 집합의 하위값을 잇는 줄이다. 없으면 오른쪽은 분류기준(왼쪽 능력적 집합을 받는다) */
   criterionSets?: string[];
+  /** 쓴 그대로의 왼쪽(`#` 포함, 예: `도형#`): 능력적 집합을 보일 때 쓴다 */
+  written?: string;
 }
 
 export interface NoteSetIndex {
@@ -350,7 +352,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   const children = new Map<string, string[]>();
   const sets = new Set<string>();
   const marks = new Map<string, { display: string; cells: string[] }>();
-  const pending: { expression: string; criterion: string; scope: string[]; criterionSets: string[] }[] = [];
+  const pending: { expression: string; criterion: string; scope: string[]; criterionSets: string[]; written: string }[] = [];
   const connected = new Set<string>();
   const see = (name: string) => { const key = normSetName(name); if (key && !display.has(key)) display.set(key, name.trim()); return key; };
   const link = (parent: string | undefined, child: string) => {
@@ -384,7 +386,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         const segment = relation ?? written;
         const parsed = relation ? null : readNoteSetLine(segment);
         // 능력 정의는 왼쪽에 `#`을 붙인 능력적 집합이 있을 때만이다(1일 요청)
-        if (parsed?.kind === 'ability') { if (parsed.abilitySets.length) pending.push({ expression: parsed.expression, criterion: parsed.criterion, scope: stack.map(key => display.get(key) ?? key), criterionSets: parsed.criterionSets }); return; }
+        if (parsed?.kind === 'ability') { if (parsed.abilitySets.length) pending.push({ expression: parsed.expression, criterion: parsed.criterion, scope: stack.map(key => display.get(key) ?? key), criterionSets: parsed.criterionSets, written: parsed.written }); return; }
         if (parsed?.kind === 'define') {
           parsed.members.forEach(member => { const key = see(member); connected.add(key); link(stack[stack.length - 1], key); place(parsed.mark, key); });
           return;
@@ -681,7 +683,8 @@ export const isNoteSetExpressionName = (index: NoteSetIndex, expression: string)
 
 export { noteCriterionOf } from './noteDiagram';
 
-export interface QuestionAbility { cell: string; expression: string; criterion: string }
+/** written: 능력적 집합을 쓴 그대로(`도형#`). criterion은 그 정의에 적은 분류기준이다(능력적 집합이 아니다) */
+export interface QuestionAbility { cell: string; expression: string; criterion: string; written: string }
 
 /**
  * 문제의 앞(prompt)·정답 셀이 능력 집합 안에 있으면 그 능력을 돌려준다: "정사각형 ∈ 도형 → 개념:정의".
@@ -705,7 +708,7 @@ export const questionAbilities = (
     const cell = headCellOf(node.text.slice(span.start, span.end));
     abilitiesFor(index, cell, path).forEach(ability => {
       if (!result.some(item => item.cell === cell && item.criterion === ability.criterion && item.expression === ability.expression)) {
-        result.push({ cell, expression: ability.expression, criterion: ability.criterion });
+        result.push({ cell, expression: ability.expression, criterion: ability.criterion, written: ability.written ?? `${ability.expression}#` });
       }
     });
   });

@@ -203,7 +203,7 @@ export type NoteSetLine =
    * expression · criterion은 `#`을 뗀 글이고, abilitySets · criterionSets는 각 쪽에서 `#`을 붙인 이름들이다.
    * 왼쪽에 `#` 집합이 없으면 능력 정의가 아니다(그 줄은 집합 줄로만 남는다).
    */
-  | { kind: 'ability'; expression: string; criterion: string; abilitySets: string[]; criterionSets: string[] }
+  | { kind: 'ability'; expression: string; criterion: string; abilitySets: string[]; criterionSets: string[]; written: string }
   | { kind: 'set'; expression: string }
   | { kind: 'criterion'; criterion: string }
   /** `[A:C]:(D,급수)`: 위치 표시 `[A:C]` 아래에 있는 단어 셀들을 직접 정의한다 */
@@ -253,7 +253,7 @@ export const readNoteSetLine = (segment: string): NoteSetLine | null => {
       const secondEnd = matchingBracket(text, secondStart);
       if (secondEnd === text.length - 1 && text.slice(secondStart + 1, secondEnd).trim()) {
         const second = text.slice(secondStart + 1, secondEnd).trim();
-        return { kind: 'ability', expression: stripAbilityMarks(first.trim()), criterion: stripAbilityMarks(second), abilitySets: abilityMarkedNames(first), criterionSets: abilityMarkedNames(second) };
+        return { kind: 'ability', expression: stripAbilityMarks(first.trim()), criterion: stripAbilityMarks(second), abilitySets: abilityMarkedNames(first), criterionSets: abilityMarkedNames(second), written: first.trim() };
       }
     }
     const defined = DEFINE_MEMBERS_COLON.exec(after);

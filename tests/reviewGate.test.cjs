@@ -7365,7 +7365,7 @@ test('sets: a toggle title is a set, [X] alone is the set itself with every nest
   assert.deepEqual(readNoteSetLine('[포유류]'), { kind: 'set', expression: '포유류' });
   assert.deepEqual(readNoteSetLine('[동물.%어류]'), { kind: 'set', expression: '동물.%어류' });
   assert.deepEqual(readNoteSetLine('[개념:정의]'), { kind: 'criterion', criterion: '개념:정의' });
-  assert.deepEqual(readNoteSetLine('[도형#]:[개념:정의]'), { kind: 'ability', expression: '도형', criterion: '개념:정의', abilitySets: ['도형'], criterionSets: [] });
+  assert.deepEqual(readNoteSetLine('[도형#]:[개념:정의]'), { kind: 'ability', expression: '도형', criterion: '개념:정의', abilitySets: ['도형'], criterionSets: [], written: '도형#' });
   assert.equal(readNoteSetLine('B:[분류기준] F'), null);
   assert.equal(readNoteSetLine('고래:바다'), null);
   assert.equal(headCellOf('[포유류] 고래:바다'), '고래');
@@ -7418,7 +7418,8 @@ test('a question card shows which ability set the prompt and answer cells belong
   const forSquare = questions.find(q => q.prompt === '정사각형' || q.answer === '정사각형');
   assert.ok(forSquare, 'the square relation makes a question');
   const html = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: forSquare, revealed: false, memo }));
-  assert.match(html, /data-ability-chip="true"[^>]*>[^<]*정사각형 ∈ 도형[\s\S]*개념:정의/);
+  assert.match(html, /data-ability-chip="true"[^>]*>정사각형 ∈ 도형#</);
+  assert.ok(!/data-ability-chip="true"[^>]*>[^<]*개념:정의/.test(html), '2일: the criterion is not shown as an ability set');
   // 도형 밖의 원은 능력이 붙지 않는다
   const forCircle = questions.find(q => q.prompt === '원' || q.answer === '원');
   assert.ok(forCircle);
@@ -7455,7 +7456,8 @@ test('the relation map shows [X] with every nested subset, ability definitions, 
   assert.equal(buttons.length, 1);
   const button = html.indexOf('data-ability-button="true"');
   assert.ok(button > html.indexOf('네 변이 같다') && button < html.indexOf('한 각이 직각'), 'the button sits under the square row');
-  assert.match(html, /능력 · 개념 → 정의/);
+  assert.match(html, /data-ability-button="true"[^>]*>능력적 집합 · [^<]*#</);
+  assert.ok(!/능력 · 개념 → 정의/.test(html), '2일: the criterion is not shown as the ability');
   // 집합 줄은 문제나 관계 줄로 그려지지 않는다
   assert.ok(!/data-diagram-row="relation"[^>]*>[\s\S]{0,200}\[도형\]/.test(html));
 });
@@ -7594,7 +7596,7 @@ test('suggestions appear only inside [ ], follow nested brackets, and replace on
   // 겹친 대괄호도 한 덩어리로 읽는다
   assert.deepEqual(splitHeadMarks('[급수.[A:C]] 급수'), { cell: '급수', marks: ['급수.[A:C]'] });
   assert.deepEqual(readNoteSetLine('[급수.[A:C]]'), { kind: 'set', expression: '급수.[A:C]' });
-  assert.deepEqual(readNoteSetLine('[급수.[A:C]#]:[개념:정의]'), { kind: 'ability', expression: '급수.[A:C]', criterion: '개념:정의', abilitySets: ['[A:C]'], criterionSets: [] });
+  assert.deepEqual(readNoteSetLine('[급수.[A:C]#]:[개념:정의]'), { kind: 'ability', expression: '급수.[A:C]', criterion: '개념:정의', abilitySets: ['[A:C]'], criterionSets: [], written: '급수.[A:C]#' });
   // 교집합 위치에 둔 셀은 식 안의 위치 [A:C] 안에도 있다
   const placed = buildNoteSetIndex(['[급수.[A:C]] 급수', '[A:C] D']);
   assert.deepEqual(evaluateSetExpression(placed, '[A:C]'), ['D', '급수']);
@@ -11121,7 +11123,7 @@ test('1일: chapters for "복습에 넣기" — only never-registered records, a
 test('1일: ability sets are marked with # — [A.B#]:[B.C#]; without # a [X]:[Y] line is no ability; a sub-set\'s own ability wins; = in a cell asks "대응하는 것", a lone = asks "같은 것"', () => {
   const { readNoteSetLine } = loadSource('utils/noteDiagram.ts');
   const ns = loadSource('utils/noteSets.ts');
-  assert.deepEqual(readNoteSetLine('[A.B#]:[B.C#]'), { kind: 'ability', expression: 'A.B', criterion: 'B.C', abilitySets: ['B'], criterionSets: ['C'] });
+  assert.deepEqual(readNoteSetLine('[A.B#]:[B.C#]'), { kind: 'ability', expression: 'A.B', criterion: 'B.C', abilitySets: ['B'], criterionSets: ['C'], written: 'A.B#' });
   const noMark = ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형]:[개념:정의]']);
   assert.equal(noMark.abilities.length, 0, 'without # it is not an ability definition');
   const marked = ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형#]:[개념:정의]']);
