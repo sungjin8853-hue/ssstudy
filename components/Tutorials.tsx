@@ -265,7 +265,7 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '앞 칸을 다시 써요', accent: 'teal', symbol: '@', title: '앞 칸을 다시 써요',
-    lead: '@는 바로 앞 칸의 값이에요. 같은 값을 다시 쓰지 않아도 돼요. [@]는 앞 칸의 집합이에요. 계속 쓸 집합은 [A.#]로 적어 두면, 뒤에서 [B.#]는 A.B(이후로 A.B를 붙여 써요), [#.C]는 A.C가 돼요. // 앞의 것은 붙지 않고([//K.#]는 K부터 새로), 그 토글이 끝나면 풀려요.',
+    lead: '@는 바로 앞 칸의 값이에요. 같은 값을 다시 쓰지 않아도 돼요. [@]는 앞 칸의 집합이에요. 계속 쓸 집합은 [A.#]로 적어 두면, 뒤에서 [B.#]는 A.B(이후로 A.B를 붙여 써요), [#.C]는 A.C가 돼요. //는 바로 앞에 붙은 것 하나만 떼요(A.B 다음 [//K.#]는 A.K). 그 토글이 끝나면 풀려요.',
     body: <>
       <NoteSample lines={[<><span>1 </span><Mono tone="colon">:</Mono><span> </span><Mono tone="logic">@</Mono><span>+1 </span><Mono tone="colon">:</Mono><span> </span><Mono tone="logic">@</Mono><span>+1</span></>]} note="이어 읽으면 1 : 1+1 : 1+1+1이에요." />
       <QuestionSamples items={[

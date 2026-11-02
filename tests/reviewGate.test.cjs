@@ -11204,10 +11204,11 @@ test('2일: [A]:[@.B] in a set line is [A]:[A.B] (the @ in brackets is the set o
   assert.deepEqual(convertSets('[A] x : [@.B] y'), ['A > A.B', 'A.B > A'], 'both sets are shown: A.B');
 });
 
-test('2일: set shorthand [//A.#] — later [B.#] is A.B and carries on, [#.C] adds without carrying, // stops what is carried, it ends with the toggle; # and // outside [ ] keep their old meaning', () => {
+test('2일: set shorthand [A.#] — later [B.#] is A.B and carries on, [#.C] adds without carrying, // takes away one element, it ends with the toggle; # and // outside [ ] keep their old meaning', () => {
   const { expandSetCarry } = loadSource('utils/setCarry.ts');
   assert.equal(expandSetCarry('[//A.#] x : [B.#] y : [#.C] z\n[#.D] w : v'), '[A] x : [A.B] y : [A.B.C] z\n[A.B.D] w : v');
-  assert.equal(expandSetCarry('[X.//A.#] x : [#.B] y'), '[X.A] x : [A.B] y', 'what is before // is not carried');
+  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [//K.#] z : [#.L] w'), '[A] x : [A.B] y : [A.K] z : [A.K.L] w', '// takes away only the one element right before (B), not everything');
+  assert.equal(expandSetCarry('[A.#] x : [#.B.//C] y'), '[A] x : [A.C] y', '// inside one bracket takes away the element just before it');
   assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '\n[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks; a toggle keeps its own');
   assert.equal(expandSetCarry("[A] #'-'#: #+#"), "[A] #'-'#: #+#", 'the # template is untouched');
   assert.equal(expandSetCarry('a // b'), 'a // b');
