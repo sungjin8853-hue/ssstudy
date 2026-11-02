@@ -15,9 +15,12 @@ const wrap = (part: string) => (/[,%]/.test(part) && !/^\(.*\)$/.test(part) ? `(
 /** `[ ]` 안 글을 요소로: `.`로 나누고 `//`는 따로 뗀다. `#`는 붙여 쓸 것의 자리 */
 const tokensOf = (inner: string) => inner.replace(/\/\//g, './/.').split('.').map(token => token.trim()).filter(Boolean);
 
+const isMark = (token: string) => /^%?!$/.test(token);
+
 export const hasSetCarry = (memo: string) => /\[[^\]\n]*#[^\]\n]*\]/.test(memo);
 
-export const expandSetCarry = (memo: string): string => {
+/** keepLines: 정하기만 하는 줄을 빈 줄로 남겨 원래 글과 줄 수를 맞춘다(복습에서 원래 줄을 찾을 때). 기본은 그 줄을 뺀다(노트에 빈 줄로 보이지 않게) */
+export const expandSetCarry = (memo: string, keepLines = false): string => {
   if (!hasSetCarry(memo)) return memo;
   const stack: string[][] = [];
   let carry: string[] = [];
@@ -31,21 +34,26 @@ export const expandSetCarry = (memo: string): string => {
       if (!inner.includes('#')) { out += line.slice(index, end + 1); index = end; continue; }
       // 붙여 쓸 것 뒤에 이 `[ ]`의 요소를 차례로 붙인다. `//`는 바로 앞의 요소 하나를 없앤다(2일).
       // `#`가 맨 뒤면 이 칸의 집합이 이후 붙여 쓸 것이 되고, 그 밖에는 붙여 쓸 것이 그대로다.
-      const tokens = tokensOf(inner);
+      // `!`(`%!`)는 복습에서 붙인 표시라 요소가 아니다: 붙여 쓸 것에 넣지 않고 풀어 쓴 집합 뒤에 그대로 둔다(2일 점검: `[A.#.!]`도 A를 이어 붙인다)
+      const all = tokensOf(inner);
+      const marks = all.filter(isMark);
+      const tokens = all.filter(token => !isMark(token));
+      // `#`가 요소 하나로 따로 있어야 줄임말이다(`[C#]` 같은 이름 속 `#`는 글자다, 2일 점검)
+      if (!tokens.includes('#')) { out += line.slice(index, end + 1); index = end; continue; }
       const elements = [...next];
       tokens.forEach(token => {
         if (token === '#') return;
         if (token === '//') { elements.pop(); return; }
         elements.push(token);
       });
-      const set = elements.map(wrap).join('.');
+      const set = [...elements.map(wrap), ...marks].join('.');
       if (tokens[tokens.length - 1] === '#') next = elements;
-      out += set ? `[${set}]` : line.slice(index, end + 1);
+      out += elements.length ? `[${set}]` : line.slice(index, end + 1);
       index = end;
     }
     return { text: out, carry: next };
   };
-  return memo.split('\n').map(line => {
+  const lines = memo.split('\n').map((line): string | null => {
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
       // 토글 제목에서 붙여 쓸 것을 정하면 그 토글 안에만 이어진다
       const { text, carry: inside } = rewriteLine(line.slice(REVIEW_MEMO_TOGGLE_START.length));
@@ -57,6 +65,9 @@ export const expandSetCarry = (memo: string): string => {
     const { text, carry: after } = rewriteLine(line);
     carry = after;
     // `[A.#]`·`[//A.#]`만 쓴 줄은 붙여 쓸 것을 정하기만 한다(칸이 없다)
-    return /^\s*\[[^\]\n]*#[^\]\n]*\]\s*$/.test(line) ? '' : text;
-  }).join('\n');
+    const only = /^\s*\[([^\]\n]*)\]\s*$/.exec(line);
+    if (!only || !tokensOf(only[1]).filter(token => !isMark(token)).includes('#')) return text;
+    return keepLines ? '' : null;
+  });
+  return lines.filter((line): line is string => line !== null).join('\n');
 };

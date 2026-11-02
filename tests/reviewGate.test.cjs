@@ -11211,11 +11211,30 @@ test('2일: set shorthand [A.#] — later [B.#] is A.B and carries on, [#.C] add
   assert.equal(expandSetCarry('[A.#] x : [#.B.//C] y'), '[A] x : [A.C] y', '// inside one bracket takes away the element just before it');
   assert.equal(expandSetCarry('[A.#] x : [B.#] y : [C.#] z : [////K.#] w'), '[A] x : [A.B] y : [A.B.C] z : [A.K] w', '//// takes away two (C and B)');
   assert.equal(expandSetCarry('[A.#] x : [B.#] y : [#.C.////D] z'), '[A] x : [A.B] y : [A.D] z');
-  assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '\n[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks; a toggle keeps its own');
+  assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks (and is left out); a toggle keeps its own');
   assert.equal(expandSetCarry("[A] #'-'#: #+#"), "[A] #'-'#: #+#", 'the # template is untouched');
   assert.equal(expandSetCarry('a // b'), 'a // b');
   assert.equal(expandSetCarry('[A.#] p\n[#.B] q\n[//K.#] r : [#.L] s'), '[A] p\n[A.B] q\n[K] r : [K.L] s', '// is not needed to start; it only stops what was carried');
-  assert.equal(expandSetCarry('[A.#]\n[#.B] q'), '\n[A.B] q', 'a line with only [A.#] just sets it');
+  assert.equal(expandSetCarry('[A.#]\n[#.B] q'), '[A.B] q', 'a line with only [A.#] just sets it');
+  assert.equal(expandSetCarry('[A.#]\n[#.B] q', true), '\n[A.B] q', 'keepLines keeps the line count');
   const sets = memo => questionsFor(memo).filter(q => q.convert).map(q => q.convert.steps.map(step => step.set).join(' > '));
   assert.deepEqual(sets('[//A.#] x : [B.#] y'), sets('[A] x : [A.B] y'), 'questions are the same as writing the sets out');
+});
+
+test('2일 점검: [C#] (a # inside a name) is not shorthand, and marking a question on a shorthand line marks the original line', () => {
+  const { expandSetCarry } = loadSource('utils/setCarry.ts');
+  assert.equal(expandSetCarry('[A.#] x\n[C#] 기초 : 문법'), '[A] x\n[C#] 기초 : 문법', 'only a # standing as its own element is shorthand');
+  assert.equal(expandSetCarry('[C#]'), '[C#]', 'a line with only [C#] stays');
+  const { planReviewRemoval } = loadSource('utils/reviewRemoval.ts');
+  const mark = (memo, prompt) => {
+    const q = questionsFor(memo).find(item => item.prompt === prompt && item.kind === 'direct');
+    assert.ok(q, `question for ${prompt}`);
+    return planReviewRemoval({ reason: 'logic', covers: [{ logId: 'a', questionKey: q.key }], memos: [{ logId: 'a', memo }], nowIso: '2026-11-03T00:00:00Z' }).map(u => u.memo);
+  };
+  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q', 'p'), ['[A.#] x : y\n[#.B] p : [!] q']);
+  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q // [#.C] r : s', 'p'), ['[A.#] x : y\n[#.B] p : [!] q // [#.C] r : s'], 'a span between two rewritten brackets');
+  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q // [#.C] r : s', 'r'), ['[A.#] x : y\n[#.B] p : q // [#.C] r : [!] s']);
+  assert.deepEqual(mark('x : [A.#] y : [#.B] z', 'x'), ['x : [A.#.!] y : [#.B] z'], 'the mark goes into the shorthand bracket');
+  assert.equal(expandSetCarry('x : [A.#.!] y : [#.B] z\n[#.C] w'), 'x : [A.!] y : [A.B] z\n[A.C] w', 'a ! mark is not an element: A is still carried');
+  assert.equal(expandSetCarry('[A.#.%!] x\n[#.B] y'), '[A.%!] x\n[A.B] y');
 });
