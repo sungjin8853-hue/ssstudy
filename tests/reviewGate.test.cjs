@@ -11209,6 +11209,8 @@ test('2일: set shorthand [A.#] — later [B.#] is A.B and carries on, [#.C] add
   assert.equal(expandSetCarry('[//A.#] x : [B.#] y : [#.C] z\n[#.D] w : v'), '[A] x : [A.B] y : [A.B.C] z\n[A.B.D] w : v');
   assert.equal(expandSetCarry('[A.#] x : [B.#] y : [//K.#] z : [#.L] w'), '[A] x : [A.B] y : [A.K] z : [A.K.L] w', '// takes away only the one element right before (B), not everything');
   assert.equal(expandSetCarry('[A.#] x : [#.B.//C] y'), '[A] x : [A.C] y', '// inside one bracket takes away the element just before it');
+  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [C.#] z : [////K.#] w'), '[A] x : [A.B] y : [A.B.C] z : [A.K] w', '//// takes away two (C and B)');
+  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [#.C.////D] z'), '[A] x : [A.B] y : [A.D] z');
   assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '\n[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks; a toggle keeps its own');
   assert.equal(expandSetCarry("[A] #'-'#: #+#"), "[A] #'-'#: #+#", 'the # template is untouched');
   assert.equal(expandSetCarry('a // b'), 'a // b');
