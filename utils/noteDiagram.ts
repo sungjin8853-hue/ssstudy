@@ -217,7 +217,11 @@ export const readNoteSetLine = (segment: string): NoteSetLine | null => {
       const secondStart = firstEnd + 1 + colon[0].length;
       const secondEnd = matchingBracket(text, secondStart);
       if (secondEnd === text.length - 1 && text.slice(secondStart + 1, secondEnd).trim()) {
-        return { kind: 'ability', expression: first.trim(), criterion: text.slice(secondStart + 1, secondEnd).trim() };
+        // 둘째 `[ ]` 안의 `@`는 앞 칸(첫 `[ ]`)의 집합이다: `[A]:[@.B]` = `[A]:[A.B]`(2일, 줄의 `[@]` 규칙과 같다)
+        const expression = first.trim();
+        const self = /[,%]/.test(expression) ? `(${expression})` : expression;
+        const criterion = text.slice(secondStart + 1, secondEnd).trim().replace(/(^|[^\p{L}\p{N}_])@(?![\p{L}\p{N}_])/gu, (_, lead: string) => `${lead}${self}`);
+        return { kind: 'ability', expression, criterion };
       }
     }
     const defined = DEFINE_MEMBERS_COLON.exec(after);

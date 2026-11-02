@@ -11193,3 +11193,13 @@ test('2일: in a branch, giving the other values lets the hidden one be found, s
   assert.deepEqual(chips(':::toggle 화학\n물 = H2O\n:::end', q => q.kind === 'reverse'), ['＿ ∈ 화학'], 'the value before = is the answer here, so it is hidden');
   assert.deepEqual(chips('[과일] 사과 - 빨강', q => q.kind === 'direct'), ['사과 ∈ 과일']);
 });
+
+test('2일: [A]:[@.B] in a set line is [A]:[A.B] (the @ in brackets is the set of the cell before)', () => {
+  const { readNoteSetLine } = loadSource('utils/noteDiagram.ts');
+  assert.deepEqual(readNoteSetLine('[A]:[@.B]'), { kind: 'ability', expression: 'A', criterion: 'A.B' });
+  assert.deepEqual(readNoteSetLine('[A,C]:[@.B]'), { kind: 'ability', expression: 'A,C', criterion: '(A,C).B' });
+  assert.deepEqual(readNoteSetLine('[A]:[개념:정의]'), { kind: 'ability', expression: 'A', criterion: '개념:정의' });
+  const convertSets = memo => questionsFor(memo).filter(q => q.convert).map(q => q.convert.steps.map(step => step.set).join(' > '));
+  assert.deepEqual(convertSets('[A] x : [@.B] y'), convertSets('[A] x : [A.B] y'), 'and in a note line it was already the same');
+  assert.deepEqual(convertSets('[A] x : [@.B] y'), ['A > A.B', 'A.B > A'], 'both sets are shown: A.B');
+});
