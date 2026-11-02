@@ -668,7 +668,8 @@ export const isNoteSetExpressionName = (index: NoteSetIndex, expression: string)
 
 export { noteCriterionOf } from './noteDiagram';
 
-export interface QuestionAbility { cell: string; expression: string; criterion: string }
+/** side: 그 셀이 문제에 주어진 쪽(prompt)인지 맞힐 쪽(answer)인지 — 맞힐 쪽은 답을 보기 전에는 셀 이름을 가린다 */
+export interface QuestionAbility { cell: string; expression: string; criterion: string; side: 'prompt' | 'answer' }
 
 /**
  * 문제의 앞(prompt)·정답 셀이 능력 집합 안에 있으면 그 능력을 돌려준다: "정사각형 ∈ 도형 → 개념:정의".
@@ -684,7 +685,7 @@ export const questionAbilities = (
   if (!index.abilities.length) return [];
   const byId = new Map(nodes.map(node => [node.id, node]));
   const result: QuestionAbility[] = [];
-  [...question.promptSpans, ...question.answerSpans].forEach(span => {
+  [...question.promptSpans.map(span => ({ span, side: 'prompt' as const })), ...question.answerSpans.map(span => ({ span, side: 'answer' as const }))].forEach(({ span, side }) => {
     const node = byId.get(span.nodeId);
     if (!node) return;
     const path: string[] = [];
@@ -692,7 +693,7 @@ export const questionAbilities = (
     const cell = headCellOf(node.text.slice(span.start, span.end));
     abilitiesFor(index, cell, path).forEach(ability => {
       if (!result.some(item => item.cell === cell && item.criterion === ability.criterion && item.expression === ability.expression)) {
-        result.push({ cell, expression: ability.expression, criterion: ability.criterion });
+        result.push({ cell, expression: ability.expression, criterion: ability.criterion, side });
       }
     });
   });

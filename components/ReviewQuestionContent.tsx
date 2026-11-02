@@ -42,7 +42,8 @@ export const ReviewQuestionContent: React.FC<{
     <div data-ability-chips="true" className="flex flex-wrap justify-center gap-2.5">
       {abilities.map(ability => <span key={`${ability.cell}|${ability.expression}|${ability.criterion}`} data-ability-chip="true"
         className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">
-        {ability.cell} ∈ {ability.expression} <span className="text-indigo-600">→</span> {ability.criterion}
+        {/* 맞힐 칸의 집합은 문제 조건으로 주되, 답을 보기 전에는 셀 이름을 가린다(2일: 답이 미리 보이던 것) */}
+        {ability.side === 'answer' && !revealed ? <span data-ability-hidden="true" className="text-indigo-400">＿</span> : ability.cell} ∈ {ability.expression} <span className="text-indigo-600">→</span> {ability.criterion}
       </span>)}
     </div>
   </section>;

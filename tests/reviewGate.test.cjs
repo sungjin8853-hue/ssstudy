@@ -11160,3 +11160,16 @@ test('2일: unsolved pages right after a reviewed part are shown (display only);
   const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes("!log.reviewParentSubjectId && !log.isRepeatReview && getLogStudyDate(log) === activeStudyDate"), 'measured records are listed for editing');
 });
+
+test('2일 버그: the ability panel gives the answer cell\'s set as a condition but hides the cell until the answer is shown', () => {
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
+  const memo = '[도형]:[개념:정의]\n:::toggle 도형\n원\n:::end\n모양:원';
+  const question = questionsFor(memo).find(q => q.kind === 'direct' && q.answer === '원');
+  const hidden = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question, revealed: false, memo }));
+  assert.ok(hidden.includes('data-ability-hidden="true"') && !/data-ability-chip="true"[^>]*>원/.test(hidden), 'no answer before revealing');
+  assert.ok(hidden.includes('∈ <!-- -->도형') || hidden.includes('∈ 도형'), 'the set is still given');
+  const shown = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question, revealed: true, memo }));
+  assert.match(shown, /data-ability-chip="true"[^>]*>원 ∈ /);
+});
