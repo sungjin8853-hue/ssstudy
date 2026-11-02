@@ -45,10 +45,9 @@ export const pendingChapterGroups = (subject: Subject, logs: readonly StudyLog[]
     if (existing) { existing.logs.push(log); return; }
     const chapter = index >= 0 ? chapters[index] : null;
     const prefix = stage?.isFollowUp ? `${stage.name} · ` : '';
-    // 그 단원 안에서 시작해 단원 끝 페이지까지 푼 기록이 있어야 끝낸 것이다(뒤 단원으로 건너뛴 기록은 앞 단원을 끝낸 게 아니다)
+    // 단원 끝 페이지까지 풀었거나 다음 단원으로 넘어갔으면 그 단원은 끝낸 것이다(2일: 다음 단원으로 넘기면 끝냄 + 복습에 넣기 추천)
     const finished = chapter ? logs.some(item => item.subjectId === subject.id && !item.reviewParentSubjectId
-      && (item.subjectStageId || subject.id) === stageId && Number(item.endPage) >= chapter.endPage
-      && Number(Number.isFinite(item.startPage) ? item.startPage : item.endPage) <= chapter.endPage) : false;
+      && (item.subjectStageId || subject.id) === stageId && Number(item.endPage) >= chapter.endPage) : false;
     groups.set(key, {
       key, stageId, number: chapter ? index + 1 : null, startPage: chapter?.startPage ?? null, endPage: chapter?.endPage ?? null,
       label: chapter ? `${prefix}단원 ${index + 1} · ${pagePos}.${chapter.startPage}~${chapter.endPage}` : `${prefix || ''}${chapters.length ? '단원 밖' : '전체'}`,
