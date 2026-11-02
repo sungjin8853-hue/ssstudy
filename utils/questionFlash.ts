@@ -120,6 +120,7 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
     const lead = givenOperator === 'and' ? '모두의 ' : givenOperator === 'sequence' ? '순서의 ' : '';
     return { ...base, relation: { word: `${lead}앞`, arrow: 'back' }, ask: { label: askLabel, mode: answerOperator === 'or' ? '하나만' : null } };
   }
+  if (kind === 'remaining' && input.beyond) return { ...base, done, relation: { word: '필요한 것 중 남은 것의 다음', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
   if (kind === 'remaining') return { ...base, done, relation: { word: '필요한 것 중 남은', arrow: 'forward' }, ask: { label: askLabel, mode: modeOf(answerOperator) } };
   if (kind === 'reconstruct') return { ...base, relation: { word: '끝까지', arrow: 'forward' }, ask: { label: askLabel, mode: '순서대로' } };
   if (kind === 'far') {

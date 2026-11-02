@@ -650,6 +650,21 @@ export const knownSetNames = (index: NoteSetIndex): string[] => unique([
   ...[...index.placements.values()].map(mark => canonicalMark(mark.display)).filter(name => !/[:;<=.,%()]/.test(name))
 ].filter(name => name.trim() && !/[\[\]]/.test(name)));
 
+/** 이름의 바로 위 집합들(토글 제목 · 아래 항목이 있는 셀 · `[집합] 셀`), 쓴 그대로 */
+export const upperSetsOf = (index: NoteSetIndex, name: string): string[] => {
+  const key = normSetName(name);
+  const direct = index.parents.get(key);
+  // `물 = H2O`처럼 `=`·`-`만 쓴 줄은 집합 안에 줄 전체가 한 셀로 들어 있다: 그 줄의 앞 값이 같으면 그 줄의 상위 집합이다(2일)
+  const viaLone = direct?.length ? [] : [...index.parents.entries()]
+    .filter(([cell]) => { const shown = index.display.get(cell) ?? cell; const cut = topLevelCuts(shown, '=-')[0]; return cut !== undefined && normSetName(shown.slice(0, cut)) === key; })
+    .flatMap(([, parents]) => parents);
+  const found = [...new Set([...(direct ?? []), ...viaLone])].map(parent => index.display.get(parent) ?? parent);
+  if (found.length) return found;
+  // 셀 왼쪽에만 쓴 집합(`[과일] 사과 - 빨강`): 그 위치 표시가 상위 집합이다
+  const loneHead = (cell: string) => { const shown = index.display.get(cell) ?? cell; const cut = topLevelCuts(shown, '=-')[0]; return normSetName(cut === undefined ? shown : shown.slice(0, cut)); };
+  return [...index.placements.values()].filter(mark => mark.cells.some(cell => cell === key || loneHead(cell) === key)).map(mark => canonicalMark(mark.display));
+};
+
 /**
  * 이 칸(맨 앞 셀 head, 토글 경로 path)에 걸리는 능력 정의들.
  * `[A:B]`는 능력 `[A]:[B]`가 적용되는 데 필요한 속성 조건을 줄인 꼴이라, 셀 왼쪽에 `[A:B]`를 쓰면 그 셀은 그 속성 위치에 있고 그 능력이 걸린다.
@@ -676,7 +691,8 @@ export interface QuestionAbility { cell: string; expression: string; criterion: 
  * 문제가 어느 토글(속성) 아래의 줄에서 나왔는지는 정답 칸 위치(nodeId)의 상위 토글 제목으로 안다.
  */
 export const questionAbilities = (
-  question: { promptSpans: readonly { nodeId: string; start: number; end: number }[]; answerSpans: readonly { nodeId: string; start: number; end: number }[] },
+  question: { promptSpans: readonly { nodeId: string; start: number; end: number }[]; answerSpans: readonly { nodeId: string; start: number; end: number }[];
+    conditionSpans?: readonly (readonly { nodeId: string; start: number; end: number }[])[] },
   nodes: readonly { id: string; parentId: string | null; text: string }[],
   setMemos: readonly string[]
 ): QuestionAbility[] => {
@@ -685,7 +701,9 @@ export const questionAbilities = (
   if (!index.abilities.length) return [];
   const byId = new Map(nodes.map(node => [node.id, node]));
   const result: QuestionAbility[] = [];
-  [...question.promptSpans.map(span => ({ span, side: 'prompt' as const })), ...question.answerSpans.map(span => ({ span, side: 'answer' as const }))].forEach(({ span, side }) => {
+  // 문제에 주어진 칸 · 조건으로 주어진 칸(2일: 조건의 능력 집합도 알려 준다) · 맞힐 칸
+  [...question.promptSpans.map(span => ({ span, side: 'prompt' as const })), ...(question.conditionSpans ?? []).flat().map(span => ({ span, side: 'prompt' as const })),
+    ...question.answerSpans.map(span => ({ span, side: 'answer' as const }))].forEach(({ span, side }) => {
     const node = byId.get(span.nodeId);
     if (!node) return;
     const path: string[] = [];

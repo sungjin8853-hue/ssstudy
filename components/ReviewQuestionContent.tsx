@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { buildReviewQuestions, getReviewQuestionClassification, getReviewQuestionSentence, REVIEW_QUESTION_KIND_LABELS } from '../utils/reviewQuestions';
-import { noteCriterionOf, questionAbilities } from '../utils/noteSets';
+import { buildNoteSetIndex, headCellOf, noteCriterionOf, questionAbilities, upperSetsOf } from '../utils/noteSets';
 import type { NoteQuestion } from '../utils/reviewQuestions';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { ConvertQuestionContent } from './ConvertQuestionContent';
@@ -15,6 +15,8 @@ import { useReviewStyle } from './ReviewStyleSelector';
  *   (`개념 ‘자동차’에서 정의 ‘엔진’에 이어지는 예시 값은?`).
  * - 플래시 카드: 앞면에 문제 조건과 맞힐 속성을 크고 분명하게 보이고, 뒷면(정답 확인)에 정답이 나온다. 세션 노트 분류 줄(`개념:정의:예시`)은 어느 모양에도 따로 보이지 않는다(값마다 붙는 속성 이름만 있다).
  */
+const normalizeCell = (text: string) => text.replace(/\s+/g, '');
+
 export const ReviewQuestionContent: React.FC<{
   question: NoteQuestion;
   criterion?: string | null;
@@ -34,12 +36,26 @@ export const ReviewQuestionContent: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [question, memo, memoKey]
   );
+  // 다른 연결어 없이 `=`·`-`만 쓴 줄의 문제(2일): 능력 정의가 없으면 앞 값(연결되기 전 값)의 상위 집합을 먼저 알려 준다
+  const loneSets = useMemo(() => {
+    if (!question.lone) return [];
+    const beforeIsPrompt = question.direction === 'forward';
+    const cell = headCellOf(beforeIsPrompt ? question.prompt : question.answer);
+    if (abilities.some(ability => normalizeCell(ability.cell) === normalizeCell(cell))) return [];
+    const sets = upperSetsOf(buildNoteSetIndex(setMemos && setMemos.length ? setMemos : [memo]), cell);
+    return sets.length ? [{ cell, sets, hidden: !beforeIsPrompt }] : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question, memo, memoKey, abilities]);
   const prose = style === 'prose';
   if (question.convert) return <ConvertQuestionContent question={question} criterion={activeCriterion} revealed={revealed} />;
   const sentence = prose ? getReviewQuestionSentence(activeCriterion, question) : null;
-  const abilityPanel = abilities.length > 0 && <section aria-label="능력 집합" className="w-full max-w-4xl rounded-2xl border-2 border-indigo-200 bg-indigo-50 px-4 py-3 md:px-5">
+  const abilityPanel = (abilities.length > 0 || loneSets.length > 0) && <section aria-label="능력 집합" className="w-full max-w-4xl rounded-2xl border-2 border-indigo-200 bg-indigo-50 px-4 py-3 md:px-5">
     <h3 className="mb-2 text-sm font-black text-indigo-900">능력 집합</h3>
     <div data-ability-chips="true" className="flex flex-wrap justify-center gap-2.5">
+      {loneSets.map(item => <span key={`lone|${item.cell}`} data-ability-chip="true" data-ability-upper="true"
+        className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">
+        {item.hidden && !revealed ? <span data-ability-hidden="true" className="text-indigo-400">＿</span> : item.cell} ∈ {item.sets.join(', ')}
+      </span>)}
       {abilities.map(ability => <span key={`${ability.cell}|${ability.expression}|${ability.criterion}`} data-ability-chip="true"
         className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">
         {/* 맞힐 칸의 집합은 문제 조건으로 주되, 답을 보기 전에는 셀 이름을 가린다(2일: 답이 미리 보이던 것) */}

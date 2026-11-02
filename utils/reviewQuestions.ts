@@ -47,6 +47,10 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   /** `components`: 홀로 쓴 `=` 뒤에 `,`로 여러 값이 온 것(구성요소로 묻는다). `=` 뒤가 값 하나면 'equal'(같은 것) */
   /** equal: 홀로 쓴 `=`(같은 것) · components: 홀로 쓴 `=` 뒤 여러 값(구성요소) · match: 칸 안의 `=`(대응하는 것, 1일: 예전 그대로) */
   form?: 'equal' | 'components' | 'match';
+  /** 남은 조건을 한 걸음 더 간 문제(2일): 주어진 값들로 남은 값을 머릿속으로 찾고, 그 남은 값의 다음 값을 맞힌다(남은 값은 보이지 않는다) */
+  beyond?: boolean;
+  /** 다른 연결어 없이 `=`·`-`만으로 이은 줄의 문제(2일): 능력 집합 칸에 앞 값의 상위 집합을 알려 준다 */
+  lone?: boolean;
   /** 덩어리 칸 빈칸 문제의 재료: 문장에 속성 이름을 넣어 다시 쓸 때 쓴다 */
   cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] };
   /** 빈칸 문제에서 첫 빈칸의 칸 번호. 같은 빈칸 수라면 빈칸이 오른쪽일수록 어렵다. */
@@ -1195,7 +1199,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (goesBackward(separator)) plainCellBlanks(index, index + 1, separator);
       // 홀로 쓴 `=` 뒤에 `,`로 여러 값이 오면 구성요소, 값 하나면 같은 것으로 묻는다(31일)
       const equalForm = separator === '=' ? { form: (right.type === 'and' ? 'components' : 'equal') as 'equal' | 'components' } : {};
-      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm,
+      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
@@ -1212,6 +1216,19 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         conditionSpans: [...conditionSpans, ...given.map(spans)],
         columns: { ...base.columns, conditions: [...conditionColumns, ...given.map(() => [expression.classifications[index + 1]])] },
         promptSpans: [...spans(left), ...given.flatMap(spans)] }));
+      // 갈래진 값(`A:(B:F),C,D`)에서 나머지 값(C, D)을 주면 남은 값(B)을 논리적으로 찾을 수 있으니, B를 보이지 않고 그다음 값(F)을 묻는다(2일)
+      const branched = expression.fields[index + 1];
+      if (goesForward(separator) && branched.type === 'and') branched.items.forEach((item, at) => {
+        if (item.type !== 'relation' || item.fields.length < 2 || !goesForward(item.separators[0] ?? ':')) return;
+        const others = branched.items.filter((_, other) => other !== at).map(head);
+        if (!others.length) return;
+        const next = item.fields[1];
+        add({ ...base, kind: 'remaining', beyond: true, answer: expressionLabel(next), answerSpans: spans(next),
+          conditions: [...conditions, ...others.map(fact => `${expressionLabel(fact)} 충족`)],
+          conditionSpans: [...conditionSpans, ...others.map(spans)],
+          columns: { ...base.columns, answer: [item.classifications[1] ?? expression.classifications[index + 1]], conditions: [...conditionColumns, ...others.map(() => [expression.classifications[index + 1]])] },
+          promptSpans: [...spans(left), ...others.flatMap(spans)] });
+      });
     });
     // 전체 재구성·빈칸은 한 행 전체를 떠올리는 문제의 변주다. 중요도는 행에서 가장 덜 중요한 칸을 따르고, 변주는 난도에만 영향을 준다.
     if (columns.length > 2 && columns.every(nonempty)) {

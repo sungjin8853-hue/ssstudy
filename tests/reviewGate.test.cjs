@@ -11173,3 +11173,23 @@ test('2일 버그: the ability panel gives the answer cell\'s set as a condition
   const shown = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question, revealed: true, memo }));
   assert.match(shown, /data-ability-chip="true"[^>]*>원 ∈ /);
 });
+
+test('2일: in a branch, giving the other values lets the hidden one be found, so the next value is asked; the ability panel gives the sets of given, condition and answer cells; a lone =/- line shows the upper set of the value before it', () => {
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const beyond = memo => questionsFor(memo).filter(q => q.beyond).map(q => `${q.statement} → ${q.answer}`);
+  assert.deepEqual(beyond('A:(B:F=G,H),C,D'), ['‘A’에 필요한 것 중 ‘C, D’ 외에 남은 것의 다음 값을 모두 쓰시오. → (F = G) AND H']);
+  assert.deepEqual(beyond('A:(B:F),(C:K),D'), ['‘A’에 필요한 것 중 ‘C, D’ 외에 남은 것의 다음 값은? → F', '‘A’에 필요한 것 중 ‘B, D’ 외에 남은 것의 다음 값은? → K']);
+  assert.deepEqual(beyond('A:B,C,D'), [], 'nothing continues');
+  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
+  const chips = (memo, pick) => {
+    const q = questionsFor(memo).find(pick);
+    const html = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: q, revealed: false, memo }));
+    return (html.match(/data-ability-chip="true"[^>]*>.*?<\/span>(?=<span data-ability-chip|<\/div>)/g) || []).map(text => text.replace(/<[^>]+>/g, '').replace(/^.*?>/, ''));
+  };
+  const sets = '[도형]:[개념:정의]\n:::toggle 도형\nB\nC\nD\n:::end\nA:(B:F),C,D';
+  assert.deepEqual(chips(sets, q => q.beyond), ['C ∈ 도형 → 개념:정의', 'D ∈ 도형 → 개념:정의'], 'the condition cells\' sets are given; the hidden B is not shown');
+  assert.deepEqual(chips(':::toggle 화학\n물 = H2O\n:::end', q => q.kind === 'direct'), ['물 ∈ 화학']);
+  assert.deepEqual(chips(':::toggle 화학\n물 = H2O\n:::end', q => q.kind === 'reverse'), ['＿ ∈ 화학'], 'the value before = is the answer here, so it is hidden');
+  assert.deepEqual(chips('[과일] 사과 - 빨강', q => q.kind === 'direct'), ['사과 ∈ 과일']);
+});

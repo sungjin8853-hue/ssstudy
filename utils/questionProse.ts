@@ -51,6 +51,8 @@ export interface ProseInput {
   distance?: number;
   /** 한 칸 안의 `=`로 이은 이웃 쌍 */
   form?: 'equal' | 'components' | 'match';
+  /** 남은 값의 다음 값을 묻는 남은 조건 문제(2일) */
+  beyond?: boolean;
 }
 export interface Prose { statement: string; solution?: string }
 
@@ -164,6 +166,11 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
   if (kind === 'reverse') {
     const lead = givenOperator === 'and' ? `${where}${givenTag} 모두의 ` : givenOperator === 'sequence' ? `${where}${givenTag} 순서의 ` : `${where}${givenTag}${of}`;
     return { statement: `${lead}${answerOperator === 'or' ? `${ask('reverse')} 중 하나를 쓰시오.` : `${topic(ask('reverse'))}?`}`, solution };
+  }
+  if (kind === 'remaining' && input.beyond) {
+    // 남은 값은 보이지 않고 머릿속으로 찾는다: 그 값의 다음 값을 묻는다(2일)
+    const lead = `${where}${givenTag}에 필요한 것 중 ${done}남은 것의 다음 ${attr ? `${attr} 값` : '값'}`;
+    return { statement: answerOperator === 'and' ? `${lead}을 모두 쓰시오.` : answerOperator === 'sequence' ? `${lead}을 순서대로 쓰시오.` : `${lead}은?`, solution };
   }
   if (kind === 'remaining') {
     const lead = `${where}${givenTag}에 필요한 것 중 ${done}남은 ${noun}`;
