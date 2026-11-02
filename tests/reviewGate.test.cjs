@@ -11203,3 +11203,16 @@ test('2일: [A]:[@.B] in a set line is [A]:[A.B] (the @ in brackets is the set o
   assert.deepEqual(convertSets('[A] x : [@.B] y'), convertSets('[A] x : [A.B] y'), 'and in a note line it was already the same');
   assert.deepEqual(convertSets('[A] x : [@.B] y'), ['A > A.B', 'A.B > A'], 'both sets are shown: A.B');
 });
+
+test('2일: set shorthand [//A.#] — later [B.#] is A.B and carries on, [#.C] adds without carrying, // stops what is carried, it ends with the toggle; # and // outside [ ] keep their old meaning', () => {
+  const { expandSetCarry } = loadSource('utils/setCarry.ts');
+  assert.equal(expandSetCarry('[//A.#] x : [B.#] y : [#.C] z\n[#.D] w : v'), '[A] x : [A.B] y : [A.B.C] z\n[A.B.D] w : v');
+  assert.equal(expandSetCarry('[X.//A.#] x : [#.B] y'), '[X.A] x : [A.B] y', 'what is before // is not carried');
+  assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '\n[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks; a toggle keeps its own');
+  assert.equal(expandSetCarry("[A] #'-'#: #+#"), "[A] #'-'#: #+#", 'the # template is untouched');
+  assert.equal(expandSetCarry('a // b'), 'a // b');
+  assert.equal(expandSetCarry('[A.#] p\n[#.B] q\n[//K.#] r : [#.L] s'), '[A] p\n[A.B] q\n[K] r : [K.L] s', '// is not needed to start; it only stops what was carried');
+  assert.equal(expandSetCarry('[A.#]\n[#.B] q'), '\n[A.B] q', 'a line with only [A.#] just sets it');
+  const sets = memo => questionsFor(memo).filter(q => q.convert).map(q => q.convert.steps.map(step => step.set).join(' > '));
+  assert.deepEqual(sets('[//A.#] x : [B.#] y'), sets('[A] x : [A.B] y'), 'questions are the same as writing the sets out');
+});
