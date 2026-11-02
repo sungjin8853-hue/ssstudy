@@ -189,7 +189,8 @@ export const memoEditEffects = (before: string, after: string): MemoEditEffects 
   let released = 0;
   hunks.forEach(hunk => {
     const flaggedBefore = hunk.oldLines.some(line => hasLogicMark(memoLineText(line)));
-    hunk.oldLines.forEach((line, index) => {
+    // 2일: 사용자가 직접 지우거나 고친 값은 "이전 값"으로 남기지 않는다(복습 화면에 다시 보이지 않게). `[!]`에 걸려 있던 줄을 고친 때만 남긴다
+    if (flaggedBefore) hunk.oldLines.forEach((line, index) => {
       if (isStructureLine(line)) return;
       const next = hunk.newLines[index];
       oldLines.push({ text: line, ...(next !== undefined && !isStructureLine(next) ? { replacedBy: next } : {}) });

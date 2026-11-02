@@ -28,6 +28,8 @@ import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
 import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
+import { formatPageSpans, unsolvedPagesAfter } from '../utils/unsolvedPages';
+import { hasLogicMark, memoLineText } from '../utils/noteLogicMarks';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
 import { NoteTutorial } from './Tutorials';
@@ -1007,11 +1009,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         log,
         memo,
         range: formatReviewRange(log, pageLabel),
+        // 복습하는 부분 바로 뒤의 풀지 않은 페이지(2일: 보여 주기만)
+        unsolved: formatPageSpans(unsolvedPagesAfter(log, logs, subjects), pagePositionLabel(pageLabel)),
         parsed: withLogShorthand(log, () => parseReviewGateMemo(memo)),
         criterion: createSessionMemoRecord(sessionMemoOverrides?.[log.subjectId] ?? readSessionMemos()[log.subjectId] ?? '').classificationCriterion
       };
     }).filter(item => item.memo.trim().length > 0)
-  ), [preSessionReviewDrafts, preSessionReviewLogs, sessionMemoOverrides, sessionMemo]);
+  ), [preSessionReviewDrafts, preSessionReviewLogs, sessionMemoOverrides, sessionMemo, logs, subjects, pageLabel]);
 
   const gateReviewQuestions = useMemo<GateReviewQuestion[]>(() => {
     const isRetry = Boolean(preSessionReviewGroup?.isGateRetry);
@@ -1911,7 +1915,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     return logs.filter(log => subjectIds.has(log.subjectId) && (log.reviewMemo ?? '').trim());
   }, [logs, preSessionReviewLogs]);
   const gateSubjectMemos = useMemo<RemovalMemo[]>(() => gateSubjectNotes.map(log => ({ logId: log.id, memo: log.reviewMemo ?? '' })), [gateSubjectNotes]);
-  const gateOldLines = useMemo(() => gateSubjectNotes.flatMap(log => log.reviewMemoOldLines ?? []), [gateSubjectNotes]);
+  // 이전 값은 `[!]`에 걸렸다가 고친 줄만 보인다(2일: 직접 지운 값은 복습에 나오지 않는다 — 예전에 쌓인 것도 거른다)
+  const gateOldLines = useMemo(() => gateSubjectNotes.flatMap(log => log.reviewMemoOldLines ?? []).filter(line => hasLogicMark(memoLineText(line.text))), [gateSubjectNotes]);
 
   const handleRemoveGateQuestion = (reason: ReviewRemovedReason) => {
     if (!currentGateQuestion || !onRemoveReviewQuestions) return;
@@ -2453,6 +2458,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           </div>
         ) : undefined}
         questionRange={currentGateQuestion?.range || ''}
+        rangeNote={currentGateMemoItem?.unsolved ? `풀지 않은 곳 ${currentGateMemoItem.unsolved}` : undefined}
         hasCurrentQuestion={Boolean(currentGateQuestion && currentGateMemoItem)}
         revealed={isGateAnswerRevealed}
         onReveal={handleGateReveal}
@@ -2476,6 +2482,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             {maskedByItem.map(({ item, maskedKeys }) => (
               <section key={item.log.id} className="space-y-2">
                 <h4 className="text-sm font-bold text-slate-700">{item.range} · 정리노트</h4>
+                {/* 문제를 다 푼 뒤: 지금 복습한 곳과 그 바로 뒤의 풀지 않은 곳(2일: 보여 주기만) */}
+                <p data-testid="review-pages" className="text-sm font-bold text-slate-600">
+                  복습한 곳 {pagePositionLabel(pageLabel)}.{item.range}
+                  {item.unsolved && <span data-testid="review-unsolved" className="ml-2 rounded-md bg-amber-100 px-2 py-0.5 text-amber-900">풀지 않은 곳 {item.unsolved}</span>}
+                </p>
                 <ReviewNoteSummary memo={item.memo} maskedKeys={maskedKeys} />
               </section>
             ))}

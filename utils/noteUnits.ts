@@ -90,7 +90,9 @@ export const groupLogsByReviewUnit = (logs: StudyLog[], boundaries: readonly num
   if (!boundaries.length) return groupLogsByDay(chronological, scope);
   const byUnit = new Map<number, StudyLog[]>();
   chronological.forEach(log => {
-    const index = unitIndexAt(timeOf(log), boundaries);
+    // 복습에 넣은 기록은 넣은 때의 단위, 아직 기다리는 기록은 지금 단위(2일: 단원을 골라 넣으면 시각 순서와 다를 수 있다)
+    const registered = log.reviewRegisteredAt ? Date.parse(log.reviewRegisteredAt) : NaN;
+    const index = unitIndexAt(log.unitReviewPending ? Infinity : Number.isFinite(registered) ? registered : timeOf(log), boundaries);
     byUnit.set(index, [...(byUnit.get(index) ?? []), log]);
   });
   return [...byUnit.entries()].sort(([a], [b]) => a - b).map(([index, items]): NoteUnitPage => {

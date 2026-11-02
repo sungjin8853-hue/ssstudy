@@ -685,8 +685,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     const replacementLog: StudyLog = {
       id: editingSummary?.logs[0]?.id || Math.random().toString(36).substr(2, 9),
       subjectId,
-      // 이 창에서 넣거나 고친 기록: 과목을 다 끝내지 않은 날에도 오늘 한 기록에 남는다
-      manualEntry: true,
+      // 이 창에서 넣은 기록. 측정으로 한 기록을 고치면 측정 기록으로 남고(2일), 복습에 넣은 때·범위도 그대로 둔다(단위가 바뀌지 않게)
+      ...(editingSummary && editingSummary.logs.length > 0 && editingSummary.logs.every(log => !log.manualEntry) ? {} : { manualEntry: true }),
+      ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewRegisteredAt ? { reviewRegisteredAt: editingSummary.logs[0].reviewRegisteredAt } : {}),
+      ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewUnitRange ? { reviewUnitRange: editingSummary.logs[0].reviewUnitRange } : {}),
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,
@@ -832,8 +834,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     setPickingAddSubject(!preselectedAddSubject);
     if (preselectedAddSubject) openAddModal(preselectedAddSubject);
   };
-  const todayAdded = buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)
-    .filter(summary => summary.kind === 'study');
+  // 오늘 한 학습 기록 하나하나(2일: "+ 추가"로 넣은 것뿐 아니라 측정으로 한 것도 고치고 지울 수 있다). 기록마다 따로 고친다
+  const todayAdded = logs
+    .filter(log => !log.reviewParentSubjectId && !log.isRepeatReview && getLogStudyDate(log) === activeStudyDate)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .flatMap(log => buildCompletedSubjectSummaries([log], subjects, [], activeStudyDate)
+      .filter(summary => summary.kind === 'study')
+      .map(summary => ({ ...summary, recordKey: `log:${log.id}`, measured: !log.manualEntry })));
   const [sessionNote, setSessionNote] = useState('');
   useEffect(() => { if (addingInline && subjectId) { try { setSessionNote(readSessionMemos()[subjectId] ?? ''); } catch { setSessionNote(''); } } }, [addingInline, subjectId]);
   const addLabel = getPageLabel(selectedSubject);
@@ -913,13 +920,14 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </section>
           )}
           <section aria-label="오늘 추가한 기록" className="flex flex-col gap-1.5 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
-            <h3 className="text-sm font-black text-slate-800">오늘 추가한 기록 · 모든 과목</h3>
+            <h3 className="text-sm font-black text-slate-800">오늘 한 기록 · 모든 과목</h3>
             {todayAdded.length > 0 ? todayAdded.map(summary => {
               const label = getPageLabel(subjects.find(subject => subject.id === summary.subjectId));
               return (
                 <div key={summary.recordKey} data-testid="amount-today-row" className="flex min-w-0 items-center gap-1">
                   <p className="min-w-0 flex-1 truncate text-[15px] font-black text-slate-900">
                     <span className="text-slate-600">{summary.name} · </span>
+                    <span className={`mr-1 rounded px-1.5 py-0.5 text-[12px] font-black ${summary.measured ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200 text-slate-700'}`}>{summary.measured ? '측정' : '추가'}</span>
                     {summary.startPage > 0 && summary.endPage > 0 ? `${pagePositionLabel(label)}.${formatNumber(summary.startPage)}~${formatNumber(summary.endPage)} · ` : ''}
                     {formatNumber(summary.pages)}{label} · {formatDoneMinutes(summary.minutes)}
                   </p>
@@ -929,7 +937,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
                     className="flex h-11 w-11 shrink-0 items-center justify-center text-xl text-slate-600 hover:text-rose-600">×</button>
                 </div>
               );
-            }) : <p data-testid="amount-empty" className="py-1 text-sm font-bold text-slate-600">오늘 추가한 기록이 없어요.</p>}
+            }) : <p data-testid="amount-empty" className="py-1 text-sm font-bold text-slate-600">오늘 한 기록이 없어요.</p>}
           </section>
         </div>
       </div>

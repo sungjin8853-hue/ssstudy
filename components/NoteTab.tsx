@@ -552,7 +552,7 @@ const dayLabel = (day?: string) => {
  * 구역 제목 한 행. 페이지 단위가 있으면 "3번째 단위"를 조금 큰 글씨로(옆에 p.21~30), 단위가 없으면 날짜를 조금 크고 간단하게.
  * 한 쪽보다 긴 구역이 다음 쪽으로 이어지면 "이어서"가 붙는다. 노트와 관계도가 같은 제목을 쓴다.
  */
-const SectionHeading: React.FC<{ section: NoteSheetSection }> = ({ section }) => (
+const SectionHeading: React.FC<{ section: NoteSheetSection; onDelete?: () => void; confirming?: boolean; onCancel?: () => void }> = ({ section, onDelete, confirming, onCancel }) => (
   <div data-note-heading={section.kind} className="flex h-7 items-center gap-2 whitespace-nowrap">
     {section.kind === 'unit' ? (
       <>
@@ -563,6 +563,17 @@ const SectionHeading: React.FC<{ section: NoteSheetSection }> = ({ section }) =>
       <span data-note-day-heading={section.day} className="text-xl font-black text-indigo-900">{dayLabel(section.day)}</span>
     )}
     {section.continued && <span data-note-continued="true" className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-900">이어서</span>}
+    {/* 2일: 노트를 단위째로(단위가 없으면 그날째로) 지운다. 한 번 더 눌러야 지워지고, 지운 뒤 되돌릴 수 있다 */}
+    {onDelete && (confirming ? (
+      <span className="ml-auto flex items-center gap-1.5">
+        <button type="button" data-note-unit-delete-confirm="true" onClick={onDelete}
+          className="h-7 rounded-md bg-rose-600 px-2.5 text-xs font-black text-white hover:bg-rose-700">{section.kind === 'unit' ? '이 단위 노트 지우기' : '이 날 노트 지우기'}</button>
+        <button type="button" onClick={onCancel} className="h-7 rounded-md px-2 text-xs font-black text-slate-600 hover:bg-slate-100">취소</button>
+      </span>
+    ) : (
+      <button type="button" data-note-unit-delete="true" onClick={onDelete} aria-label={section.kind === 'unit' ? '이 단위 노트 지우기' : '이 날 노트 지우기'}
+        className="ml-auto h-7 rounded-md px-2 text-xs font-black text-slate-500 hover:bg-rose-50 hover:text-rose-700">지우기</button>
+    ))}
   </div>
 );
 
@@ -727,6 +738,22 @@ export const NoteTab: React.FC<{
   );
   const [pageKey, setPageKey] = useState<string | null>(null);
   const foundPage = pages.findIndex(item => item.key === pageKey);
+  // 단위째 지우기(2일): 구역 열쇠 → 그 단위(또는 그날)의 모든 기록. 처음 누르면 확인, 지운 뒤에는 되돌리기
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deletedSection, setDeletedSection] = useState<{ label: string; memos: { id: string; memo: string }[] } | null>(null);
+  const deleteSection = (section: NoteSheetSection) => {
+    if (deleting !== section.key) { setDeleting(section.key); return; }
+    const unit = current ? groupLogsByReviewUnit(current.logs, unitBoundaries, current.id).find(item => item.key === section.key) : undefined;
+    const memos = (unit?.logs ?? []).filter(log => (log.reviewMemo ?? '').trim()).map(log => ({ id: log.id, memo: log.reviewMemo ?? '' }));
+    setDeleting(null);
+    if (!memos.length) return;
+    memos.forEach(item => onUpdateReviewMemo(item.id, ''));
+    setDeletedSection({ label: section.kind === 'unit' ? `${(section.index ?? 0) + 1}번째 단위` : dayLabel(section.day), memos });
+  };
+  const undoDeleteSection = () => {
+    deletedSection?.memos.forEach(item => onUpdateReviewMemo(item.id, item.memo));
+    setDeletedSection(null);
+  };
   // 노트를 열거나 과목을 바꾸면 맨 뒤 쪽(가장 최근)에서 시작한다
   const pageHint = useRef(0);
   const pageIndex = foundPage >= 0 ? foundPage : pageKey === null ? lastPageIndex(pages) : Math.min(pageHint.current, lastPageIndex(pages));
@@ -821,7 +848,7 @@ export const NoteTab: React.FC<{
                   {(shownPage?.sections ?? []).map((section, sectionIndex) => (
                     <section key={`${section.key}:${sectionIndex}`} data-note-section={section.key}>
                       {sectionIndex > 0 && <div aria-hidden="true" className="h-7" />}
-                      <SectionHeading section={section} />
+                      <SectionHeading section={section} onDelete={() => deleteSection(section)} confirming={deleting === section.key} onCancel={() => setDeleting(null)} />
                       {section.entries.map(({ log, spanning }, index) => (
                         <React.Fragment key={log.id}>
                           {index > 0 && <div aria-hidden="true" className="h-7" />}
@@ -847,6 +874,15 @@ export const NoteTab: React.FC<{
                 </div>
               </div>
               <div className="px-2.5 pb-2.5 pt-2.5">
+                {deletedSection && (
+                  <div role="status" data-testid="note-unit-deleted" className="mb-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                    <span className="text-sm font-bold text-rose-900">{deletedSection.label} 노트를 지웠어요 · 복습 문제도 함께 없어져요</span>
+                    <span className="flex items-center gap-1.5">
+                      <button type="button" onClick={undoDeleteSection} className="h-9 rounded-lg border border-rose-300 bg-white px-3 text-sm font-black text-rose-800 hover:bg-rose-100">되돌리기</button>
+                      <button type="button" onClick={() => setDeletedSection(null)} className="h-9 rounded-lg px-3 text-sm font-black text-slate-600 hover:bg-slate-100">닫기</button>
+                    </span>
+                  </div>
+                )}
                 <SheetPager page={pageIndex + 1} from={spread > 1 ? spreadStart + 1 : undefined} total={Math.max(1, pages.length)} onPage={target => goPage(target - 1)} />
               </div>
             </div>

@@ -2444,10 +2444,11 @@ test('finished records are merged into the subject status rows and the separate 
   const dialog = summarySource.slice(summarySource.indexOf('data-testid="amount-change-dialog"'), summarySource.indexOf('const startBlock'));
   // 창: 과목 고르기 → 시간 · 푼 페이지 · 끝 페이지 · 복습 유무 → 세션 메모 · 정리노트(크게) → 추가 저장, 맨 아래 오늘 추가한 기록(모든 과목)
   const order = ['data-testid="amount-subject"', 'data-testid="amount-minutes"', 'data-testid="amount-pages"', 'data-testid="amount-end"', 'data-testid="amount-review-on"',
-    'data-testid="amount-session-memo"', 'data-testid="amount-note"', 'data-testid="amount-save"', '오늘 추가한 기록 · 모든 과목'].map(text => dialog.indexOf(text));
+    'data-testid="amount-session-memo"', 'data-testid="amount-note"', 'data-testid="amount-save"', '오늘 한 기록 · 모든 과목'].map(text => dialog.indexOf(text));
   assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1])), JSON.stringify(order));
   assert.ok(dialog.includes("'비우면 자동'") && dialog.includes('amount-needs-minutes') && dialog.includes('minHeight={320}') && dialog.includes('symbolBar'));
-  assert.ok(summarySource.includes("buildCompletedSubjectSummaries(logs.filter(log => log.manualEntry), subjects, [], activeStudyDate)"), 'every subject');
+  // 2일: 측정으로 한 기록도 하나씩 고치고 지울 수 있다
+  assert.ok(summarySource.includes("buildCompletedSubjectSummaries([log], subjects, [], activeStudyDate)") && summarySource.includes("measured: !log.manualEntry"), 'every subject, every record');
   assert.ok(summarySource.includes('setChangingAmount(false); openEditModal(summary)') && summarySource.includes('{modalMode && !addingInline && ('), 'adding happens inside the window; editing still opens its own');
   assert.ok(!summarySource.includes('todayRecordsBlock'), 'no records block under the growth cell');
   assert.ok(!html.includes('실시간 기록'));
@@ -10778,7 +10779,7 @@ test('28일 버그: 학습량 변경으로 넣은 기록은 과목을 다 끝내
   // 표시가 없는 예전 기록(측정 세션도 아님)은 전처럼 과목을 끝낸 날에만 보인다
   assert.equal(buildCompletedSubjectSummaries([{ ...manual, manualEntry: undefined }], [subject], [], '2026-10-28').length, 0);
   const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
-  assert.ok(summary.includes('manualEntry: true,'), 'the add/edit window marks what it saves');
+  assert.ok(summary.includes('{ manualEntry: true }'), 'the add/edit window marks what it saves');
 });
 
 test('29일: 세션 메모의 [a]:[b]는 [a:b]와 같은 분류기준이고, 밑 노트 c;d의 문제에 a · b 이름으로 들어간다', () => {
@@ -11139,4 +11140,23 @@ test('2일 checks: moving on to a later chapter finishes the earlier one; a reco
   const { flashOf } = loadSource('utils/questionFlash.ts');
   const remaining = questionsFor('물 = H, O').find(q => q.kind === 'remaining');
   assert.deepEqual(flashOf(remaining, { prompt: [], answer: [], conditions: [] }).relation, { word: '구성요소 중 남은', arrow: 'forward' });
+});
+
+test('2일: unsolved pages right after a reviewed part are shown (display only); values deleted by hand never come back as old values; note units can be deleted; measured records can be edited', () => {
+  const { unsolvedPagesAfter, formatPageSpans } = loadSource('utils/unsolvedPages.ts');
+  const subject = { id: 'B', name: '물리', startPage: 1, totalPages: 30, completedPages: 0, chapters: [{ startPage: 1, endPage: 10 }, { startPage: 21, endPage: 30 }] };
+  const log = (id, start, end, extra = {}) => ({ id, subjectId: 'B', subjectStageId: 'B', startPage: start, endPage: end, pagesRead: end - start + 1, timeSpentMinutes: 10, timestamp: '2026-10-26T01:00:00.000Z', ...extra });
+  const reviewed = log('a', 1, 8);
+  assert.equal(formatPageSpans(unsolvedPagesAfter(reviewed, [reviewed, log('b', 21, 22)], [subject])), 'p.9~10', 'only chapter pages between this part and the next studied part');
+  assert.deepEqual(unsolvedPagesAfter(reviewed, [reviewed, log('b', 9, 12)], [subject]), [], 'continued right after: nothing skipped');
+  assert.deepEqual(unsolvedPagesAfter(reviewed, [reviewed], [subject]), [], 'nothing studied after it yet');
+  assert.equal(formatPageSpans(unsolvedPagesAfter({ ...reviewed, reviewUnitRange: { start: 1, end: 5 } }, [reviewed, log('b', 21, 22)], [subject])), 'p.6~10', 'a registered unit uses its range');
+  const { memoEditEffects } = loadSource('utils/noteLogicMarks.ts');
+  assert.deepEqual(memoEditEffects('운동량:mv, kg', '운동량:mv').oldLines, [], 'a value deleted by hand is not kept as an old value');
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('.filter(line => hasLogicMark(memoLineText(line.text)))'), 'old values saved before are filtered too');
+  const noteTab = fs.readFileSync(path.resolve(__dirname, '../components/NoteTab.tsx'), 'utf8');
+  assert.ok(noteTab.includes('data-note-unit-delete') && noteTab.includes('undoDeleteSection'));
+  const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes("!log.reviewParentSubjectId && !log.isRepeatReview && getLogStudyDate(log) === activeStudyDate"), 'measured records are listed for editing');
 });

@@ -58,6 +58,8 @@ interface Props {
   /** 지금 문제를 그려 주는 내용(문제·조건·정답) */
   question: React.ReactNode;
   questionRange: string;
+  /** 범위 옆에 보이는 글(2일: 그 부분 바로 뒤의 풀지 않은 곳). 보여 주기만 한다 */
+  rangeNote?: string;
   hasCurrentQuestion: boolean;
   revealed: boolean;
   onReveal: () => void;
@@ -171,6 +173,7 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             <section ref={props.cardRef} aria-label="문제" className="flex min-h-[26rem] flex-[1_0_auto] scroll-mt-6 flex-col gap-5 rounded-2xl border border-amber-200 bg-white px-6 py-6 md:px-8">
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="rounded-md bg-amber-100 px-3 py-1 text-[13px] font-black text-amber-900">{props.questionRange}</span>
+                {props.rangeNote && <span data-testid="review-range-note" className="rounded-md border border-amber-300 px-3 py-1 text-[13px] font-bold text-amber-900">{props.rangeNote}</span>}
                 <span className="text-sm font-medium text-slate-700">정리노트 문제</span>
               </div>
               <div className="flex flex-1 items-center justify-center whitespace-pre-wrap text-center">{props.question}</div>
