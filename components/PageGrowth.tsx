@@ -218,7 +218,7 @@ export const UnitGrowthEfficiency: React.FC<{
               </span>
               <p className="whitespace-nowrap font-black leading-none tabular-nums text-slate-900"><span className="font-mono text-[30px]">{Number(progress.done.toFixed(2))}</span><span className="ml-1 text-base text-slate-500">{label}</span></p>
             </div>
-            <p className="text-xs font-bold text-slate-600">{unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 단위가 끝나요'}</p>
+            <p className="text-xs font-bold text-slate-600">{unitEnd === 'review' ? '복습을 마치면 단위가 끝나요' : '복습에 넣으면 다음 단위가 시작돼요'}</p>
           </div>
         ) : undefined} />
     </div>

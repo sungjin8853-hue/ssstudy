@@ -563,7 +563,7 @@ const SectionHeading: React.FC<{ section: NoteSheetSection; onDelete?: () => voi
       <span data-note-day-heading={section.day} className="text-xl font-black text-indigo-900">{dayLabel(section.day)}</span>
     )}
     {section.continued && <span data-note-continued="true" className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-900">이어서</span>}
-    {/* 2일: 노트를 단위째로(단위가 없으면 그날째로) 지운다. 한 번 더 눌러야 지워지고, 지운 뒤 되돌릴 수 있다 */}
+    {/* 2일: 노트를 단위째로(단위가 없으면 그날째로) 지운다. 제목 줄 끝의 작고 연한 연필을 누르면 지우기가 나오고, 지운 뒤 되돌릴 수 있다 */}
     {onDelete && (confirming ? (
       <span className="ml-auto flex items-center gap-1.5">
         <button type="button" data-note-unit-delete-confirm="true" onClick={onDelete}
@@ -571,8 +571,8 @@ const SectionHeading: React.FC<{ section: NoteSheetSection; onDelete?: () => voi
         <button type="button" onClick={onCancel} className="h-7 rounded-md px-2 text-xs font-black text-slate-600 hover:bg-slate-100">취소</button>
       </span>
     ) : (
-      <button type="button" data-note-unit-delete="true" onClick={onDelete} aria-label={section.kind === 'unit' ? '이 단위 노트 지우기' : '이 날 노트 지우기'}
-        className="ml-auto h-7 rounded-md px-2 text-xs font-black text-slate-500 hover:bg-rose-50 hover:text-rose-700">지우기</button>
+      <button type="button" data-note-unit-delete="true" onClick={onDelete} aria-label={section.kind === 'unit' ? '이 단위 노트 고치기' : '이 날 노트 고치기'}
+        className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-sm leading-none text-slate-300 hover:bg-slate-100 hover:text-slate-500">✎</button>
     ))}
   </div>
 );
