@@ -47,6 +47,8 @@ export interface Subject {
   totalPages: number;
   completedPages: number;
   targetDate: string;
+  /** 복습에 넣기를 누르지 않아도 공부를 저장하면 자동으로 복습에 넣는다(3일). 3시간 안에 이어 한 공부는 맨 앞 공부 때로 합친다 */
+  autoReviewRegister?: boolean;
   initialAverageTimePerPage?: number;
   reviewStartPage?: number;
   tagIds?: string[];
@@ -169,6 +171,10 @@ export interface StudyLog {
   reviewUnitRange?: { start: number; end: number };
   /** "복습에 넣기"로 복습에 넣은 시각. 학습과목의 단위는 이 시각들로 나뉜다(이전 복습에 넣기 ~ 이번 복습에 넣기) */
   reviewRegisteredAt?: string;
+  /** 자동 복습 넣기(3일): 저장하자마자 복습에 넣을 기록(아직 넣기 전, 노트 합치기와 함께 곧 넣는다) */
+  autoReviewQueued?: boolean;
+  /** 자동 복습 넣기로 들어간 기록. 3시간 안에 이어 한 공부는 맨 앞 공부 때(reviewRegisteredAt)로 한 묶음이다 */
+  autoReviewRegistered?: boolean;
   reviewSubjectId?: string;
   reviewTimeSpentMinutes?: number;
   reviewCompletedPages?: number;

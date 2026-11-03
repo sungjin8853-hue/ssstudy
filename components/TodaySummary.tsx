@@ -811,8 +811,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // "학습량 변경" 창: 학습량 추가와 오늘 한 기록(고치기 · 지우기)이 한곳에 모인다
   const [changingAmount, setChangingAmount] = useState(false);
   useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
-  // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다
-  useEffect(() => { if (pendingReviewCount === 0) setChoosingReview(false); }, [pendingReviewCount, detailData?.subject.id]);
+  // 자동 복습 넣기(3일): 켜 둔 과목은 대기 기록이 없어도 "복습에 넣기" 버튼이 남아 그 창에서 끌 수 있다
+  const autoReview = Boolean(detailData && !detailIsReview && detailData.subject.autoReviewRegister);
+  const canSetAutoReview = Boolean(detailData && !detailIsReview && onUpdateSubjects);
+  const setAutoReview = (on: boolean) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewRegister: on || undefined }]); };
+  // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다(자동으로 넣는 중이면 설정을 보도록 둔다)
+  useEffect(() => { if (pendingReviewCount === 0 && !autoReview) setChoosingReview(false); }, [pendingReviewCount, autoReview]);
+  useEffect(() => { setChoosingReview(false); }, [detailData?.subject.id]);
   // 제목 뒤에 이어 붙이는 과목: 이 과목 → 후행과목, 각 과목에 붙은 복습과목은 대괄호. 예: A-B[C]-D. 이을 것이 없으면 이름만 보인다.
   const chainSegments = detailData && !detailIsReview ? getSubjectChain(detailData.subject, subjects) : [];
   const titleChain = hasSubjectChain(chainSegments) ? chainSegments : null;
@@ -1078,10 +1083,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               {noteCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{noteCount}</span>}
             </button>
           )}
-          {!detailIsReview && onRegisterReview && pendingReviewCount > 0 && (
+          {!detailIsReview && onRegisterReview && (pendingReviewCount > 0 || autoReview) && (
             <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="복습에 넣기" className={headerButton}>
               <span aria-hidden="true">↻</span>복습에 넣기
-              <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{pendingReviewCount}</span>
+              {autoReview && <span data-testid="auto-review-badge" className="rounded-full bg-emerald-100 px-2 text-xs font-black leading-5 text-emerald-800">자동</span>}
+              {pendingReviewCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{pendingReviewCount}</span>}
             </button>
           )}
           {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
@@ -1102,8 +1108,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           onUpdateSubjects={onUpdateSubjects} onClose={() => setEditingTemp(false)} />
       )}
 
-      {choosingReview && onRegisterReview && detailData && !detailIsReview && pendingReviewCount > 0 && (
+      {choosingReview && onRegisterReview && detailData && !detailIsReview && (pendingReviewCount > 0 || autoReview) && (
         <RegisterReviewDialog key={`${detailData.subject.id}:${(reviewPick?.keys ?? []).join(',')}`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
+          pendingCount={pendingReviewCount} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview } : undefined}
           chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
           onClose={() => setChoosingReview(false)}
           onChoose={(grade, logIds) => { onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />

@@ -10924,9 +10924,12 @@ test('29일 버그: 복습에 넣기를 기다리는 기록의 새 노트는 저
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   assert.ok(logger.includes('if (activeReviewRun || !willWaitForReview(nextLog)) mergeNewNoteIntoEarlierPages(nextLog);'));
   const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  // 3일: 노트 합치기는 mergePendingNotes로 묶여 복습에 넣기와 자동 복습 넣기가 함께 쓴다
+  const merging = app.slice(app.indexOf('const mergePendingNotes'), app.indexOf('const handleRegisterReview'));
+  assert.ok(merging.includes('getPendingReviewLogs(base, subjectId)') && merging.includes('mergeNoteIntoEarlier(memo, earlier)') && merging.includes('recordNoteMerges(pending.id, updates)'));
+  assert.ok(merging.indexOf('mergePendingNotes(next, log.subjectId, [log.id])') < merging.indexOf('registerAutoReview(') || merging.includes('registerAutoReview(mergePendingNotes('), 'auto review merges notes first');
   const register = app.slice(app.indexOf('const handleRegisterReview'), app.indexOf('const handleUpdateReviewMemo'));
-  assert.ok(register.includes('getPendingReviewLogs(logs, subjectId)') && register.includes('mergeNoteIntoEarlier(memo, earlier)') && register.includes('recordNoteMerges(pending.id, updates)'));
-  assert.ok(register.indexOf('mergeNoteIntoEarlier') < register.indexOf('registerPendingReviews'), 'merge first, then register');
+  assert.ok(register.indexOf('mergePendingNotes(logs, subjectId, logIds)') >= 0 && register.indexOf('mergePendingNotes') < register.indexOf('registerPendingReviews'), 'merge first, then register');
 });
 
 test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 단위로 돌아올 수 있다(견줄 단위가 없어도)', () => {
@@ -11250,4 +11253,41 @@ test('3일: a value written at the same place with the same [ ] is added to that
   const converts = memo => questionsFor(memo).filter(q => q.kind === 'convert').map(q => `${q.prompt}→${q.answer}`);
   assert.ok(converts('[B] A:[N] C,(V:[P] O)').includes('V→O'), 'the branch V:[P] O is asked, V in N');
   assert.ok(!questionsFor('[B] A:[N] C,(V:[P] O)').some(q => /\[/.test(`${q.statement || ''}${q.answer}`)), 'no [ ] text leaks');
+});
+
+test('3일: auto review — a saved study goes into review at once; a study started within 3 hours after the last one joins its group at the first study time', () => {
+  const { registerAutoReview, autoReviewGroupFor, AUTO_REVIEW_GAP_MS } = loadSource('utils/autoReview.ts');
+  assert.equal(AUTO_REVIEW_GAP_MS, 3 * 60 * 60 * 1000);
+  const pending = (id, end, minutes, start, endPage, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: minutes, pagesRead: endPage - start + 1,
+    startPage: start, endPage, unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true, ...extra });
+  const past = { id: 'old', subjectId: 's', timestamp: '2026-10-01T01:00:00.000Z', timeSpentMinutes: 60, pagesRead: 10, startPage: 1, endPage: 10 };
+  let logs = [past, pending('a', '2026-11-03T01:00:00.000Z', 60, 11, 20)];
+  logs = registerAutoReview(logs, 'a');
+  const a = logs.find(log => log.id === 'a');
+  assert.ok(!a.unitReviewPending && !a.autoReviewQueued && a.autoReviewRegistered && a.reviewEnabled && !a.isCondensed);
+  assert.equal(a.reviewRegisteredAt, '2026-11-03T01:00:00.000Z', 'the group starts at that study time');
+  assert.equal(a.reviewFsrs.lastReviewMs, Date.parse('2026-11-03T01:00:00.000Z'));
+  // 끝난 지 1시간 30분 뒤에 시작한 공부: 같은 묶음, 맨 앞 공부 때로
+  logs = [...logs, pending('b', '2026-11-03T03:30:00.000Z', 60, 21, 30)];
+  assert.equal(autoReviewGroupFor(logs, logs.find(log => log.id === 'b')), '2026-11-03T01:00:00.000Z');
+  logs = registerAutoReview(logs, 'b');
+  const [a2, b] = ['a', 'b'].map(id => logs.find(log => log.id === id));
+  assert.equal(b.reviewRegisteredAt, a2.reviewRegisteredAt);
+  assert.equal(b.nextReviewDate, a2.nextReviewDate, 'both open for review at the same time');
+  assert.deepEqual([a2.reviewUnitRange, b.reviewUnitRange], [{ start: 11, end: 30 }, { start: 11, end: 30 }]);
+  assert.equal(b.reviewFsrs.lastReviewMs, Date.parse('2026-11-03T01:00:00.000Z'));
+  // 3시간 넘게 쉰 공부: 새 묶음
+  logs = [...logs, pending('c', '2026-11-03T08:00:00.000Z', 60, 31, 40)];
+  logs = registerAutoReview(logs, 'c');
+  assert.equal(logs.find(log => log.id === 'c').reviewRegisteredAt, '2026-11-03T08:00:00.000Z');
+  // 묶음을 이미 복습했으면 3시간 안이어도 새 묶음
+  const reviewed = logs.map(log => (log.id === 'c' ? { ...log, reviewStep: 1 } : log));
+  const d = pending('d', '2026-11-03T09:30:00.000Z', 60, 41, 50);
+  assert.equal(autoReviewGroupFor([...reviewed, d], d), null);
+  // 다른 단계 · 직접 넣은 기록 뒤는 새 묶음
+  assert.equal(autoReviewGroupFor(logs, pending('e', '2026-11-03T09:30:00.000Z', 60, 1, 5, { subjectStageId: 'f' })), null);
+  const manual = logs.map(log => (log.id === 'c' ? { ...log, autoReviewRegistered: undefined } : log));
+  assert.equal(autoReviewGroupFor([...manual, d], d), null);
+  // 대기 중이 아닌 기록은 그대로
+  assert.equal(registerAutoReview(logs, 'a'), logs);
 });

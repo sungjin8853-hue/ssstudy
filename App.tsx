@@ -21,6 +21,7 @@ import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, co
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
+import { registerAutoReview } from './utils/autoReview';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -510,7 +511,9 @@ const App: React.FC = () => {
     // 페이지 단위가 있는 과목은 세션마다 복습을 등록하지 않고, 단위 끝 페이지까지 풀었을 때 그 단위 범위를 등록한다.
     setLogs(prev => {
       const result = applyUnitReviewRegistration(subject, prev, newLog);
-      return [...result.logs, result.incoming];
+      // 자동 복습 넣기를 켠 과목은 대기시키지 않고 곧바로 복습에 넣는다(아래 효과가 노트 합치기와 함께 넣는다, 3일)
+      const incoming = subject?.autoReviewRegister && result.incoming.unitReviewPending ? { ...result.incoming, autoReviewQueued: true } : result.incoming;
+      return [...result.logs, incoming];
     });
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
@@ -726,11 +729,10 @@ const App: React.FC = () => {
     });
   };
 
-  // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
-  const handleRegisterReview = (subjectId: string, grade: SubjectGrade, logIds?: string[]) => {
-    // 대기 기록의 새 노트는 이때 이전 쪽 노트에 연결·첨가로 합친다(저장할 때가 아니라, 29일 버그). 오래된 대기 기록부터 차례로
-    let merged = logs;
-    getPendingReviewLogs(logs, subjectId).filter(log => !logIds || logIds.includes(log.id)).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(pending => {
+  /** 대기 기록의 새 노트를 복습에 넣을 때 이전 쪽 노트에 연결·첨가로 합친다(저장할 때가 아니라, 29일 버그). 오래된 대기 기록부터 차례로 */
+  const mergePendingNotes = (base: StudyLog[], subjectId: string, logIds?: readonly string[]): StudyLog[] => {
+    let merged = base;
+    getPendingReviewLogs(base, subjectId).filter(log => !logIds || logIds.includes(log.id)).sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(pending => {
       const memo = pending.reviewMemo ?? '';
       if (!memo.trim()) return;
       const earlier = merged
@@ -743,6 +745,21 @@ const App: React.FC = () => {
       const after = new Map(updates.map(update => [update.logId, update.after]));
       merged = merged.map(log => (after.has(log.id) ? updateReviewGateMemo(log, after.get(log.id)!, undefined, { intake: readEditIntake() }) : log));
     });
+    return merged;
+  };
+
+  // 자동 복습 넣기(3일): 저장하며 표시한 대기 기록을 곧바로 복습에 넣는다(노트 합치기도 복습에 넣기와 같다). 3시간 안에 이어 한 공부는 앞 묶음에 합친다
+  useEffect(() => {
+    const queued = logs.filter(log => log.unitReviewPending && log.autoReviewQueued).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    if (!queued.length) return;
+    let next = logs;
+    queued.forEach(log => { next = registerAutoReview(mergePendingNotes(next, log.subjectId, [log.id]), log.id); });
+    setLogs(next);
+  }, [logs]);
+
+  // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
+  const handleRegisterReview = (subjectId: string, grade: SubjectGrade, logIds?: string[]) => {
+    const merged = mergePendingNotes(logs, subjectId, logIds);
     // 난도는 이때 고른다. 단원을 골랐으면(1일 요청) 그 기록들을 공부한 때마다 복습한 것으로 보고 FSRS-6로 계산하며, 마지막 평가가 고른 난도다
     const now = Date.now();
     if (logIds) {

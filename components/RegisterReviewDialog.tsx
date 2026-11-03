@@ -16,9 +16,13 @@ export const RegisterReviewDialog: React.FC<{
   pageLabel: string;
   /** 단원별로 고를 때(1일 요청): 아직 복습에 넣지 않은 단원 묶음 · 처음 고른 단원 · 기록 전체 · 과목 */
   chapters?: { groups: PendingChapterGroup[]; initialKeys: string[]; logs: readonly StudyLog[]; subjectId: string; notice?: string };
+  /** 자동 복습 넣기 설정(3일 요청): 켜면 복습에 넣기를 누르지 않아도 공부를 저장할 때 복습에 들어간다 */
+  auto?: { on: boolean; onChange: (on: boolean) => void };
+  /** 기다리는 기록 수. 0이면(자동으로 넣는 중) 설정만 보인다 */
+  pendingCount?: number;
   onChoose: (grade: SubjectGrade, logIds?: string[]) => void;
   onClose: () => void;
-}> = ({ info, pageLabel, chapters, onChoose, onClose }) => {
+}> = ({ info, pageLabel, chapters, auto, pendingCount = 1, onChoose, onClose }) => {
   const [picked, setPicked] = useState<string[]>(() => chapters?.initialKeys ?? []);
   const selectedLogs = useMemo(() => (chapters ? chapters.groups.filter(group => picked.includes(group.key)).flatMap(group => group.logs) : []), [chapters, picked]);
   const chapterInfo = useMemo(() => (chapters ? chapterFeedbackOf(chapters.logs, chapters.subjectId, selectedLogs, Date.now()) : null), [chapters, selectedLogs]);
@@ -37,10 +41,22 @@ export const RegisterReviewDialog: React.FC<{
       onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <section aria-label="난도 피드백" data-difficulty-feedback="true" className="w-full max-w-xl rounded-3xl border border-indigo-100 bg-white p-5 shadow-2xl">
         <div className="flex items-baseline justify-between gap-3">
-          <h4 className="text-lg font-black text-indigo-800">난도 피드백</h4>
+          <h4 className="text-lg font-black text-indigo-800">{pendingCount > 0 ? '난도 피드백' : '복습에 넣기'}</h4>
           <button type="button" onClick={onClose} aria-label="닫기"
             className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-lg font-black text-slate-600">✕</button>
         </div>
+        {auto && (
+          <label data-testid="auto-review-setting" className="mt-2 flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+            <input type="checkbox" role="switch" aria-checked={auto.on} checked={auto.on} onChange={event => auto.onChange(event.target.checked)}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-indigo-600" />
+            <span className="flex flex-col gap-0.5">
+              <span className="text-sm font-black text-slate-800">자동으로 복습에 넣기</span>
+              <span className="text-[12px] font-bold leading-relaxed text-slate-500">복습에 넣기를 누르지 않아도 공부를 저장하면 바로 복습에 들어가요. 앞 공부가 끝나고 3시간 안에 이어 하면 같은 때 공부한 것으로 보고 맨 앞 공부 때로 합쳐요. 난도는 그 공부들의 속도로 정한 추천 난도예요.</span>
+              {auto.on && pendingCount > 0 && <span data-testid="auto-review-backlog" className="text-[12px] font-black text-indigo-700">켜기 전에 저장한 기록 {pendingCount}개는 아래에서 난도를 골라 넣어요.</span>}
+            </span>
+          </label>
+        )}
+        {pendingCount > 0 && <>
         {chapters && <>
           {chapters.notice && <p data-testid="chapter-review-notice" className="mt-1 rounded-xl bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-800">{chapters.notice}</p>}
           <p className="mt-2 text-[13px] font-bold text-slate-600">넣을 단원을 고르세요. 아직 복습에 넣지 않은 단원만 보여요.</p>
@@ -83,6 +99,7 @@ export const RegisterReviewDialog: React.FC<{
             </button>
           ))}
         </div>
+        </>}
       </section>
     </div>
   );
