@@ -3902,7 +3902,7 @@ test('tutorials walk through every step and open from a help button', () => {
   const skipped = mergeNoteChains('[A] B : [D] C', '[A:D] B :: [K] L');
   assert.deepEqual([skipped.text, skipped.kind], ['[A] B:[D] C:[K] L', 'add']);
   const added = mergeNoteChains('사과:빨강', '사과:둥글다');
-  assert.deepEqual([added.text, added.kind], ['사과:빨강=둥글다', 'add']);
+  assert.deepEqual([added.text, added.kind], ['사과:빨강,둥글다', 'add']);
   const fruit = loadSource('utils/noteSets.ts').buildNoteSetIndex([':::toggle 과일\n사과\n배=pear\n포도:보라색\n:::end\n[?]()']);
   assert.deepEqual(loadSource('utils/noteSets.ts').setContents(fruit, '?').map(row => row.name), ['사과', '배=pear']);
   assert.deepEqual(asked('[!] 고래:물고기\n고래:포유류').map(([s, a]) => `${s} ${a}`), ['‘고래’ 다음 값은? 포유류', '‘포유류’ 앞의 값은? 고래']);
@@ -7115,7 +7115,7 @@ test('the symbol bar offers ( ) for grouping and puts the cursor between the par
 test('merge rules: each row of the agreed table gives the agreed result', () => {
   const { mergeNoteChains } = loadSource('utils/noteMerge.ts');
   const rows = [
-    ['B:D', 'B:F', 'B:D=F', 'add'],
+    ['B:D', 'B:F', 'B:D,F', 'add'],
     ['B:D', 'B:[분류기준] F', 'B:D:[분류기준] F', 'add'],
     ['B:D', 'D:K', 'B:(D:K)', 'group'],
     ['B:F-D', 'B:F-W', 'B:F-D-W', 'link'],
@@ -7123,8 +7123,8 @@ test('merge rules: each row of the agreed table gives the agreed result', () => 
     ['A:K:B:C', 'A:K:B:Z', 'A:K:B:C=Z', 'link'],
     ['[A] B:[D] C', '[A] B : [D] C:[K] L', '[A] B:[D] C:[K] L', 'link'],
     ['[A] B:[D] C', '[A:D] B :: [K] L', '[A] B:[D] C:[K] L', 'add'],
-    ['A:R', 'A:B:C', 'A:R=(B:C)', 'add'],
-    ['성립;a', '성립;b', '성립;a=b', 'add'],
+    ['A:R', 'A:B:C', 'A:R,(B:C)', 'add'],
+    ['성립;a', '성립;b', '성립;a,b', 'add'],
     ['성립;a,b', '성립;b,c', '성립;a,b,c', 'link'],
     ['A:F=G', 'A:H=G', 'A:F=G=H', 'link'],
   ];
@@ -7139,7 +7139,7 @@ test('merge rules: each row of the agreed table gives the agreed result', () => 
 test('merge rules: already contained, unrelated and unsupported shapes change nothing, and merging twice is the same as once', () => {
   const { mergeNoteChains } = loadSource('utils/noteMerge.ts');
   // 이미 들어 있는 글
-  for (const [existing, incoming] of [['B:D=F', 'B:F'], ['B:(D:K)', 'D:K'], ['A:K:B:C=Z', 'K:B:Z'], ['성립;a,b,c', '성립;b,c'], ['B:F-D-W', 'B:F-W'], ['B:D:[분류기준] F', 'B:[분류기준] F'], ['A:R=(B:C)', 'A:B:C']]) {
+  for (const [existing, incoming] of [['B:D=F', 'B:F'], ['B:D,F', 'B:F'], ['A:R,(B:C)', 'A:B:C'], ['B:(D:K)', 'D:K'], ['A:K:B:C=Z', 'K:B:Z'], ['성립;a,b,c', '성립;b,c'], ['B:F-D-W', 'B:F-W'], ['B:D:[분류기준] F', 'B:[분류기준] F'], ['A:R=(B:C)', 'A:B:C']]) {
     assert.equal(mergeNoteChains(existing, incoming), null, `${existing} + ${incoming}`);
   }
   // 겹치는 칸이 없거나 S의 맨 앞 칸이 E에 없으면 합치지 않는다
@@ -7149,7 +7149,7 @@ test('merge rules: already contained, unrelated and unsupported shapes change no
   // 순서가 거꾸로 겹치면 합치지 않는다
   assert.equal(mergeNoteChains('A:B:C', 'C:B:Z'), null);
   // 띄어쓰기는 같은 이름 판정에 영향이 없다
-  assert.equal(mergeNoteChains('등차 수열:공차', '등차수열:첫항').text, '등차 수열:공차=첫항');
+  assert.equal(mergeNoteChains('등차 수열:공차', '등차수열:첫항').text, '등차 수열:공차,첫항');
   // 합친 결과에 같은 글을 다시 합쳐도 그대로
   for (const [existing, incoming] of [['B:D', 'B:F'], ['A:K:B', 'A::B:C'], ['성립;a,b', '성립;b,c'], ['B:D', 'D:K'], ['A:R', 'A:B:C']]) {
     const once = mergeNoteChains(existing, incoming).text;
@@ -7242,7 +7242,7 @@ test('merging also holds for every word inside a logic cell: = , - cells take an
   // `=` 칸은 합집합: 같은 칸에 같은 자리의 값이 합쳐진다
   assert.equal(mergeNoteChains('A:F=G', 'A:F=H').text, 'A:F=G=H');
   assert.equal(mergeNoteChains('A:F=G', 'A:H=G').text, 'A:F=G=H');
-  assert.equal(mergeNoteChains('A:F=G', 'A:H').text, 'A:F=G=H');
+  assert.equal(mergeNoteChains('A:F=G', 'A:H').text, 'A:F=G,H', '3일: a different value at the same place is added with ,');
   // 칸 안의 낱말(`,` `-` `=`)이 들어온 줄의 맨 앞 칸이면, 그 낱말만 묶어 이어 붙인다
   assert.equal(mergeNoteChains('A:B,C', 'C:D').text, 'A:B,(C:D)');
   assert.equal(mergeNoteChains('A:p-q-r', 'q:x').text, 'A:p-(q:x)-r');
@@ -7261,7 +7261,7 @@ test('merging also holds for every word inside a logic cell: = , - cells take an
   }
   // 칸 전체와 겹치는 줄이 있으면 그쪽에 먼저 합친다
   const updates = mergeNoteIntoEarlier('G:H', [{ id: '1', memo: 'A:F=G' }, { id: '2', memo: 'G:Z' }]);
-  assert.deepEqual(updates.map(item => [item.logId, item.after]), [['2', 'G:Z=H']]);
+  assert.deepEqual(updates.map(item => [item.logId, item.after]), [['2', 'G:Z,H']]);
   // 칸 안의 낱말에 합칠 때도 같은 속성 경로 안에서만
   assert.deepEqual(mergeNoteIntoEarlier(':::toggle 가 :\nG:H\n:::end', [{ id: '1', memo: 'A:F=G' }]), []);
   assert.deepEqual(mergeNoteIntoEarlier('G:H', [{ id: '1', memo: 'A:F=G' }]).map(item => item.after), ['A:F=(G:H)']);
@@ -7288,7 +7288,7 @@ test('merge into earlier pages: same attribute path only, oldest matching row, n
   const merged = mergeNoteIntoEarlier('다:바', multi);
   assert.equal(merged.length, 1);
   assert.equal(merged[0].logId, 'old');
-  assert.equal(merged[0].after, '가:나 // 다:라=바');
+  assert.equal(merged[0].after, '가:나 // 다:라,바');
   // 겹침이 더 많은 줄이 먼저
   const better = mergeNoteIntoEarlier('A:K:B:C', [{ id: 'x', memo: 'A:R' }, { id: 'y', memo: 'A:K:B' }]);
   assert.equal(better.length, 1);
@@ -8583,7 +8583,7 @@ test("quotes '…' are read the same way by the diagram, the editor colours, the
   // merge: the quoted cell stays one cell; a word in it can take a new link
   const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
   const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
-  assert.deepEqual(merged('A : 다', "A : '가 ; 나'"), ["A:'가 ; 나'=다"]);
+  assert.deepEqual(merged('A : 다', "A : '가 ; 나'"), ["A:'가 ; 나',다"]);
   assert.deepEqual(merged('나 : 마', "A : '가 ; 나 ; 다'"), ["A:'가 ; (나:마) ; 다'"]);
   assert.deepEqual(merged('가 : 마', "A : '가 ; 나'"), ["A:'(가:마) ; 나'"], 'the quote mark at the cell edge is not part of the word');
 });
@@ -9027,10 +9027,10 @@ test('writing a relation again does not fabricate an equality in another earlier
   assert.deepEqual(mergeNoteIntoEarlier('사각형:변', [{ id: 'a', memo: '사각형:변:A\n사각형;넓이' }]), []);
   // 한 번 합친 뒤 같은 글을 또 합쳐도 달라지지 않는다
   const first = mergeNoteIntoEarlier('사각형:변', [{ id: 'b', memo: '사각형;넓이' }]);
-  assert.equal(first[0].after, '사각형;넓이=변');
+  assert.equal(first[0].after, '사각형;넓이,변');
   assert.deepEqual(mergeNoteIntoEarlier('사각형:변', [{ id: 'b', memo: first[0].after }, { id: 'c', memo: '사각형;둘레' }]), []);
   // 겹치지만 아직 들어 있지 않은 글은 예전처럼 합친다
-  assert.equal(mergeNoteIntoEarlier('사각형:변', [{ id: 'a', memo: '사각형;넓이' }])[0].after, '사각형;넓이=변');
+  assert.equal(mergeNoteIntoEarlier('사각형:변', [{ id: 'a', memo: '사각형;넓이' }])[0].after, '사각형;넓이,변');
   assert.equal(mergeNoteIntoEarlier('사각형:각', [{ id: 'a', memo: '사각형:변' }, { id: 'b', memo: '사각형;넓이' }])[0].logId, 'a');
 });
 
@@ -10002,8 +10002,8 @@ test('merging needs the same column number: a name in another column does not co
   assert.deepEqual(merge('[A] B:[D] C', '[A] B : [D] C:[K] L'), ['[A] B:[D] C:[K] L', 'link']);
   assert.deepEqual(merge('[A] B:[D] C', '[A:D] B :: [K] L'), ['[A] B:[D] C:[K] L', 'add']);
   assert.deepEqual(merge('A:b:c:d', 'A::c:e'), ['A:b:c:d=e', 'link']);
-  // 맨 앞 칸만 겹치는 첨가: 같은 번호의 칸에 `=`로, 번호가 E의 끝을 넘으면 그만큼 건너뛰어 잇는다
-  assert.deepEqual(merge('사과:빨강', '사과:둥글다'), ['사과:빨강=둥글다', 'add']);
+  // 맨 앞 칸만 겹치는 첨가: 같은 위치(번호)의 칸에 `,`로(3일), 번호가 E의 끝을 넘으면 그만큼 건너뛰어 잇는다
+  assert.deepEqual(merge('사과:빨강', '사과:둥글다'), ['사과:빨강,둥글다', 'add']);
   assert.deepEqual(merge('사과:빨강', '사과::둥글다'), ['사과:빨강:둥글다', 'add']);
   assert.deepEqual(merge('a:b', 'a:::d'), ['a:b::d', 'add']);
   // 사이에 낀 새 칸은 같은 번호의 칸에 `=`로 붙는다
@@ -10381,10 +10381,10 @@ test('merging needs the same position: the criterion name of each cell (line, to
   const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
   // 줄 앞 기준이 다르면 같은 이름이어도 다른 자리다
   assert.deepEqual(merged('[사건:결과] 태조:위화도 회군', '[개념:정의] 태조:조선을 세운 왕'), []);
-  assert.deepEqual(merged('[개념:정의] 태조:이성계', '[개념:정의] 태조:조선을 세운 왕'), ['[개념:정의] 태조:조선을 세운 왕=이성계']);
+  assert.deepEqual(merged('[개념:정의] 태조:이성계', '[개념:정의] 태조:조선을 세운 왕'), ['[개념:정의] 태조:조선을 세운 왕,이성계']);
   // 노트 맨 위 기준 · 토글 제목의 기준도 칸의 위치다
   assert.deepEqual(merged('[인물:출생]\n세종:1397년', '[인물:업적]\n세종:한글'), []);
-  assert.deepEqual(merged('[인물:업적]\n세종:측우기', '[인물:업적]\n세종:한글'), ['[인물:업적]\n세종:한글=측우기']);
+  assert.deepEqual(merged('[인물:업적]\n세종:측우기', '[인물:업적]\n세종:한글'), ['[인물:업적]\n세종:한글,측우기']);
   assert.deepEqual(merged('세종:측우기', '[인물:업적]\n세종:한글'), [], 'a criterion on one side only is another position');
   assert.deepEqual(merged(':::toggle 왕 [인물:출생]\n세종:1397년\n:::end', ':::toggle 왕 [인물:업적]\n세종:한글\n:::end'), []);
   // 묶기: 맨 앞 칸의 위치가 그 칸의 위치와 같을 때만, ( ) 안으로 들어가는 칸은 이름을 {이름}으로 지킨다
@@ -10394,7 +10394,7 @@ test('merging needs the same position: the criterion name of each cell (line, to
   assert.deepEqual(merged('[개념:정의;예시] 태조:조선을 세운 왕;위화도 회군', '[개념:정의] 태조:조선을 세운 왕'), ['[개념:정의;예시] 태조:조선을 세운 왕;위화도 회군']);
   assert.deepEqual(merged('[개념:정의:예시]\n산업혁명:증기기관:도시화', '[개념:정의:예시]\n산업혁명:증기기관'), ['[개념:정의:예시]\n산업혁명:증기기관:도시화']);
   // 토글 이름과 같은 줄 앞 [이름]은 따로 쓴 위치가 아니다
-  assert.deepEqual(merged(':::toggle 할로젠\nF:기체\n:::end', ':::toggle 할로젠\n[할로젠] F:가장 강함\n:::end'), [':::toggle 할로젠\n[할로젠] F:가장 강함=기체\n:::end']);
+  assert.deepEqual(merged(':::toggle 할로젠\nF:기체\n:::end', ':::toggle 할로젠\n[할로젠] F:가장 강함\n:::end'), [':::toggle 할로젠\n[할로젠] F:가장 강함,기체\n:::end']);
   // 같은 낱말이 다른 자리에 있는 것은 "이미 있는 글"이 아니다
   const { noteChainContains } = loadSource('utils/noteMerge.ts');
   assert.equal(noteChainContains('[개념:정의] 태조:왕', '[사건:결과] 태조:왕'), false);

@@ -13,7 +13,8 @@ import { nestRowsOf } from './noteNest';
  *
  * 나중 페이지에 쓴 줄(S)이 이전 페이지의 같은 속성(토글 경로) 안에 있는 줄(E)과 이름이 겹치면 E에 합친다.
  *  - 겹치는 칸이 둘 이상이면 "연결": S의 새 칸을 겹친 칸 뒤에 이어 붙인다(뒤에 이미 칸이 있으면 같은 자리의 `=`로).
- *  - 겹치는 칸이 S의 맨 앞 하나뿐이면 "첨가": 같은 칸의 `=`로 붙이고(칸이 둘 이상이면 `=(B:C)`), 분류 기준 `[ ]`을 붙여 쓴 칸은 새 `:` 칸으로 붙인다.
+ *  - 겹치는 칸이 S의 맨 앞 하나뿐이면 "첨가": 같은 위치(칸 번호 · 칸 이름 · `[ ]`)인데 내용만 다르면 그 칸에 `,`로 더하고(칸이 둘 이상이면 `,(B:C)`, 3일),
+ *    위치가 다르게 `[ ]`를 붙여 쓴 칸은 새 `:` 칸으로 붙인다.
  *    겹친 칸이 E의 맨 앞이 아니면 그 칸을 `(D:K)`로 묶는다(앞에서 K로만 갈 수 있다).
  *  - `,` 목록은 합집합, `-` 순서는 겹친 앞부분 뒤로 이어 붙인다.
  *  - 한 칸 안의 논리어(`,` `-` `=`)로 이은 낱말도 그 칸과 똑같이 겹침으로 본다: S의 맨 앞 칸이 E의 한 칸 안 낱말과 같으면 그 낱말을 `(C:D)`로 묶어 잇는다.
@@ -25,7 +26,7 @@ import { nestRowsOf } from './noteNest';
  * 위치가 같아야 합친다(21:09 "위치가 같아야 합치는 건데 분류기준도 위치에 해당되는 값이야"):
  *  - 토글 경로가 같아야 하고, 겹치는 칸은 칸의 위치(그 칸 번호의 분류기준 칸 이름 · 칸에 붙인 `[ ]` · `:{이름}`)도 같아야 한다.
  *    분류기준은 가까운 것부터 줄 앞 `[개념:정의]` → 토글 제목의 기준 → 노트 맨 위 기준이다. 한쪽에만 기준이 있어도 위치가 다르다.
- *  - `=`로 같은 칸에 붙일 때도 그 칸의 위치가 같아야 한다(`[인물:업적] 세종:한글`에 `[인물:출생] 세종:1397년`은 합치지 않는다).
+ *  - 같은 칸에 붙일 때도 그 칸의 위치가 같아야 한다(`[인물:업적] 세종:한글`에 `[인물:출생] 세종:1397년`은 합치지 않는다).
  *  - 새로 붙는 칸이 E에서 다른 칸 이름을 받게 되거나 `( )` 안으로 들어가 이름을 잃으면 원래 이름을 `:{이름}`으로 적어 위치를 그대로 둔다.
  */
 export type NoteMergeKind = 'link' | 'add' | 'group';
@@ -418,9 +419,10 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
   } else if (anchor.i === 0) {
     if (!hasTail) return null;
     const labelled = s.fields.slice(tailStart).some(hasCriterion);
-    const sibling = labelled && hasCriterion(s.fields[tailStart]) ? original.find(cell => cell.col === tailCol && cells.includes(cell)) : undefined;
+    const sibling = original.find(cell => cell.col === tailCol && cells.includes(cell));
     if (sibling && fits(sibling, tailStart)) {
-      // 3일: 같은 칸 번호에 같은 `[ ]`로 쓴 값은 그 칸의 값에 `,`로 더한다(`[B] A:[N] C` + `[B] A:[N] V` → `[B] A:[N] C,V`).
+      // 3일: 같은 위치(칸 번호 · 칸 이름 · `[ ]`가 같음)인데 내용만 다른 값은 그 칸의 값에 `,`로 더한다
+      // (`[B] A:[N] C` + `[B] A:[N] V` → `[B] A:[N] C,V`, `[B] A:C` + `[B] A:V` → `[B] A:C,V`).
       // 뒤에 칸이 더 있으면 묶어서 더한다(`… V:[P] O` → `C,(V:[P] O)`). 그 칸 뒤에 E의 칸이 더 있으면 그 칸부터 묶는다(`(C:[Q] z),V`).
       const own = leadingMarks(sibling.field).map(item => `[${item}]`).join('');
       const tailSeps = s.seps.slice(tailStart).map((sep, offset) => namedSeparator(sep, carry(tailStart + offset + 1)));

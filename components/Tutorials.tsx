@@ -292,7 +292,7 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '이어 붙여요', accent: 'sky', symbol: '+', title: '이어 붙여요 · 연결과 첨가',
-    lead: '저장하면 새로 쓴 줄이 이전 쪽의 같은 속성 줄과 겹칠 때 자동으로 합쳐져요. 겹치는 칸은 칸 번호(분류기준 위치)가 같아야 해요. 겹치는 칸이 둘 이상이면 새 칸을 뒤에 이어 붙이고(연결), 맨 앞 칸 하나만 겹치면 =로 같은 칸에 붙여요(첨가).',
+    lead: '저장하면 새로 쓴 줄이 이전 쪽의 같은 속성 줄과 겹칠 때 자동으로 합쳐져요. 겹치는 칸은 칸 번호(분류기준 위치)가 같아야 해요. 겹치는 칸이 둘 이상이면 새 칸을 뒤에 이어 붙이고(연결), 맨 앞 칸 하나만 겹치면 같은 위치의 칸에 ,로 더해요(첨가).',
     body: <>
       <NoteSample label="연결" lines={[
         <><span className="w-20 text-sm font-bold text-slate-500">이전 쪽</span><Logic>[A]</Logic><span> B </span><Mono tone="colon">:</Mono><span> </span><Logic>[D]</Logic><span> C</span></>,
@@ -307,7 +307,7 @@ const NOTE_STEPS: TutorialStep[] = [
       <NoteSample label="첨가" lines={[
         <><span className="w-20 text-sm font-bold text-slate-500">이전 쪽</span><span>사과</span><Mono tone="colon">:</Mono><span>빨강</span></>,
         <><span className="w-20 text-sm font-bold text-slate-500">새 줄</span><span>사과</span><Mono tone="colon">:</Mono><span>둥글다</span></>,
-        <><span className="w-20 text-sm font-bold text-indigo-700">합친 뒤</span><span className="font-semibold">사과</span><Mono tone="colon">:</Mono><span className="font-semibold">빨강</span><Mono tone="logic">=</Mono><span className="font-semibold">둥글다</span></>
+        <><span className="w-20 text-sm font-bold text-indigo-700">합친 뒤</span><span className="font-semibold">사과</span><Mono tone="colon">:</Mono><span className="font-semibold">빨강</span><Mono tone="logic">,</Mono><span className="font-semibold">둥글다</span></>
       ]} note="새 노트의 글은 그대로이고, 합치기 전 이전 쪽의 글은 되돌릴 수 있게 남아요." />
     </>
   },
