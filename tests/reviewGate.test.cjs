@@ -11243,6 +11243,10 @@ test('3일: a value written at the same place with the same [ ] is added to that
   const shorthand = loadSource('utils/noteShorthand.ts');
   assert.equal(shorthand.withNoteShorthand(true, () => mergeNoteChains('A:K:B', 'A:K:B=Z').text), 'A:K:B=Z', 'B written again as B=Z replaces B instead of B,B=Z');
   assert.doesNotThrow(() => mergeNoteChains('A:::CB', 'A:BC()'), 'an empty () no longer loops forever');
+  const { mergeNoteIntoEarlier: mergeEarlier } = loadSource('utils/noteMerge.ts');
+  const once = mergeEarlier('A:O:V', [{ id: 'e', memo: 'A:B:A' }])[0].after;
+  assert.equal(once, 'A:(B:A),(O:V)');
+  assert.deepEqual(mergeEarlier('A:O:V', [{ id: 'e', memo: once }]), [], '3일 점검: (B:A),(O:V) is two groups, so writing A:O:V again adds nothing');
   const converts = memo => questionsFor(memo).filter(q => q.kind === 'convert').map(q => `${q.prompt}→${q.answer}`);
   assert.ok(converts('[B] A:[N] C,(V:[P] O)').includes('V→O'), 'the branch V:[P] O is asked, V in N');
   assert.ok(!questionsFor('[B] A:[N] C,(V:[P] O)').some(q => /\[/.test(`${q.statement || ''}${q.answer}`)), 'no [ ] text leaks');

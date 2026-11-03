@@ -133,16 +133,18 @@ const splitTop = (text: string, delimiter: string): string[] => {
   return bounds.slice(1).map((end, index) => text.slice(bounds[index] + 1, end).trim());
 };
 
+/** 글 전체가 짝이 맞는 `( )` 하나인가(`(B:A),(O:V)`는 아니다: 앞뒤 괄호가 서로 짝이 아니다, 3일 점검) */
+const wholeGroup = (text: string) => text.length > 2 && text[0] === '(' && reviewGroups(text).closed.get(0) === text.length - 1;
 /** 칸 안의 낱말들(괄호로 묶은 칸은 안쪽까지, `,`·`-`로 나뉜 칸은 낱낱이) */
 const atomsOf = (field: string): string[] => {
   const text = stripCriterion(field);
-  if (/^\(.*\)$/.test(text) && text.length > 2) {
+  if (wholeGroup(text)) {
     const inner = text.slice(1, -1);
     return parseNoteChain(inner).fields.flatMap(atomsOf);
   }
   // `,`·`-`·`=`로 나뉜 낱말이 괄호 묶음이면 그 안쪽 낱말까지 푼다(`R=(B:C)`의 B·C)
   return splitTop(text, ',').flatMap(part => splitTop(part, '-')).flatMap(part => splitTop(part, '='))
-    .flatMap(part => (/^\(.*\)$/.test(part) && part.length > 2 ? atomsOf(part) : groupedAtoms(part) ?? [norm(part)])).filter(Boolean);
+    .flatMap(part => (wholeGroup(part) ? atomsOf(part) : groupedAtoms(part) ?? [norm(part)])).filter(Boolean);
 };
 /** 글 사이에 낀 `( )`(`(A:B) 안녕`)가 있는 낱말: 괄호 안의 낱말들과 괄호를 뺀 나머지 글이 모두 이 칸의 낱말이다. 괄호가 없으면 null. */
 const groupedAtoms = (part: string): string[] | null => {

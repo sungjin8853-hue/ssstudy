@@ -714,6 +714,20 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                       }
                     } else if (event.key === 'Enter' && !event.shiftKey) {
                       event.preventDefault();
+                      // 제목 끝에 `>`를 쓰고 엔터를 치면(본문 줄과 같이) 그 `>`는 빼고 토글 안으로 들어간다(3일 점검: 제목에 `>`가 글자로 남던 것)
+                      const { start: titleCaret, end: titleEnd } = readField(field);
+                      if (!event.nativeEvent.isComposing && titleCaret === titleEnd && titleCaret === block.title.length
+                        && /[^\s>].*>\s*$/.test(block.title) && !/[-=<>:;,]>\s*$/.test(block.title)) {
+                        focus(block.id, 'text', 0);
+                        setClosed(prev => { const next = new Set(prev); next.delete(block.id); return next; });
+                        // 안에 이미 줄이 있으면 맨 앞에 빈 줄을 하나 두고 거기서 쓴다(있던 줄에 붙여 쓰지 않게)
+                        update(index, { ...block, title: block.title.replace(/>\s*$/, '').trimEnd(), ...(block.text ? { text: `\n${block.text}`, childDocument: undefined } : {}) });
+                        if (block.text) window.setTimeout(() => {
+                          const inner = childEditors.current.get(`${block.id}:text`)?.querySelector('textarea');
+                          if (inner) { inner.focus(); inner.setSelectionRange(0, 0); }
+                        }, 0);
+                        return;
+                      }
                       if (closed.has(block.id)) {
                         const toggle = makeBlock({ type: 'toggle', title: '', text: '' });
                         focus(toggle.id, 'title', 0);
