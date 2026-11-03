@@ -7118,15 +7118,16 @@ test('merge rules: each row of the agreed table gives the agreed result', () => 
     ['B:D', 'B:F', 'B:D,F', 'add'],
     ['B:D', 'B:[분류기준] F', 'B:D:[분류기준] F', 'add'],
     ['B:D', 'D:K', 'B:(D:K)', 'group'],
-    ['B:F-D', 'B:F-W', 'B:F-D-W', 'link'],
+    ['B:F-D', 'B:F-W', 'B:F-D,F-W', 'add'],
+    ['B:F-D', 'B:F-D-W', 'B:F-D-W', 'add'],
     ['A:K:B', 'A::B:C', 'A:K:B:C', 'link'],
-    ['A:K:B:C', 'A:K:B:Z', 'A:K:B:C=Z', 'link'],
+    ['A:K:B:C', 'A:K:B:Z', 'A:K:B:C,Z', 'link'],
     ['[A] B:[D] C', '[A] B : [D] C:[K] L', '[A] B:[D] C:[K] L', 'link'],
     ['[A] B:[D] C', '[A:D] B :: [K] L', '[A] B:[D] C:[K] L', 'add'],
     ['A:R', 'A:B:C', 'A:R,(B:C)', 'add'],
     ['성립;a', '성립;b', '성립;a,b', 'add'],
     ['성립;a,b', '성립;b,c', '성립;a,b,c', 'link'],
-    ['A:F=G', 'A:H=G', 'A:F=G=H', 'link'],
+    ['A:F=G', 'A:H=G', 'A:F=G,H=G', 'add'],
   ];
   for (const [existing, incoming, expected, kind] of rows) {
     const merged = mergeNoteChains(existing, incoming);
@@ -7240,8 +7241,9 @@ test('merging also holds for every word inside a logic cell: = , - cells take an
   const { mergeNoteChains, mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
   const shorthand = loadSource('utils/noteShorthand.ts');
   // `=` 칸은 합집합: 같은 칸에 같은 자리의 값이 합쳐진다
-  assert.equal(mergeNoteChains('A:F=G', 'A:F=H').text, 'A:F=G=H');
-  assert.equal(mergeNoteChains('A:F=G', 'A:H=G').text, 'A:F=G=H');
+  // 3일: `=` `-`로 쓴 칸은 내용 그대로 `,`로 더한다(겹치는 낱말이 있어도 F=H 같은 같음을 만들지 않는다)
+  assert.equal(mergeNoteChains('A:F=G', 'A:F=H').text, 'A:F=G,F=H');
+  assert.equal(mergeNoteChains('A:F=G', 'A:H=G').text, 'A:F=G,H=G');
   assert.equal(mergeNoteChains('A:F=G', 'A:H').text, 'A:F=G,H', '3일: a different value at the same place is added with ,');
   // 칸 안의 낱말(`,` `-` `=`)이 들어온 줄의 맨 앞 칸이면, 그 낱말만 묶어 이어 붙인다
   assert.equal(mergeNoteChains('A:B,C', 'C:D').text, 'A:B,(C:D)');
@@ -7276,8 +7278,8 @@ test('merge into earlier pages: same attribute path only, oldest matching row, n
   assert.equal(updates.length, 1);
   assert.equal(updates[0].logId, 'p1');
   assert.equal(updates[0].before, earlier[0].memo);
-  assert.equal(updates[0].after, ':::toggle A :\nB:F-D-W\n:::end');
-  assert.deepEqual(updates[0].steps, [{ statement: 'B:F-W', kind: 'link' }]);
+  assert.equal(updates[0].after, ':::toggle A :\nB:F-D,F-W\n:::end');
+  assert.deepEqual(updates[0].steps, [{ statement: 'B:F-W', kind: 'add' }]);
   // 같은 이름이라도 속성 경로가 다르면 합치지 않는다
   assert.deepEqual(mergeNoteIntoEarlier('B:F-W', earlier), []);
   assert.deepEqual(mergeNoteIntoEarlier(':::toggle C :\nB:F-W\n:::end', earlier), []);
@@ -7304,7 +7306,7 @@ test('merge records keep the text from before the merge and can be undone only w
   const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
   const data = {};
   const storage = { getItem: key => (key in data ? data[key] : null), setItem: (key, value) => { data[key] = String(value); } };
-  const updates = mergeNoteIntoEarlier('B:F-W', [{ id: 'p1', memo: 'B:F-D' }]);
+  const updates = mergeNoteIntoEarlier('B:F-D-W', [{ id: 'p1', memo: 'B:F-D' }]);
   const [record] = recordNoteMerges('today', updates, '2026-10-20T00:00:00.000Z', storage);
   assert.equal(record.before, 'B:F-D');
   assert.equal(record.after, 'B:F-D-W');
@@ -10001,13 +10003,13 @@ test('merging needs the same column number: a name in another column does not co
   // 전체를 다 쓰지 않아도 쓴 칸의 번호만 같으면 된다(두 번째는 겹치는 칸이 맨 앞 B 하나뿐이라 첨가)
   assert.deepEqual(merge('[A] B:[D] C', '[A] B : [D] C:[K] L'), ['[A] B:[D] C:[K] L', 'link']);
   assert.deepEqual(merge('[A] B:[D] C', '[A:D] B :: [K] L'), ['[A] B:[D] C:[K] L', 'add']);
-  assert.deepEqual(merge('A:b:c:d', 'A::c:e'), ['A:b:c:d=e', 'link']);
+  assert.deepEqual(merge('A:b:c:d', 'A::c:e'), ['A:b:c:d,e', 'link']);
   // 맨 앞 칸만 겹치는 첨가: 같은 위치(번호)의 칸에 `,`로(3일), 번호가 E의 끝을 넘으면 그만큼 건너뛰어 잇는다
   assert.deepEqual(merge('사과:빨강', '사과:둥글다'), ['사과:빨강,둥글다', 'add']);
   assert.deepEqual(merge('사과:빨강', '사과::둥글다'), ['사과:빨강:둥글다', 'add']);
   assert.deepEqual(merge('a:b', 'a:::d'), ['a:b::d', 'add']);
-  // 사이에 낀 새 칸은 같은 번호의 칸에 `=`로 붙는다
-  assert.deepEqual(merge('A:b:c', 'A:x:c'), ['A:b=x:c', 'link']);
+  // 사이에 낀 새 칸은 같은 번호의 칸에 `,`로 붙는다(3일)
+  assert.deepEqual(merge('A:b:c', 'A:x:c'), ['A:b,x:c', 'link']);
   // E가 건너뛴 칸은 나중에 채울 수 있다
   assert.deepEqual(merge('[A] B::[K] L', '[A] B:[D] C'), ['[A] B:[D] C:[K] L', 'add']);
   // 맨 앞 칸만 E의 뒤쪽 칸과 겹치면 그 칸에 묶는다(연결이 아니다)
@@ -10064,7 +10066,7 @@ test('# keeps working in many cases: every place where the cell sits (even after
   assert.ok(written.has('direct|A|B-C') && written.has('direct|B-C|B+C') && written.has('reconstruct|A|B-C → B+C'));
   // 두 줄에서 셀의 칸 번호가 달라도 각각 합쳐진다
   const both = pairs(`A:'B-C'\nA:x:'B-C'\nA:'B-C':w\n${T}`);
-  assert.ok(both.has('reconstruct|A|x → B-C → B+C') && both.has('reconstruct|A|B-C → w = B+C'));
+  assert.ok(both.has('reconstruct|A|x → B-C → B+C') && both.has('reconstruct|A|B-C → w AND B+C'));
   // 이웃이 아닌 이름 · 다른 토글 경로의 줄에는 이어 붙지 않는다
   const other = pairs(`Q:'B-C'\n${T}\n:::toggle A\n'B-C'\n:::end`);
   assert.ok(![...other].some(text => text.includes('Q → B-C → B+C') || text.includes('Q|B-C → B+C')));
@@ -11232,7 +11234,15 @@ test('3일: a value written at the same place with the same [ ] is added to that
   assert.deepEqual(merge('[B] A: [N] C', '[B] A:[N] V: [P] O'), ['[B] A:[N] C,(V:[P] O)']);
   assert.deepEqual(merge('[B] A:[N] C:[Q] z', '[B] A:[N] V'), ['[B] A:[N] (C:[Q] z),V'], 'what follows C stays with C');
   assert.deepEqual(merge('[B] A:[N] C\n[B] A:[N] V', '[B] A:[N] V: [P] O'), ['[B] A:[N] C\n[B] A:[N] V:[P] O'], 'a line with more overlap is linked first');
-  assert.deepEqual(merge('[A] D:[I] K:[N] m', '[A] D:[I] K:[N] O'), ['[A] D:[I] K:[N] m=[N] O'], 'a link keeps =');
+  assert.deepEqual(merge('[A] D:[I] K:[N] m', '[A] D:[I] K:[N] O'), ['[A] D:[I] K:[N] m,O'], 'same place, different content: , (3일 17:30)');
+  const { mergeNoteChains } = loadSource('utils/noteMerge.ts');
+  assert.equal(mergeNoteChains('A:K:B:C:Y', 'A:K:B:Z').text, 'A:K:B:(C:Y),Z', 'what follows C stays with C');
+  assert.equal(mergeNoteChains('A:b:c', 'A:x:c').text, 'A:b,x:c', 'c follows both, as both lines say');
+  assert.equal(mergeNoteChains('A:F=G', 'A:H=G').text, 'A:F=G,H=G', '= and - cells are added as they are (no F=H is made)');
+  assert.equal(mergeNoteChains('A:C', 'A:V-W').text, 'A:C,V-W');
+  const shorthand = loadSource('utils/noteShorthand.ts');
+  assert.equal(shorthand.withNoteShorthand(true, () => mergeNoteChains('A:K:B', 'A:K:B=Z').text), 'A:K:B=Z', 'B written again as B=Z replaces B instead of B,B=Z');
+  assert.doesNotThrow(() => mergeNoteChains('A:::CB', 'A:BC()'), 'an empty () no longer loops forever');
   const converts = memo => questionsFor(memo).filter(q => q.kind === 'convert').map(q => `${q.prompt}→${q.answer}`);
   assert.ok(converts('[B] A:[N] C,(V:[P] O)').includes('V→O'), 'the branch V:[P] O is asked, V in N');
   assert.ok(!questionsFor('[B] A:[N] C,(V:[P] O)').some(q => /\[/.test(`${q.statement || ''}${q.answer}`)), 'no [ ] text leaks');

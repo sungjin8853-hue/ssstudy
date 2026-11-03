@@ -2,7 +2,7 @@ import { readReviewFieldOverride, reviewGroups } from './reviewFieldOverride';
 import { isReviewSlash } from './reviewSlash';
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { blankTitleCriteria, noteCriterionOf, parseCriterionLabels, splitTitleCriteria, topLevelCuts } from './noteDiagram';
-import { isNoteShorthandOn, relationMarks, trailingRelation, weakLink } from './noteShorthand';
+import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
@@ -12,7 +12,7 @@ import { nestRowsOf } from './noteNest';
  * 연결·첨가 합치기.
  *
  * 나중 페이지에 쓴 줄(S)이 이전 페이지의 같은 속성(토글 경로) 안에 있는 줄(E)과 이름이 겹치면 E에 합친다.
- *  - 겹치는 칸이 둘 이상이면 "연결": S의 새 칸을 겹친 칸 뒤에 이어 붙인다(뒤에 이미 칸이 있으면 같은 자리의 `=`로).
+ *  - 겹치는 칸이 둘 이상이면 "연결": S의 새 칸을 겹친 칸 뒤에 이어 붙인다(뒤에 이미 같은 위치의 칸이 있으면 그 칸에 `,`로, 3일).
  *  - 겹치는 칸이 S의 맨 앞 하나뿐이면 "첨가": 같은 위치(칸 번호 · 칸 이름 · `[ ]`)인데 내용만 다르면 그 칸에 `,`로 더하고(칸이 둘 이상이면 `,(B:C)`, 3일),
  *    위치가 다르게 `[ ]`를 붙여 쓴 칸은 새 `:` 칸으로 붙인다.
  *    겹친 칸이 E의 맨 앞이 아니면 그 칸을 `(D:K)`로 묶는다(앞에서 K로만 갈 수 있다).
@@ -153,7 +153,8 @@ const groupedAtoms = (part: string): string[] | null => {
   for (let at = 0; at < part.length; at += 1) {
     if (part[at] === '[') { const bracket = closed.get(at); if (bracket !== undefined) at = bracket; continue; }
     const close = part[at] === '(' ? closed.get(at) : undefined;
-    if (close === undefined) continue;
+    // 빈 괄호 `()`(`[수열]()` 등)는 낱말이 없다: 그대로 두면 같은 글을 끝없이 다시 읽는다(3일 점검)
+    if (close === undefined || close === at + 1) continue;
     atoms.push(...atomsOf(part.slice(at, close + 1)));
     rest += part.slice(cursor, at);
     cursor = close + 1;
@@ -169,7 +170,7 @@ const joinList = (items: string[], like: string, delimiter: string) => (
   items.join(delimiter === ',' && /,\s/.test(like) ? ', ' : delimiter)
 );
 
-/** 같은 자리의 두 칸을 한 칸으로: `,` 목록과 `=`로 이은 값은 합집합, `-` 순서는 겹친 앞부분 뒤로 이어 붙인다. 합칠 수 없으면 null, 이미 들어 있으면 같은 글. */
+/** 같은 자리의 두 `,` 목록을 한 칸으로(합집합). `=` `-`로 쓴 칸은 그대로 두므로 합치지 않는다(null). 이미 들어 있으면 같은 글. */
 const mergeField = (existing: string, incoming: string): string | null => {
   const eItems = splitTop(existing, ',');
   const sItems = splitTop(incoming, ',');
@@ -178,22 +179,9 @@ const mergeField = (existing: string, incoming: string): string | null => {
     const added = sItems.filter(item => !eItems.some(other => norm(other) === norm(item)));
     return added.length ? joinList([...eItems, ...added], existing, ',') : existing;
   }
-  const eSeq = splitTop(existing, '-');
-  const sSeq = splitTop(incoming, '-');
-  if (eSeq.length < 2 && sSeq.length < 2) {
-    // `=`로 이은 값(칸 안의 같음)도 같은 자리면 하나로 합친다
-    const eEq = splitTop(existing, '=');
-    const sEq = splitTop(incoming, '=');
-    if (eEq.length < 2 && sEq.length < 2) return null;
-    if (!sEq.some(item => eEq.some(other => norm(other) === norm(item)))) return null;
-    const addedEq = sEq.filter(item => !eEq.some(other => norm(other) === norm(item)));
-    return addedEq.length ? joinList([...eEq, ...addedEq], existing, '=') : existing;
-  }
-  let prefix = 0;
-  while (prefix < eSeq.length && prefix < sSeq.length && norm(eSeq[prefix]) === norm(sSeq[prefix])) prefix += 1;
-  if (prefix < 1) return null;
-  const rest = sSeq.slice(prefix).filter(item => !eSeq.some(other => norm(other) === norm(item)));
-  return rest.length ? joinList([...eSeq, ...rest], existing, '-') : existing;
+  // 3일: `=` `-`로 쓴 칸은 내용 그대로다. 겹치는 낱말이 있어도 하나로 합치지 않는다(`F=G`와 `H=G`에서 F=H를 만들지 않는다).
+  // 같은 위치에 내용만 다른 값이면 그 칸에 `,`로 그대로 더한다(아래 addToCell).
+  return null;
 };
 
 /**
@@ -303,7 +291,6 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
   const cells: Cell[] = e.fields.map((field, i) => ({ field, before: i ? e.seps[i - 1] : '', col: e.cols[i] }));
   const original = [...cells];
   const textOf = () => cells.reduce((text, cell, i) => (i === 0 ? cell.field : `${text}${cell.before}${cell.field}`), '');
-  const insertAfter = (cell: Cell, field: string, before: string) => { cells.splice(cells.indexOf(cell) + 1, 0, { field, before, col: cell.col }); };
   /** 칸 번호 col에 새 칸을 끼운다: 맨 뒤면 그만큼 건너뛰어 잇고, E가 건너뛴 자리(E의 `::`)면 그 자리를 채운다. */
   const place = (field: string, col: number, mark: string, label = '') => {
     const last = cells[cells.length - 1];
@@ -332,6 +319,33 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
   };
   /** `( )` 안으로 들어가는 S의 칸 j(맨 앞 다음 칸부터)는 위 기준과 이어지지 않으므로 위치 이름을 `{이름}`으로 남긴다 */
   const carry = (j: number) => (check && sOwn[j] === undefined ? sPosition[j] : '');
+  /** E 칸의 `( )` 안으로 들어갈 때 위치 이름을 `{이름}`으로 남긴다 */
+  const carryE = (cell: Cell) => {
+    const i = original.indexOf(cell);
+    return check && i >= 0 && ownPositionOf(e, i, positions?.existingScope) === undefined ? (ePosition.get(cell) ?? '') : '';
+  };
+  /**
+   * 3일: 같은 위치(칸 번호 · 칸 이름 · `[ ]`)인데 내용만 다른 값은 그 칸에 `,`로 더한다. 칸 글의 `=` `-` `,`는 내용 그대로 붙인다.
+   * S의 from번째부터 to 앞까지 칸을 더한다(둘 이상이면 `( )`로 묶는다: `C,(V:O)`). 같은 `[ ]`는 한 번만 쓴다(`[N] C,V`).
+   * keepAfter가 아니면 E의 그 칸 뒤 칸들은 그 칸과 함께 묶어 둔다(`A:C:z` + `A:V` → `A:(C:z),V`: z는 V에 붙지 않는다).
+   */
+  const addToCell = (target: Cell, from: number, to: number, keepAfter: boolean) => {
+    const own = leadingMarks(target.field).map(item => `[${item}]`).join('');
+    const first = own && hasCriterion(s.fields[from]) ? stripCriterion(s.fields[from]) : s.fields[from].trim();
+    const added = { fields: [first, ...s.fields.slice(from + 1, to)], seps: s.seps.slice(from, to - 1).map((sep, offset) => namedSeparator(sep, carry(from + offset + 1))) };
+    const addedText = added.fields.length > 1 ? `(${chainText(added)})` : added.fields[0];
+    const at = cells.indexOf(target);
+    const after = keepAfter ? [] : cells.slice(at + 1);
+    const base = own ? stripCriterion(target.field) : target.field.trim();
+    // 새 값이 그 칸 내용을 그대로 품고 `=` `-`로 더 쓴 것이면(`B` → `B=Z`, `F-D` → `F-D-W`) 새로 쓴 내용으로 바꾼다(같은 내용을 두 번 쓰지 않는다)
+    if (added.fields.length === 1 && isNoteShorthandOn()) {
+      const cut = topLevelCuts(first, '=-').find(index => norm(first.slice(0, index)) === norm(base));
+      if (cut !== undefined) { target.field = `${own ? `${own} ` : ''}${first}`; return; }
+    }
+    const ownText = after.length ? `(${[base, ...after.map(cell => `${namedSeparator(cell.before, carryE(cell))}${cell.field}`)].join('')})` : base;
+    if (!keepAfter) cells.splice(at + 1);
+    target.field = `${own ? `${own} ` : ''}${joinList([ownText, addedText], target.field, ',')}`;
+  };
 
   // S의 각 칸이 E의 몇 번째 칸과 같은지: 칸 번호가 같아야 한다(맨 앞 칸만 어느 칸이든 겹칠 수 있다). 같은 자리의 목록·순서 칸은 합쳐서 같은 칸으로 본다.
   // 이름이 같아도 위치(분류기준 칸 이름 · `[ ]`)가 다르면 다른 칸이다.
@@ -381,13 +395,13 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
     cells.push({ field, before: namedSeparator(written, label), col });
     return true;
   });
-  /** 꼬리를 한 덩어리로 칸 번호 자리에 붙인다: 그 번호의 칸이 있으면 같은 칸에 `=`로(위치가 같을 때만), 없으면 번호에 맞게 끼운다 */
+  /** 꼬리를 한 덩어리로 칸 번호 자리에 붙인다: 그 번호의 칸이 있으면 그 칸에 `,`로(위치가 같을 때만), 없으면 번호에 맞게 끼운다 */
   const joinTail = (): boolean => {
     const text = wrapTail(s, tailStart, carry);
     const target = original.find(cell => cell.col === tailCol && cells.includes(cell));
     if (target) {
       if (!fits(target, tailStart)) return false;
-      insertAfter(target, text, weakLink());
+      addToCell(target, tailStart, s.fields.length, false);
       return true;
     }
     if (tailCol > lastCell.col || hasGap(tailCol)) {
@@ -404,12 +418,13 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
       if (anchor.i === original.length - 1) { if (!appendTail()) return null; }
       else if (!joinTail()) return null;
     }
-    // 사이에 낀 새 칸은 같은 번호의 칸에 `=`로 붙이고, 그 번호의 칸이 없으면(E가 건너뛴 자리) 그 자리에 끼운다
+    // 사이에 낀 새 칸은 같은 번호의 칸에 `,`로 붙이고, 그 번호의 칸이 없으면(E가 건너뛴 자리) 그 자리에 끼운다
     for (const item of innerNew) {
       const target = original.find(cell => cell.col === s.cols[item.j]);
       if (target) {
         if (!fits(target, item.j)) return null;
-        insertAfter(target, item.field, weakLink());
+        // 뒤 칸도 S에 함께 쓰여 있으니(겹친 칸) 그 칸 뒤는 그대로 둔다: `A:b:c` + `A:x:c` → `A:b,x:c`
+        addToCell(target, item.j, item.j + 1, true);
       } else if (hasGap(s.cols[item.j])) {
         const label = labelFor(item.j, s.cols[item.j]);
         if (label === null) return null;
@@ -421,24 +436,8 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
     const labelled = s.fields.slice(tailStart).some(hasCriterion);
     const sibling = original.find(cell => cell.col === tailCol && cells.includes(cell));
     if (sibling && fits(sibling, tailStart)) {
-      // 3일: 같은 위치(칸 번호 · 칸 이름 · `[ ]`가 같음)인데 내용만 다른 값은 그 칸의 값에 `,`로 더한다
-      // (`[B] A:[N] C` + `[B] A:[N] V` → `[B] A:[N] C,V`, `[B] A:C` + `[B] A:V` → `[B] A:C,V`).
-      // 뒤에 칸이 더 있으면 묶어서 더한다(`… V:[P] O` → `C,(V:[P] O)`). 그 칸 뒤에 E의 칸이 더 있으면 그 칸부터 묶는다(`(C:[Q] z),V`).
-      const own = leadingMarks(sibling.field).map(item => `[${item}]`).join('');
-      const tailSeps = s.seps.slice(tailStart).map((sep, offset) => namedSeparator(sep, carry(tailStart + offset + 1)));
-      const added = { fields: [stripCriterion(s.fields[tailStart]), ...s.fields.slice(tailStart + 1)], seps: tailSeps };
-      const addedText = added.fields.length > 1 ? `(${chainText(added)})` : added.fields[0];
-      const at = cells.indexOf(sibling);
-      const after = cells.slice(at + 1);
-      const carryE = (cell: Cell) => {
-        const i = original.indexOf(cell);
-        return check && i >= 0 && ownPositionOf(e, i, positions?.existingScope) === undefined ? (ePosition.get(cell) ?? '') : '';
-      };
-      const ownText = after.length
-        ? `(${[stripCriterion(sibling.field), ...after.map(cell => `${namedSeparator(cell.before, carryE(cell))}${cell.field}`)].join('')})`
-        : stripCriterion(sibling.field);
-      cells.splice(at + 1);
-      sibling.field = `${own ? `${own} ` : ''}${joinList([ownText, addedText], sibling.field, ',')}`;
+      // 같은 위치인데 내용만 다른 값: 그 칸에 `,`로 더한다(`[B] A:[N] C` + `[B] A:[N] V` → `[B] A:[N] C,V`, `[B] A:C` + `[B] A:V` → `[B] A:C,V`)
+      addToCell(sibling, tailStart, s.fields.length, false);
     } else if (labelled) {
       // `[ ]`를 붙여 쓴 칸은 새 `:` 칸이다: E에 그 번호의 칸이 이미 있으면 맨 뒤에 새 칸으로 잇고, 없으면(E가 건너뛴 자리) 그 번호에 끼운다
       if (hasGap(tailCol) && s.fields.length - tailStart === 1) place(s.fields[tailStart], tailCol, mark);
