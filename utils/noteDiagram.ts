@@ -7,7 +7,7 @@ import { isNoteShorthandOn, relationClass, relationMarks } from './noteShorthand
 import { quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
-import { expandSetCarry } from './setCarry';
+import { expandNestLines } from './noteNest';
 
 /**
  * 정리노트 글을 관계도(화면 표시용)로 바꾼다. 문제 만들기와는 별개이고, 값을 저장하거나 바꾸지 않는다.
@@ -218,11 +218,7 @@ export const readNoteSetLine = (segment: string): NoteSetLine | null => {
       const secondStart = firstEnd + 1 + colon[0].length;
       const secondEnd = matchingBracket(text, secondStart);
       if (secondEnd === text.length - 1 && text.slice(secondStart + 1, secondEnd).trim()) {
-        // 둘째 `[ ]` 안의 `@`는 앞 칸(첫 `[ ]`)의 집합이다: `[A]:[@.B]` = `[A]:[A.B]`(2일, 줄의 `[@]` 규칙과 같다)
-        const expression = first.trim();
-        const self = /[,%]/.test(expression) ? `(${expression})` : expression;
-        const criterion = text.slice(secondStart + 1, secondEnd).trim().replace(/(^|[^\p{L}\p{N}_])@(?![\p{L}\p{N}_])/gu, (_, lead: string) => `${lead}${self}`);
-        return { kind: 'ability', expression, criterion };
+        return { kind: 'ability', expression: first.trim(), criterion: text.slice(secondStart + 1, secondEnd).trim() };
       }
     }
     const defined = DEFINE_MEMBERS_COLON.exec(after);
@@ -404,7 +400,7 @@ const walkBlocks = (memo: string, inherited: string[], chain: string[][], expans
 /** 노트 글을 관계도로. criterion은 세션 노트의 분류 기준(맨 앞 기준)이고, 토글 제목의 `[ ]`가 그 안에서 기준을 바꾼다. */
 export const parseNoteDiagram = (written: string, criterion?: string | null, expansions?: DiagramExpansions): DiagramItem[] => {
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리)
-  const memo = expandOpenLines(expandSetCarry(normalizeNotePunctuation(written)));
+  const memo = expandNestLines(expandOpenLines(normalizeNotePunctuation(written)));
   const top = parseCriterionLabels(criterion || noteCriterionOf(memo));
   return walkDiagram(memo, top, top.length ? [top] : [], expansions);
 };

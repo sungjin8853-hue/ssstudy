@@ -11194,47 +11194,33 @@ test('2일: in a branch, giving the other values lets the hidden one be found, s
   assert.deepEqual(chips('[과일] 사과 - 빨강', q => q.kind === 'direct'), ['사과 ∈ 과일']);
 });
 
-test('2일: [A]:[@.B] in a set line is [A]:[A.B] (the @ in brackets is the set of the cell before)', () => {
-  const { readNoteSetLine } = loadSource('utils/noteDiagram.ts');
-  assert.deepEqual(readNoteSetLine('[A]:[@.B]'), { kind: 'ability', expression: 'A', criterion: 'A.B' });
-  assert.deepEqual(readNoteSetLine('[A,C]:[@.B]'), { kind: 'ability', expression: 'A,C', criterion: '(A,C).B' });
-  assert.deepEqual(readNoteSetLine('[A]:[개념:정의]'), { kind: 'ability', expression: 'A', criterion: '개념:정의' });
-  const convertSets = memo => questionsFor(memo).filter(q => q.convert).map(q => q.convert.steps.map(step => step.set).join(' > '));
-  assert.deepEqual(convertSets('[A] x : [@.B] y'), convertSets('[A] x : [A.B] y'), 'and in a note line it was already the same');
-  assert.deepEqual(convertSets('[A] x : [@.B] y'), ['A > A.B', 'A.B > A'], 'both sets are shown: A.B');
-});
-
-test('2일: set shorthand [A.#] — later [B.#] is A.B and carries on, [#.C] adds without carrying, // takes away one element, it ends with the toggle; # and // outside [ ] keep their old meaning', () => {
-  const { expandSetCarry } = loadSource('utils/setCarry.ts');
-  assert.equal(expandSetCarry('[//A.#] x : [B.#] y : [#.C] z\n[#.D] w : v'), '[A] x : [A.B] y : [A.B.C] z\n[A.B.D] w : v');
-  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [//K.#] z : [#.L] w'), '[A] x : [A.B] y : [A.K] z : [A.K.L] w', '// takes away only the one element right before (B), not everything');
-  assert.equal(expandSetCarry('[A.#] x : [#.B.//C] y'), '[A] x : [A.C] y', '// inside one bracket takes away the element just before it');
-  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [C.#] z : [////K.#] w'), '[A] x : [A.B] y : [A.B.C] z : [A.K] w', '//// takes away two (C and B)');
-  assert.equal(expandSetCarry('[A.#] x : [B.#] y : [#.C.////D] z'), '[A] x : [A.B] y : [A.D] z');
-  assert.equal(expandSetCarry('[//A.#]\n[#.B] p : q\n:::toggle T\n[//K.#] r\n[#.L] s\n:::end\n[#.M] t'), '[A.B] p : q\n:::toggle T\n[K] r\n[K.L] s\n:::end\n[A.M] t', 'a line with only [//A.#] just marks (and is left out); a toggle keeps its own');
-  assert.equal(expandSetCarry("[A] #'-'#: #+#"), "[A] #'-'#: #+#", 'the # template is untouched');
-  assert.equal(expandSetCarry('a // b'), 'a // b');
-  assert.equal(expandSetCarry('[A.#] p\n[#.B] q\n[//K.#] r : [#.L] s'), '[A] p\n[A.B] q\n[K] r : [K.L] s', '// is not needed to start; it only stops what was carried');
-  assert.equal(expandSetCarry('[A.#]\n[#.B] q'), '[A.B] q', 'a line with only [A.#] just sets it');
-  assert.equal(expandSetCarry('[A.#]\n[#.B] q', true), '\n[A.B] q', 'keepLines keeps the line count');
-  const sets = memo => questionsFor(memo).filter(q => q.convert).map(q => q.convert.steps.map(step => step.set).join(' > '));
-  assert.deepEqual(sets('[//A.#] x : [B.#] y'), sets('[A] x : [A.B] y'), 'questions are the same as writing the sets out');
-});
-
-test('2일 점검: [C#] (a # inside a name) is not shorthand, and marking a question on a shorthand line marks the original line', () => {
-  const { expandSetCarry } = loadSource('utils/setCarry.ts');
-  assert.equal(expandSetCarry('[A.#] x\n[C#] 기초 : 문법'), '[A] x\n[C#] 기초 : 문법', 'only a # standing as its own element is shorthand');
-  assert.equal(expandSetCarry('[C#]'), '[C#]', 'a line with only [C#] stays');
+test('3일: a > after a complete row puts the rest of the line under that row (like a toggle)', () => {
+  const { expandNestLines, nestCuts } = loadSource('utils/noteNest.ts');
+  assert.equal(expandNestLines('[A] > [B] A:[N] C'), ':::toggle [A]\n[B] A:[N] C\n:::end');
+  assert.equal(expandNestLines('X > Y > Z'), ':::toggle X\n:::toggle Y\nZ\n:::end\n:::end', 'each > goes one deeper');
+  assert.equal(expandNestLines(':::toggle T > U\nk : v\n:::end\nw'), ':::toggle T\n:::toggle U\nk : v\n:::end\n:::end\nw', 'in a toggle title the lines inside sit under the last row');
+  assert.equal(expandNestLines('a : b // X > c : d // e : f'), 'a : b\n:::toggle X\nc : d // e : f\n:::end', 'the row before > starts after the last //; after > runs to the end of the line');
+  ['A : > B', 'A -> B', 'A >= B', '[a>b] c', "'a > b' : c", 'A > ', '> A', 'A >> B'].forEach(line => assert.deepEqual(nestCuts(line), [], `${line}: > stays a letter`));
+  const show = memo => questionsFor(memo).map(q => `${q.kind}:${q.statement || q.prompt}→${q.answer}`);
+  assert.deepEqual(show('[A] > [B] A:[N] C'), show(':::toggle [A]\n[B] A:[N] C\n:::end'));
+  assert.deepEqual(show('화학 > 물 = H2O'), show(':::toggle 화학\n물 = H2O\n:::end'));
+  assert.deepEqual(show('수열의 합 : > 등차수열'), show('수열의 합 : > 등차수열'), 'unchanged when the row before is not complete');
   const { planReviewRemoval } = loadSource('utils/reviewRemoval.ts');
   const mark = (memo, prompt) => {
     const q = questionsFor(memo).find(item => item.prompt === prompt && item.kind === 'direct');
     assert.ok(q, `question for ${prompt}`);
     return planReviewRemoval({ reason: 'logic', covers: [{ logId: 'a', questionKey: q.key }], memos: [{ logId: 'a', memo }], nowIso: '2026-11-03T00:00:00Z' }).map(u => u.memo);
   };
-  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q', 'p'), ['[A.#] x : y\n[#.B] p : [!] q']);
-  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q // [#.C] r : s', 'p'), ['[A.#] x : y\n[#.B] p : [!] q // [#.C] r : s'], 'a span between two rewritten brackets');
-  assert.deepEqual(mark('[A.#] x : y\n[#.B] p : q // [#.C] r : s', 'r'), ['[A.#] x : y\n[#.B] p : q // [#.C] r : [!] s']);
-  assert.deepEqual(mark('x : [A.#] y : [#.B] z', 'x'), ['x : [A.#.!] y : [#.B] z'], 'the mark goes into the shorthand bracket');
-  assert.equal(expandSetCarry('x : [A.#.!] y : [#.B] z\n[#.C] w'), 'x : [A.!] y : [A.B] z\n[A.C] w', 'a ! mark is not an element: A is still carried');
-  assert.equal(expandSetCarry('[A.#.%!] x\n[#.B] y'), '[A.%!] x\n[A.B] y');
+  assert.deepEqual(mark('X > p : q > r : s', 'p'), ['X > p : [!] q > r : s'], '[!] goes into the row inside the line');
+  assert.deepEqual(mark('X > p : q > r : s', 'r'), ['X > p : q > r : [!] s']);
+  const { rewriteSetMember } = loadSource('utils/noteSetEdit.ts');
+  const { buildNoteSetIndex } = loadSource('utils/noteSets.ts');
+  const edit = (memo, set, from, to) => rewriteSetMember(memo, buildNoteSetIndex([memo]), set, from, to);
+  assert.equal(edit('도형 > 원 : 둥근 것', '도형', '원', '동그라미'), '도형 > 동그라미 : 둥근 것', 'the set window edits the row under 도형');
+  assert.equal(edit('도형 > 원', '도형', '원', ''), '도형', 'erasing the only cell drops the > too');
+  const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
+  const merge = (earlier, later) => mergeNoteIntoEarlier(later, [{ id: 'e', memo: earlier }]).map(update => update.after);
+  assert.deepEqual(merge('[A] > [B] A:[N] C', '[A] > [B] A: [N] C :[M] p'), ['[A] > [B] A:[N] C:[M] p'], 'same place (under [A]): linked');
+  assert.deepEqual(merge('[A] > [B] A:[N] C', '[B] A :[N] C: D'), [], 'not under [A]: a different place, not linked');
+  assert.deepEqual(merge(':::toggle [A]\n[B] A:[N] C\n:::end', '[A] > [B] A:[N] C:[M] p'), [':::toggle [A]\n[B] A:[N] C:[M] p\n:::end'], 'a > row and a toggle are the same place');
 });

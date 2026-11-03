@@ -1,5 +1,3 @@
-import { matchingBracket } from './setExpression';
-import { expandSetCarry } from './setCarry';
 import type { ReviewMemoOldLine, ReviewRemovedQuestion, ReviewRemovedReason, StudyLog } from '../types';
 import { buildReviewQuestions } from './reviewQuestions';
 import type { NoteQuestion, QuestionNoteNode } from './reviewQuestions';
@@ -7,6 +5,7 @@ import { markLogicInLine, memoLineText, stripLogicMarks, hasLogicMark } from './
 import { normSetName, questionAbilities } from './noteSets';
 import { readNoteSetLine } from './noteDiagram';
 import { REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
+import { expandNestLinesMapped } from './noteNest';
 
 /** 복습에서 빼기: 노트 글과 문제 자체는 그대로 두고, 복습에 나오지 않게만 한다. */
 export const REMOVE_REASON_LABELS: Record<ReviewRemovedReason, string> = {
@@ -58,41 +57,44 @@ const sourceLines = (located: Located) => {
   });
 };
 
-/** 풀어 쓴 줄의 글자 자리를 원래 줄의 자리로: 두 줄을 함께 읽으며 바뀐 `[ ]`는 통째로 건너뛰고(그 안의 자리는 `]` 뒤로), 나머지 글자는 하나씩 맞춘다 */
-const offsetMapper = (expanded: string, original: string) => {
-  const map: number[] = [];
-  let i = 0;
-  let j = 0;
-  while (j < expanded.length && i < original.length) {
-    if (original[i] === '[' && expanded[j] === '[' && original[i + 1] !== expanded[j + 1] || (original[i] === '[' && expanded[j] === '[' && matchingBracket(original, i) - i !== matchingBracket(expanded, j) - j)) {
-      const originalEnd = matchingBracket(original, i);
-      const expandedEnd = matchingBracket(expanded, j);
-      if (originalEnd > 0 && expandedEnd > 0) {
-        for (let k = j; k <= expandedEnd; k += 1) map[k] = k === j ? i : originalEnd + 1;
-        i = originalEnd + 1;
-        j = expandedEnd + 1;
-        continue;
-      }
-    }
-    map[j] = i;
-    i += 1;
-    j += 1;
-  }
-  return (offset: number) => (offset < map.length && map[offset] !== undefined ? map[offset] : offset - expanded.length + original.length);
+/** `>`로 밑에 쓴 줄(`X > Y`)의 행들: 원래 줄 번호마다 행 글과 그 줄 안의 시작 자리(토글 제목이면 제목 글 기준) */
+const nestPiecesByLine = (lines: readonly string[]): Map<number, Array<{ start: number; text: string }>> => {
+  const result = new Map<number, Array<{ start: number; text: string }>>();
+  if (!lines.some(line => line.includes('>'))) return result;
+  const expanded = expandNestLinesMapped(lines);
+  expanded.origin.forEach((origin, at) => {
+    if (!origin?.split) return;
+    const line = expanded.lines[at];
+    const text = line.startsWith(REVIEW_MEMO_TOGGLE_START) ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line;
+    result.set(origin.line, [...(result.get(origin.line) ?? []), { start: origin.start, text }]);
+  });
+  return result;
 };
 
-/** 노트 글에서 `line`과 같은 줄(토글 제목이면 제목 줄)을 `replace`로 바꾼다. 같은 줄이 여럿이면 모두 바꾼다. */
-const replaceLines = (memo: string, line: string, isToggle: boolean, replace: (text: string, at: (offset: number) => number) => string): { memo: string; changed: string[] } => {
+/**
+ * 노트 글에서 `line`과 같은 줄(토글 제목이면 제목 줄)을 `replace`로 바꾼다. 같은 줄이 여럿이면 모두 바꾼다.
+ * `X > Y`로 밑에 쓴 줄은 행(X, Y)마다 따로 문제가 나온다: 행 글이 같으면 원래 줄의 그 행 자리만 바꾼다(3일).
+ */
+const replaceLines = (memo: string, line: string, isToggle: boolean, replace: (text: string) => string): { memo: string; changed: string[] } => {
   const changed: string[] = [];
-  // 집합 줄임말(`[#.B]`)을 쓴 줄은 문제를 만든 글(풀어 쓴 줄)과 다르다: 풀어 쓴 줄로 찾고, 글자 자리는 원래 줄로 옮긴다(2일 점검)
-  const expanded = expandSetCarry(memo, true).split('\n');
-  const lines = memo.split('\n').map((text, at) => {
+  const original = memo.split('\n');
+  const pieces = nestPiecesByLine(original);
+  const lines = original.map((text, number) => {
+    const split = pieces.get(number);
+    if (split) {
+      const prefix = text.startsWith(REVIEW_MEMO_TOGGLE_START) ? REVIEW_MEMO_TOGGLE_START.length : 0;
+      let next = text;
+      [...split].reverse().forEach(piece => {
+        if (piece.text !== line) return;
+        const at = prefix + piece.start;
+        next = `${next.slice(0, at)}${replace(piece.text)}${next.slice(at + piece.text.length)}`;
+      });
+      if (next !== text) changed.push(next);
+      return next;
+    }
     const body = isToggle ? (text.startsWith(REVIEW_MEMO_TOGGLE_START) ? text.slice(REVIEW_MEMO_TOGGLE_START.length) : null) : text;
-    if (body === null) return text;
-    const shown = isToggle ? (expanded[at] ?? '').slice(REVIEW_MEMO_TOGGLE_START.length) : (expanded[at] ?? '');
-    const same = body === line;
-    if (!same && shown !== line) return text;
-    const next = replace(body, same ? (offset => offset) : offsetMapper(shown, body));
+    if (body === null || body !== line) return text;
+    const next = replace(body);
     if (next === body) return text;
     const written = isToggle ? `${REVIEW_MEMO_TOGGLE_START}${next}` : next;
     changed.push(written);
@@ -101,11 +103,15 @@ const replaceLines = (memo: string, line: string, isToggle: boolean, replace: (t
   return { memo: lines.join('\n'), changed };
 };
 
-/** 노트 글에서 `line`과 같은 첫 줄 바로 밑에 `text` 줄을 넣는다(이미 같은 줄이 있으면 그대로) */
+/** 노트 글에서 `line`과 같은 첫 줄(`>`로 밑에 쓴 줄이면 그 행이 든 줄) 바로 밑에 `text` 줄을 넣는다(이미 같은 줄이 있으면 그대로) */
 const insertAfterLine = (memo: string, line: string, text: string): { memo: string; added: boolean } => {
   const lines = memo.split('\n');
   if (lines.includes(text)) return { memo, added: false };
-  const at = lines.indexOf(line);
+  let at = lines.indexOf(line);
+  if (at < 0) {
+    const pieces = nestPiecesByLine(lines);
+    at = [...pieces.keys()].sort((a, b) => a - b).find(number => pieces.get(number)!.some(piece => piece.text === line)) ?? -1;
+  }
   if (at < 0) return { memo, added: false };
   lines.splice(at + 1, 0, text);
   return { memo: lines.join('\n'), added: true };
@@ -160,7 +166,7 @@ export const planReviewRemoval = (input: {
           return;
         }
         const slot = `${cover.logId}\u0000${source.isToggle ? 'T' : 'L'}\u0000${source.line}`;
-        const result = replaceLines(memo, source.line, source.isToggle, (text, at) => markLogicInLine(text, at(source.start), at(source.end)));
+        const result = replaceLines(memo, source.line, source.isToggle, text => markLogicInLine(text, source.start, source.end));
         memo = result.memo;
         if (result.changed.length) { marks.set(slot, result.changed[0]); marked.push(...result.changed); }
         else if (marks.has(slot)) marked.push(marks.get(slot)!);

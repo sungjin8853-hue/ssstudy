@@ -7,6 +7,7 @@ import type { NoteSetIndex } from './noteSets';
 import { topLevelCuts } from './noteDiagram';
 import { relationMarks } from './noteShorthand';
 import { expandOpenLines } from './noteOpenTail';
+import { expandNestLinesMapped, nestCuts } from './noteNest';
 
 /**
  * `[집합]()` 창에서 값을 고치거나 지울 때 노트 글에 적용하는 규칙.
@@ -101,18 +102,24 @@ export const rewriteSetMember = (memo: string, index: NoteSetIndex, set: string,
   const inside = locationTest(index, set);
   const replacement = to.replace(/\s*\n\s*/g, ' ').trim();
   const original = memo.split('\n');
-  const expanded = expandOpenLines(memo).split('\n');
-  const origin = alignExpanded(original, expanded);
+  const opened = expandOpenLines(memo).split('\n');
+  const openedOrigin = alignExpanded(original, opened);
+  // `X > Y`로 밑에 쓴 행은 X 토글 밑의 줄처럼 읽는다(3일): 행마다 원래 줄의 그 자리만 고친다
+  const nested = expandNestLinesMapped(opened);
   const out = [...original];
   const drop = new Set<number>();
+  const editsByLine = new Map<number, Array<{ start: number; end: number }>>();
   const stack: string[] = [];
-  expanded.forEach((line, position) => {
+  nested.lines.forEach((line, position) => {
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) { stack.push(normSetName(toggleName(line.slice(REVIEW_MEMO_TOGGLE_START.length)))); return; }
     if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
-    const lineNumber = origin[position];
+    const from = nested.origin[position];
+    if (!from) return;
+    const lineNumber = openedOrigin[from.line];
     if (lineNumber < 0) return;
-    const raw = original[lineNumber];
-    const edits: Array<{ start: number; end: number }> = [];
+    const raw = from.split ? line : original[lineNumber];
+    const base = from.split ? from.start : 0;
+    const edits = editsByLine.get(lineNumber) ?? [];
     segmentsOf(raw).forEach(segment => {
       const text = segment.text.trim();
       if (readNoteSetLine(text) || readNoteTemplate(text)) return;
@@ -124,12 +131,18 @@ export const rewriteSetMember = (memo: string, index: NoteSetIndex, set: string,
       const parents = [...(stack.length ? [stack[stack.length - 1]] : []), ...head.marks.flatMap(mark => mark.split(/[.,%()]+/).map(normSetName).filter(name => name && (index.sets.has(name) || index.display.has(name))))];
       const occurrence: Occurrence = { parents, markKeys: head.marks.map(markKeyOf), connected: head.connected };
       if (!inside(occurrence)) return;
-      edits.push({ start: segment.start + head.start, end: segment.start + head.end });
+      edits.push({ start: base + segment.start + head.start, end: base + segment.start + head.end });
     });
-    if (!edits.length) return;
-    let next = raw;
-    [...edits].reverse().forEach(edit => { next = `${next.slice(0, edit.start)}${replacement}${next.slice(edit.end)}`; });
-    if (!replacement) next = next.replace(/[ \t]+$/, '');
+    if (edits.length) editsByLine.set(lineNumber, edits);
+  });
+  editsByLine.forEach((edits, lineNumber) => {
+    let next = original[lineNumber];
+    [...edits].sort((a, b) => b.start - a.start).forEach(edit => { next = `${next.slice(0, edit.start)}${replacement}${next.slice(edit.end)}`; });
+    if (!replacement) {
+      next = next.replace(/[ \t]+$/, '');
+      // 행을 통째로 지워 `>` 앞뒤가 비면 그 `>`도 뺀다
+      if (nestCuts(original[lineNumber]).length) next = next.replace(/\s*>\s*$/, '').replace(/^\s*>\s*/, '').replace(/>\s*>/g, '>');
+    }
     if (!replacement && !next.trim()) drop.add(lineNumber);
     out[lineNumber] = next;
   });

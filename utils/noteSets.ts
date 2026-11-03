@@ -8,7 +8,7 @@ import { matchingBracket, parseSetExpression } from './setExpression';
 import type { SetExprNode } from './setExpression';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { expandOpenLines } from './noteOpenTail';
-import { expandSetCarry } from './setCarry';
+import { expandNestLines } from './noteNest';
 import { reviewQuotes } from './reviewQuote';
 
 /**
@@ -367,7 +367,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   memos.forEach(memo => {
     const stack: string[] = [];
     // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다
-    expandOpenLines(expandSetCarry(memo)).split('\n').forEach(line => {
+    expandNestLines(expandOpenLines(memo)).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const key = see(toggleName(line.slice(REVIEW_MEMO_TOGGLE_START.length)));
         sets.add(key);
@@ -908,7 +908,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
   (index.sources ?? []).forEach(memo => {
     const noteWide = noteWideCriterionOf(memo) ?? undefined;
     const stack: { key: string; criterion?: string }[] = [];
-    expandOpenLines(expandSetCarry(memo)).split('\n').forEach(line => {
+    expandNestLines(expandOpenLines(memo)).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
         stack.push({ key: normSetName(toggleName(title)), criterion: splitTitleCriteria(title).criteria.at(-1) });

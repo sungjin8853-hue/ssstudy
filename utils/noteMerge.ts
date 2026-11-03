@@ -6,6 +6,7 @@ import { isNoteShorthandOn, relationMarks, trailingRelation, weakLink } from './
 import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
+import { nestRowsOf } from './noteNest';
 
 /**
  * 연결·첨가 합치기.
@@ -457,31 +458,53 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
   // 칸 이름의 바탕: 노트 맨 위 분류기준. 토글 제목에 기준이 있으면 그 안은 그 기준, 끝이 열린 제목(`자동차 :`)은 아래 줄의 칸 번호를 그만큼 민다.
   const top = noteCriterionOf(memo);
   const scopes: { labels: string[]; offset: number }[] = [{ labels: top ? parseCriterionLabels(top) : [], offset: 0 }];
-  memo.split('\n').forEach((line, lineIndex) => {
-    if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
-      const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
-      path.push(toggleName(title));
-      const parent = scopes[scopes.length - 1];
-      const own = splitTitleCriteria(title).criteria.at(-1);
-      const blank = blankTitleCriteria(title);
-      const open = openTailOf(blank);
-      const before = open?.connector ? parseNoteChain(blank.slice(0, open.start)) : null;
-      scopes.push({ labels: own ? parseCriterionLabels(own) : parent.labels, offset: parent.offset + (before && before.fields[0] ? before.cols[before.cols.length - 1] + 1 : 0) });
-      return;
-    }
-    if (line === REVIEW_MEMO_TOGGLE_END) { path.pop(); if (scopes.length > 1) scopes.pop(); return; }
-    if (!line.trim()) return;
-    const cuts = topLevelCuts(line, '/').filter(cut => isReviewSlash(line, cut));
-    const bounds = [-1, ...cuts, line.length];
+  const enter = (title: string) => {
+    path.push(toggleName(title));
+    const parent = scopes[scopes.length - 1];
+    const own = splitTitleCriteria(title).criteria.at(-1);
+    const blank = blankTitleCriteria(title);
+    const open = openTailOf(blank);
+    const before = open?.connector ? parseNoteChain(blank.slice(0, open.start)) : null;
+    scopes.push({ labels: own ? parseCriterionLabels(own) : parent.labels, offset: parent.offset + (before && before.fields[0] ? before.cols[before.cols.length - 1] + 1 : 0) });
+  };
+  const leave = () => { path.pop(); if (scopes.length > 1) scopes.pop(); };
+  /** `X > Y`로 밑에 쓴 행(3일): 앞의 행들은 토글 제목처럼 속성 경로가 된다. lead는 첫 `>` 앞 `//` 앞의 보통 칸 */
+  const rowsOf = (text: string, base: number, title: boolean) => {
+    const split = nestRowsOf(text, title);
+    if (!split) return { lead: null, rows: [{ start: base, text }] };
+    const shift = (row: { start: number; text: string }) => ({ start: base + row.start, text: row.text });
+    return { lead: split.lead && split.lead.text ? shift(split.lead) : null, rows: split.rows.map(shift) };
+  };
+  /** 열린 토글마다 그 제목에서 더 연 경로 수 */
+  const extra: number[] = [];
+  const scanRow = (row: { start: number; text: string }, lineIndex: number) => {
+    const body = row.text;
+    const cuts = topLevelCuts(body, '/').filter(cut => isReviewSlash(body, cut));
+    const bounds = [-1, ...cuts, body.length];
     bounds.slice(1).forEach((end, index) => {
-      const raw = line.slice(bounds[index] + 1, end);
+      const raw = body.slice(bounds[index] + 1, end);
       const text = raw.trim();
       if (!text || topLevelCuts(text, relationMarks()).length === 0) return;
       const lead = raw.length - raw.trimStart().length;
-      const start = bounds[index] + 1 + lead;
+      const start = row.start + bounds[index] + 1 + lead;
       const scope = scopes[scopes.length - 1];
       statements.push({ line: lineIndex, start, end: start + text.length, text, path: [...path], labels: scope.labels.slice(scope.offset) });
     });
+  };
+  memo.split('\n').forEach((line, lineIndex) => {
+    if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
+      const { rows } = rowsOf(line.slice(REVIEW_MEMO_TOGGLE_START.length), REVIEW_MEMO_TOGGLE_START.length, true);
+      rows.forEach(row => enter(row.text));
+      extra.push(rows.length - 1);
+      return;
+    }
+    if (line === REVIEW_MEMO_TOGGLE_END) { const more = extra.pop() ?? 0; for (let count = 0; count <= more; count += 1) leave(); return; }
+    if (!line.trim()) return;
+    const { lead, rows } = rowsOf(line, 0, false);
+    if (lead) scanRow(lead, lineIndex);
+    rows.slice(0, -1).forEach(row => enter(row.text));
+    scanRow(rows[rows.length - 1], lineIndex);
+    rows.slice(0, -1).forEach(() => leave());
   });
   return statements;
 };

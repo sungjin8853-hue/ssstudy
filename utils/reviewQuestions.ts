@@ -8,7 +8,7 @@ import { buildNoteSetIndex, evaluateSetExpression, expandNoteSlots, fillNoteTemp
 import type { NoteSlot, NoteTemplate } from './noteSets';
 import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria } from './noteDiagram';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
-import { expandSetCarry } from './setCarry';
+import { expandNestLines } from './noteNest';
 import { hasLogicMark, isLogicToggleTitle, memoLineText, stripLogicMarks } from './noteLogicMarks';
 import { mergeNoteChains, parseNoteChain, scanNoteStatements } from './noteMerge';
 import type { OpenTail } from './noteOpenTail';
@@ -729,8 +729,8 @@ const assignPairBundles = (questions: NoteQuestion[], expressions: ReadonlyMap<s
 
 export function buildReviewQuestions(original: string): { questions: NoteQuestion[]; nodes: QuestionNoteNode[] } {
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리). 전각 기호(`：` `；`)는 노트 기호로 읽는다(글자 수가 같아 글자 범위는 그대로).
-  // `[//A.#]` 집합 줄임말은 읽기 전에 풀어 쓴다(2일)
-  const memo = expandOpenLines(expandSetCarry(normalizeNotePunctuation(original)));
+  // 완전한 행 뒤의 `>`는 그 뒤 행을 밑에 쓴 것처럼 읽는다(3일)
+  const memo = expandNestLines(expandOpenLines(normalizeNotePunctuation(original)));
   const tailByNode = new Map<string, OpenTail>();
   const nodes: QuestionNoteNode[] = [];
   const expressions = new Map<string, Expression[]>();
