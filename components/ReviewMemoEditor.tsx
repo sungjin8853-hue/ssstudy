@@ -702,9 +702,10 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                       } else if ((event.key === ' ' && prefix === '>') || (event.key === 'Enter' && ['/toggle', '/토글'].includes(prefix))) {
                         event.preventDefault();
                         convertLine(index, caret, prefix);
-                      } else if (event.key === ' ' && !event.ctrlKey && !event.altKey && !event.metaKey && selectionEnd === caret
-                        && /[^\s>][^>]*>$/.test(prefix) && !/[-=<>]>$/.test(prefix) && (block.text[caret] === undefined || block.text[caret] === '\n')) {
-                        // 줄 끝에서 `>`를 쓰고 띄어쓰면 그 줄이 제목인 토글이 되어 열리고, 커서가 토글 안으로 들어간다
+                      } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing && selectionEnd === caret
+                        && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && (block.text[caret] === undefined || block.text[caret] === '\n')) {
+                        // 줄 끝에서 `>`를 쓰고 엔터를 치면 그 줄이 제목인 토글이 되어 열리고, 커서가 토글 안으로 들어간다(여러 줄을 밑에 쓸 때).
+                        // `>` 뒤에 띄어 쓰면 토글로 바꾸지 않는다: 같은 줄에 이어 쓰는 `X > Y`는 그 한 행만 X 밑에 쓴 것이다(3일)
                         event.preventDefault();
                         convertLine(index, caret, '', true);
                       } else if (onExit && index === blocks.length - 1 && event.key === 'Enter' && !event.shiftKey && caret === block.text.length && selectionEnd === caret && (!block.text || block.text.endsWith('\n'))) {

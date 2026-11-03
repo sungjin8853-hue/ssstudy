@@ -1,14 +1,14 @@
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { reviewGroups } from './reviewFieldOverride';
 import { reviewQuotes } from './reviewQuote';
-import { openTailOf } from './noteOpenTail';
 
 /**
  * 줄 안의 `>`로 밑에 쓰기(3일 요청): 완전한 한 행 뒤에 `>`가 있으면, `>` 뒤의 행은 그 행 밑(토글 아래)에 쓴 것처럼 읽는다.
  *  - `[A] > [B] A:[N] C`는 `> [A]` 토글 밑에 `[B] A:[N] C`를 쓴 것과 같다.
  *  - 여러 번 쓰면 차례로 더 깊어진다: `X > Y > Z`는 X 밑에 Y, Y 밑에 Z.
  *  - 토글 제목에 쓰면(`> X > Y`) 그 토글 안의 줄들은 마지막 행(Y) 밑에 있다.
- *  - `>` 앞이 완전한 행일 때만이다: 앞이 비었거나 덜 끝났거나(`A :`, `A -` 처럼 연결어로 끝남) 뒤가 비면 `>`는 그냥 글자다.
+ *  - 앞이 덜 끝난 행(`자동차 : > 바퀴 : 4개`)이면 줄 끝이 열린 줄(`자동차 :` 밑 줄 `바퀴 : 4개`)과 같다(3일). 뒤 행은 앞 행의 칸 수만큼 뒤 칸에서 이어진다.
+ *  - 앞이 비었거나 뒤가 비면, 또 연결어에 붙여 쓴 `=>` `->` `:>`는 `>`가 그냥 글자다.
  *    `[ ]` `( )` 안과 따옴표 안의 `>`, `>>` · `>=`도 글자다.
  *  - `//`로 칸을 나눈 줄에서 `>` 앞의 행은 바로 앞 `//` 뒤부터다: `a : b // X > c : d`는 `a : b`와 X 밑의 `c : d`다.
  *    `>` 뒤는 줄 끝까지 그 행 밑이다(`X > a : b // c : d`는 둘 다 X 밑). 토글 제목에 `//`가 있으면 `>`는 글자다.
@@ -36,8 +36,8 @@ const scanNest = (line: string): { cuts: number[]; lead: number } => {
     if (line[index + 1] === '>' || line[index + 1] === '=' || line[index - 1] === '>') continue;
     const before = line.slice(from, index);
     const after = line.slice(index + 1).trim();
-    // 앞이 연결어로 끝나면(`=>` `->` `A :`) 덜 끝난 행이다
-    if (!before.trim() || openTailOf(before) || /[:;<,\-=]\s*$/.test(before) || !after || after.startsWith(':::')) continue;
+    // 연결어에 붙여 쓴 `>`(`=>` `->` `:>`)는 화살표 글자다. 띄어 쓴 `A : > B`는 덜 끝난 행 밑에 쓴 것이다(3일: 줄 끝이 열린 줄과 같다)
+    if (!before.trim() || /[:;<,\-=]$/.test(before) || !after || after.startsWith(':::')) continue;
     cuts.push(index);
     from = index + 1;
   }

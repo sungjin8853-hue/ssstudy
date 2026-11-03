@@ -1275,8 +1275,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           }
         }
       }
-    } else if (columns.length === 2 && nonempty(columns[0]) && goesForward(expression.separators[0])
+    } else if (!convertible && columns.length === 2 && nonempty(columns[0]) && goesForward(expression.separators[0])
       && expressionLabel(expression.fields[1]) !== expressionLabel(columns[1])) {
+      // 능력 변환 줄은 `[ ]` 글이 새는 보통 문제를 내지 않는다(3일: 갈래 칸이 있으면 여기서 `[N] C AND (V → [P] O)`가 나왔다)
       add({ prompt: expressionLabel(columns[0]), answer: expressionLabel(expression.fields[1]), direction: 'forward',
         kind: 'reconstruct', ...rank(scores[0], scores[1]), conditions, conditionSpans,
         columns: { prompt: [expression.classifications[0]], answer: [expression.classifications[1]], conditions: conditionColumns },
@@ -1306,6 +1307,18 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     // 모든 칸이 집합이 있는 칸(능력 변환)이면 칸 안의 덩어리는 위에서 변주로 냈으니 `[ ]` 글이 새는 보통 문제로 다시 내지 않는다
     // (능력 변환 줄에서도 칸 전체가 `( )`인 안쪽 관계는 그 칸을 대표하는 첫 값만 위에서 다뤘으니, 안쪽 관계는 따로 읽는다)
     expression.fields.forEach((field, index) => {
+      // 능력 변환 줄의 목록 칸에 든 갈래(`[N] C,(V:[P] O)`의 `V:[P] O`)는 안쪽 관계라 따로 읽는다(3일)
+      if (convertible && field.type === 'and') {
+        field.items.forEach(item => {
+          if (item.type !== 'relation') return;
+          // 갈래의 첫 값은 그 칸의 집합을 따른다(`[N] C,(V:…)`의 V도 N)
+          implicitByExpression.set(item, [[convertFields[index]!.set], ...implicit.slice(index + 1)]);
+          visit(item, index > 0
+            ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
+            : context, expression.classifications[index], scores[index]);
+        });
+        return;
+      }
       if (convertible && field.type !== 'relation') return;
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));

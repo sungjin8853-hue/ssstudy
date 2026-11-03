@@ -11200,11 +11200,11 @@ test('3일: a > after a complete row puts the rest of the line under that row (l
   assert.equal(expandNestLines('X > Y > Z'), ':::toggle X\n:::toggle Y\nZ\n:::end\n:::end', 'each > goes one deeper');
   assert.equal(expandNestLines(':::toggle T > U\nk : v\n:::end\nw'), ':::toggle T\n:::toggle U\nk : v\n:::end\n:::end\nw', 'in a toggle title the lines inside sit under the last row');
   assert.equal(expandNestLines('a : b // X > c : d // e : f'), 'a : b\n:::toggle X\nc : d // e : f\n:::end', 'the row before > starts after the last //; after > runs to the end of the line');
-  ['A : > B', 'A -> B', 'A >= B', '[a>b] c', "'a > b' : c", 'A > ', '> A', 'A >> B'].forEach(line => assert.deepEqual(nestCuts(line), [], `${line}: > stays a letter`));
+  ['A :> B', 'A -> B', 'A => B', 'A >= B', '[a>b] c', "'a > b' : c", 'A > ', '> A', 'A >> B'].forEach(line => assert.deepEqual(nestCuts(line), [], `${line}: > stays a letter`));
   const show = memo => questionsFor(memo).map(q => `${q.kind}:${q.statement || q.prompt}→${q.answer}`);
   assert.deepEqual(show('[A] > [B] A:[N] C'), show(':::toggle [A]\n[B] A:[N] C\n:::end'));
   assert.deepEqual(show('화학 > 물 = H2O'), show(':::toggle 화학\n물 = H2O\n:::end'));
-  assert.deepEqual(show('수열의 합 : > 등차수열'), show('수열의 합 : > 등차수열'), 'unchanged when the row before is not complete');
+  assert.deepEqual(show('자동차 : > 바퀴 : 4개'), show('자동차 :\n바퀴 : 4개'), '3일: after an open row it is the same as the open line with the row below');
   const { planReviewRemoval } = loadSource('utils/reviewRemoval.ts');
   const mark = (memo, prompt) => {
     const q = questionsFor(memo).find(item => item.prompt === prompt && item.kind === 'direct');
@@ -11223,4 +11223,17 @@ test('3일: a > after a complete row puts the rest of the line under that row (l
   assert.deepEqual(merge('[A] > [B] A:[N] C', '[A] > [B] A: [N] C :[M] p'), ['[A] > [B] A:[N] C:[M] p'], 'same place (under [A]): linked');
   assert.deepEqual(merge('[A] > [B] A:[N] C', '[B] A :[N] C: D'), [], 'not under [A]: a different place, not linked');
   assert.deepEqual(merge(':::toggle [A]\n[B] A:[N] C\n:::end', '[A] > [B] A:[N] C:[M] p'), [':::toggle [A]\n[B] A:[N] C:[M] p\n:::end'], 'a > row and a toggle are the same place');
+});
+
+test('3일: a value written at the same place with the same [ ] is added to that cell as a list; a branch in a list cell of a convert row is read too', () => {
+  const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
+  const merge = (earlier, later) => mergeNoteIntoEarlier(later, [{ id: 'e', memo: earlier }]).map(update => update.after);
+  assert.deepEqual(merge('[B] A:[N] C', '[B] A:[N] V'), ['[B] A:[N] C,V']);
+  assert.deepEqual(merge('[B] A: [N] C', '[B] A:[N] V: [P] O'), ['[B] A:[N] C,(V:[P] O)']);
+  assert.deepEqual(merge('[B] A:[N] C:[Q] z', '[B] A:[N] V'), ['[B] A:[N] (C:[Q] z),V'], 'what follows C stays with C');
+  assert.deepEqual(merge('[B] A:[N] C\n[B] A:[N] V', '[B] A:[N] V: [P] O'), ['[B] A:[N] C\n[B] A:[N] V:[P] O'], 'a line with more overlap is linked first');
+  assert.deepEqual(merge('[A] D:[I] K:[N] m', '[A] D:[I] K:[N] O'), ['[A] D:[I] K:[N] m=[N] O'], 'a link keeps =');
+  const converts = memo => questionsFor(memo).filter(q => q.kind === 'convert').map(q => `${q.prompt}→${q.answer}`);
+  assert.ok(converts('[B] A:[N] C,(V:[P] O)').includes('V→O'), 'the branch V:[P] O is asked, V in N');
+  assert.ok(!questionsFor('[B] A:[N] C,(V:[P] O)').some(q => /\[/.test(`${q.statement || ''}${q.answer}`)), 'no [ ] text leaks');
 });

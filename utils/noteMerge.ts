@@ -418,7 +418,26 @@ export const mergeNoteChains = (existingText: string, incomingText: string, posi
   } else if (anchor.i === 0) {
     if (!hasTail) return null;
     const labelled = s.fields.slice(tailStart).some(hasCriterion);
-    if (labelled) {
+    const sibling = labelled && hasCriterion(s.fields[tailStart]) ? original.find(cell => cell.col === tailCol && cells.includes(cell)) : undefined;
+    if (sibling && fits(sibling, tailStart)) {
+      // 3일: 같은 칸 번호에 같은 `[ ]`로 쓴 값은 그 칸의 값에 `,`로 더한다(`[B] A:[N] C` + `[B] A:[N] V` → `[B] A:[N] C,V`).
+      // 뒤에 칸이 더 있으면 묶어서 더한다(`… V:[P] O` → `C,(V:[P] O)`). 그 칸 뒤에 E의 칸이 더 있으면 그 칸부터 묶는다(`(C:[Q] z),V`).
+      const own = leadingMarks(sibling.field).map(item => `[${item}]`).join('');
+      const tailSeps = s.seps.slice(tailStart).map((sep, offset) => namedSeparator(sep, carry(tailStart + offset + 1)));
+      const added = { fields: [stripCriterion(s.fields[tailStart]), ...s.fields.slice(tailStart + 1)], seps: tailSeps };
+      const addedText = added.fields.length > 1 ? `(${chainText(added)})` : added.fields[0];
+      const at = cells.indexOf(sibling);
+      const after = cells.slice(at + 1);
+      const carryE = (cell: Cell) => {
+        const i = original.indexOf(cell);
+        return check && i >= 0 && ownPositionOf(e, i, positions?.existingScope) === undefined ? (ePosition.get(cell) ?? '') : '';
+      };
+      const ownText = after.length
+        ? `(${[stripCriterion(sibling.field), ...after.map(cell => `${namedSeparator(cell.before, carryE(cell))}${cell.field}`)].join('')})`
+        : stripCriterion(sibling.field);
+      cells.splice(at + 1);
+      sibling.field = `${own ? `${own} ` : ''}${joinList([ownText, addedText], sibling.field, ',')}`;
+    } else if (labelled) {
       // `[ ]`를 붙여 쓴 칸은 새 `:` 칸이다: E에 그 번호의 칸이 이미 있으면 맨 뒤에 새 칸으로 잇고, 없으면(E가 건너뛴 자리) 그 번호에 끼운다
       if (hasGap(tailCol) && s.fields.length - tailStart === 1) place(s.fields[tailStart], tailCol, mark);
       else if (!appendTail()) return null;
