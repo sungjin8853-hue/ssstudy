@@ -29,8 +29,8 @@ type QuestionColumn = number | string;
 type Expression =
   /** raw: 칸 글 사이의 `( )`를 그 자리의 값으로 바꾸기 전 글(바꾼 칸에만 있다) */
   | { type: 'text'; text: string; raw?: string; span: AnswerSpan }
-  | { type: 'and' | 'or' | 'sequence' | 'equal'; items: Expression[] }
-  | { type: 'relation'; fields: Expression[]; separators: string[]; classifications: QuestionColumn[]; skips?: number[] };
+  | { type: 'and' | 'or' | 'sequence' | 'equal'; items: Expression[]; grouped?: boolean }
+  | { type: 'relation'; fields: Expression[]; separators: string[]; classifications: QuestionColumn[]; skips?: number[]; grouped?: boolean };
 
 export interface NoteQuestion extends ReviewQuestionDifficulty {
   key: string;
@@ -198,7 +198,11 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   }
   // 칸 전체가 `( )`면 그 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙): 안쪽 첫 값은 그 칸, `:` 뒤는 그다음 칸들의 기준이다.
   // 안에서 분류기준을 직접 쓰면(`:{이름}` · `[ ]`) 그것을 쓴다. `[ ]` 안은 따로 처음부터 센다.
-  if (reviewGroups(text).closed.get(from) === to - 1) return parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
+  if (reviewGroups(text).closed.get(from) === to - 1) {
+    const inner = parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
+    // `( )`로 묶은 덩어리는 다른 계층이다(4일): 안쪽 관계를 물을 때 바깥 줄의 첫 칸을 조건으로 주지 않는다
+    return text[from] === '(' && inner.type !== 'text' ? { ...inner, grouped: true } : inner;
+  }
   let allCuts = splitAt(text, from, to, relationMarks());
   // 다른 연결어(`:` `;` `<`) 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할로 칸을 나눈다
   if (!allCuts.length && isNoteShorthandOn() && splitAt(text, 0, text.length, relationMarks()).length === 0) allCuts = splitAt(text, from, to, '=-');
@@ -1076,8 +1080,14 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     return merged;
   };
   const implicitByExpression = new Map<Expression, string[][]>();
-  const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
+  /**
+   * outer: `( )`로 묶은 안쪽(다른 계층)이 받을 조건. 바깥 줄의 첫 칸(A)은 `A:B,(N=P)`의 N → P와 상관이 없어 주지 않는다(4일 요청:
+   * "N을 보여주고 N의 능력적 집합을 보인 뒤 P를 맞춘다"). 없으면 context
+   */
+  const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0, outer?: QuestionCondition[]) => {
     if (expression.type === 'text') return;
+    if (expression.grouped && outer) context = outer;
+    const innerOf = (item: Expression) => (item.type !== 'text' && item.grouped ? outer ?? context : context);
     const conditions = context.map(item => item.text);
     const conditionColumns = context.map(item => item.columns);
     const conditionSpans = context.map(item => item.spans);
@@ -1110,9 +1120,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
             answerSpans: spans(items[from]), promptSpans: spans(items[to]) });
         }
       }
-      expression.items.forEach((item, index) => visit(item, index === 0 ? context
-        : [...context, { text: `${expressionLabel(combine('sequence', items.slice(0, index)))} 이후`,
-          columns: [inheritedColumn], spans: items.slice(0, index).flatMap(spans) }], inheritedColumn, baseScore));
+      expression.items.forEach((item, index) => visit(item, index === 0 ? innerOf(item)
+        : [...innerOf(item), { text: `${expressionLabel(combine('sequence', items.slice(0, index)))} 이후`,
+          columns: [inheritedColumn], spans: items.slice(0, index).flatMap(spans) }], inheritedColumn, baseScore, outer));
       return;
     }
     if (expression.type === 'equal') {
@@ -1129,10 +1139,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         add({ ...base, prompt: base.answer, answer: base.prompt, direction: 'reverse', kind: 'reverse',
           answerSpans: base.promptSpans, promptSpans: base.answerSpans });
       });
-      expression.items.forEach(item => visit(item, context, inheritedColumn, baseScore));
+      expression.items.forEach(item => visit(item, innerOf(item), inheritedColumn, baseScore, outer));
       return;
     }
-    if (expression.type !== 'relation') { expression.items.forEach(item => visit(item, context, inheritedColumn, baseScore)); return; }
+    if (expression.type !== 'relation') { expression.items.forEach(item => visit(item, innerOf(item), inheritedColumn, baseScore, outer)); return; }
     const columns = expression.fields.map(head);
     const scores = columnScores(expression.separators, baseScore, expression.skips);
     // 모든 칸 앞에 `[집합]`을 쓴 관계는 능력 변환 문제의 최소 단위들이다(기본 관계·역방향·연결 추론 대신 낸다).
@@ -1334,9 +1344,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           if (item.type !== 'relation') return;
           // 갈래의 첫 값은 그 칸의 집합을 따른다(`[N] C,(V:…)`의 V도 N)
           implicitByExpression.set(item, [[convertFields[index]!.set], ...implicit.slice(index + 1)]);
-          visit(item, index > 0
+          visit(item, index > 0 && !item.grouped
             ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
-            : context, expression.classifications[index], scores[index]);
+            : context, expression.classifications[index], scores[index], context);
         });
         return;
       }
@@ -1344,9 +1354,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
       // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 안쪽 관계는 첫 칸을 자리로 두고 묻는다
+      // 4일: `( )`로 묶은 칸(다른 계층)은 첫 칸을 조건으로 주지 않는다(outer = 바깥 줄 조건)
       visit(field, index > 0
         ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
-        : context, expression.classifications[index], scores[index]);
+        : context, expression.classifications[index], scores[index], context);
     });
   };
   /**
