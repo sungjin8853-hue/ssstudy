@@ -11274,9 +11274,12 @@ test('4일: auto review collects study time until the set hours are filled, then
   // 이미 넣은 기록 뒤에는 1시간 안이어도 합치지 않는다
   const afterRegistered = simplifyAutoLog([...logs, pending('e', '2026-11-03T05:00:00.000Z', 10, 23, 23)], 'e');
   assert.equal(afterRegistered.id, 'e');
-  // 범위가 이어지지 않으면(단원 사이 건너뜀) 진척 장수를 따로 적는다
-  const gap = simplifyAutoLog([pending('g1', '2026-11-05T01:00:00.000Z', 10, 1, 5, { autoReviewQueued: undefined, autoReviewWaiting: true }), pending('g2', '2026-11-05T01:30:00.000Z', 10, 11, 12)], 'g2');
+  // 단원 사이를 건너뛴 단원 기록은 합치고 진척 장수를 따로 적는다(1~5쪽 끝 단원 → 다음 단원 11~12쪽)
+  const gap = simplifyAutoLog([pending('g1', '2026-11-05T01:00:00.000Z', 10, 1, 5, { autoReviewQueued: undefined, autoReviewWaiting: true, progressPages: 5 }), pending('g2', '2026-11-05T01:30:00.000Z', 10, 11, 12, { progressPages: 2 })], 'g2');
   assert.deepEqual([gap.id, gap.logs.length, gap.logs[0].progressPages, gap.logs[0].endPage], ['g1', 1, 7, 12]);
+  // 단원이 없는데 사이를 건너뛴 기록은 합치지 않는다(나중에 고치면 건너뛴 쪽까지 진척으로 세어진다)
+  const jump = simplifyAutoLog([pending('j1', '2026-11-05T01:00:00.000Z', 10, 1, 5, { autoReviewQueued: undefined, autoReviewWaiting: true }), pending('j2', '2026-11-05T01:30:00.000Z', 10, 11, 12)], 'j2');
+  assert.deepEqual([jump.id, jump.logs.length], ['j2', 2]);
   // 단계가 바뀌면 앞 단계에 모은 기록을 넣는다
   logs = registerAutoReview([...logs, pending('f', '2026-11-04T05:00:00.000Z', 10, 1, 2, { subjectStageId: 'f' })], 'f', 1);
   assert.ok(logs.find(log => log.id === 'c').autoReviewRegistered && logs.find(log => log.id === 'f').autoReviewWaiting);
@@ -11453,6 +11456,11 @@ test('4일 점검: auto review does not fold a study into one from another study
   assert.equal(flushed[0].reviewRegisteredAt, '2026-11-04T15:30:00.000Z');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
   assert.ok(app.includes('flushFilledAutoGroups(next, subject.id') && app.includes('if (!subject) { next = next.map'), 'App flushes on a settings change and never loops on a missing subject');
+  assert.ok(app.includes('}, [logs, autoHoursKey]);') && (app.match(/flushFilledAutoGroups\(/g) || []).length === 1, 'one effect does both so neither overwrites the other');
+  // 복습에 넣기 창으로 직접 넣으면 모으는 중 표시가 남지 않는다
+  const { registerPendingLog } = loadSource('utils/review.ts');
+  assert.equal(registerPendingLog(mk('w', '2026-11-04T01:00:00.000Z', 10, 1, 1, { autoReviewWaiting: true }), Date.parse('2026-11-04T02:00:00.000Z')).autoReviewWaiting, undefined);
   const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(/const resetAll = \(\) => \{\s+setStep\('idle'\);\s+setCutEndPage\(null\);/.test(logger), 'a typed end page does not carry into the next measurement');
   assert.ok(logger.includes('cutReseedRef.current = subjectId;') && logger.includes('carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0'), 'the sheet is refilled after a folded record');
 });

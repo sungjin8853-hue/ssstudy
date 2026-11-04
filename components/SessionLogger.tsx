@@ -1647,6 +1647,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
   const resetAll = () => {
     setStep('idle');
+    setCutEndPage(null);
+    setCutError('');
     setSeconds(0);
     setStudySeconds(0);
     setOrganizationSeconds(0);
@@ -1750,6 +1752,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
   const startMeasurementNow = () => {
     unlockSounds();
+    setCutEndPage(null);
+    setCutError('');
     setStudySeconds(0);
     setOrganizationSeconds(0);
     setAttackCompletedPages(0);

@@ -769,9 +769,10 @@ const App: React.FC = () => {
 
   // 자동 복습 넣기(3일, 4일 바꿈): 저장한 기록을 모으다가 정한 공부 시간이 차면 한 묶음으로 복습에 넣는다(노트 합치기는 넣을 때 복습에 넣기와 같다).
   // 1시간 안에 이어 한 공부는 앞 기록에 합친다. 측정 도중 "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다(자동이 꺼진 과목은 추천 난도로)
+  // 모을 시간을 줄이거나 모으는 기록을 고쳐 이미 찬 묶음도 다음 저장을 기다리지 않고 넣는다(4일 점검). 한 효과에서 차례로 해 서로 덮어쓰지 않는다
+  const autoHoursKey = subjects.map(subject => (subject.autoReviewRegister ? `${subject.id}:${autoReviewHoursOf(subject)}` : '')).join('|');
   useEffect(() => {
     const queued = logs.filter(log => log.unitReviewPending && (log.autoReviewQueued || log.autoReviewCut)).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    if (!queued.length) return;
     let next = logs;
     queued.forEach(log => {
       if (!next.some(item => item.id === log.id && item.unitReviewPending)) return;
@@ -782,18 +783,11 @@ const App: React.FC = () => {
       const finished = subject ? getSubjectRemainingPageCount(subject) <= 0 : false;
       next = registerAutoReview(next, log.id, autoReviewHoursOf(subject), finished, (current, ids) => mergePendingNotes(current, log.subjectId, ids));
     });
-    setLogs(next);
-  }, [logs]);
-
-  // 모을 시간을 줄여 이미 찬 묶음은 다음 저장을 기다리지 않고 넣는다(4일 점검)
-  const autoHoursKey = subjects.map(subject => (subject.autoReviewRegister ? `${subject.id}:${autoReviewHoursOf(subject)}` : '')).join('|');
-  useEffect(() => {
-    let next = logs;
     subjects.filter(subject => subject.autoReviewRegister).forEach(subject => {
       next = flushFilledAutoGroups(next, subject.id, autoReviewHoursOf(subject), (current, ids) => mergePendingNotes(current, subject.id, ids));
     });
     if (next !== logs) setLogs(next);
-  }, [autoHoursKey]);
+  }, [logs, autoHoursKey]);
 
   // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
   const handleRegisterReview = (subjectId: string, grade: SubjectGrade, logIds?: string[]) => {

@@ -74,6 +74,9 @@ export const simplifyAutoLog = (logs: StudyLog[], logId: string): { logs: StudyL
   if (getLogStudyDate(previous) !== getLogStudyDate(incoming)) return { logs, id: logId };
   if (startMs(incoming) - endMs(previous) > AUTO_REVIEW_SAME_TIME_MS) return { logs, id: logId };
   if (!Number.isInteger(previous.endPage) || !Number.isInteger(incoming.startPage) || incoming.startPage! <= previous.endPage!) return { logs, id: logId };
+  // 범위는 바로 이어지거나(다음 페이지) 둘 다 단원 기록(진척 장수를 따로 가짐)일 때만 합친다: 사이를 건너뛴 기록을 합치면 나중에 고칠 때 건너뛴 쪽까지 진척으로 세어진다
+  const chapterLogs = previous.progressPages !== undefined && incoming.progressPages !== undefined;
+  if (incoming.startPage !== previous.endPage! + 1 && !chapterLogs) return { logs, id: logId };
   if (previous.photoBase64 && incoming.photoBase64) return { logs, id: logId };
   const merged = mergeStudyLogs(previous, { ...incoming, photoBase64: undefined });
   const withPhoto = { ...merged, photoBase64: previous.photoBase64 ?? incoming.photoBase64 };
