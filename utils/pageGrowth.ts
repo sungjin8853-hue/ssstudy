@@ -1,6 +1,6 @@
 import { StudyLog, Subject } from '../types';
 import { getLocalDateKey } from './schedule';
-import { unitIndexAt } from './reviewUnits';
+import { registrationBoundaries, unitIndexAt } from './reviewUnits';
 import { DEFAULT_PAGE_LABEL, normalizePageLabel } from './pageLabel';
 
 export const DEFAULT_GROWTH_PAGE_UNIT = 10;
@@ -182,6 +182,17 @@ const totalOf = (logs: PageEfficiencySample[]): EfficiencyWindow | null => {
  * 과목의 평균 효율(4일 요청): 전체 평균 = 잰 기록 전체의 시간 합 ÷ 장수 합. 예상 시간 · 계획 · 뽀모도로 장수 · 완료 예측이 모두 이 값을 쓴다.
  * 성장 정도(효율 칸)만 단위 기준이다: 효율 칸은 getEfficiencyView가 이번 단위의 값을 따로 낸다.
  */
+/**
+ * 이번 단위의 평균 효율(4일 요청: 뽀모도로 장수가 쓴다): 이번 단위를 처음 시작한 때부터 지금까지의 총합 평균. 효율 칸에 보이는 값과 같다.
+ * 이번 단위에 아직 기록이 없으면(막 복습에 넣었으면) 전체 평균이다. boundaries를 주지 않으면 기록에 남은 "복습에 넣기" 시각으로 나눈다.
+ */
+export const calculateCurrentUnitEfficiency = (logs: PageEfficiencySample[], boundaries?: readonly number[]) => {
+  const units = buildBoundaryUnits(logs, boundaries ?? registrationBoundaries(logs as unknown as StudyLog[]));
+  const open = units.find(unit => !unit.complete);
+  return open ? { averageTimePerPage: open.averageTimePerPage, timeAttackAverageTimePerPage: open.timeAttackAverageTimePerPage }
+    : calculateUnitEfficiency(logs);
+};
+
 export const calculateUnitEfficiency = (logs: PageEfficiencySample[]) => {
   const basis = totalOf(logs);
   return { basis, averageTimePerPage: basis?.averageTimePerPage || 0,

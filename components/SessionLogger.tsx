@@ -6,8 +6,11 @@ import {
   calculateBasicReviewGroupTiming,
   calculateRecentCompletedDayAverage,
   calculateTimeAttackAverage,
-  calculateReviewSubjectTiming
+  calculateReviewSubjectTiming,
+  getReviewEfficiencySamples
 } from '../utils/math';
+import { calculateCurrentUnitEfficiency } from '../utils/pageGrowth';
+import { reviewCompletionBoundaries } from '../utils/reviewUnits';
 import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage, willWaitForReview } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
@@ -1151,6 +1154,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     [dueReviewGroups, todayStudyOrder, logs, subjects]
   );
   const selectedRunQueueItem = getRunQueueCellLead(runQueueItems, getSelectedRunQueueItem(runQueueItems, selectedTaskKey));
+  /** 복습과목의 이번 단위(복습 한 번) 평균 효율. 이번 복습에 아직 기록이 없으면 전체 평균 */
+  const reviewUnitEfficiencyOf = (parentSubjectId: string, reviewSubjectId: string) => calculateCurrentUnitEfficiency(
+    getReviewEfficiencySamples(logs, parentSubjectId, reviewSubjectId), reviewCompletionBoundaries(logs, parentSubjectId, reviewSubjectId)).averageTimePerPage;
   const idlePomodoroPlan: PomodoroPlan | null = selectedRunQueueItem ? (() => {
     const taskSubject = selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.subject : selectedRunQueueItem.reviewGroup.subject;
     if (!taskSubject) return null;
@@ -1160,8 +1166,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         : selectedRunQueueItem.reviewGroup.averageTimePerPage > 0
           ? selectedRunQueueItem.reviewGroup.estimatedMinutes / selectedRunQueueItem.reviewGroup.averageTimePerPage
           : selectedRunQueueItem.reviewGroup.logs.reduce((sum, log) => sum + log.pagesRead, 0),
+      // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일): 학습과목은 "복습에 넣기" 사이, 복습과목은 복습 한 번이 한 단위. 기본 복습은 그대로
       pages: getPomodoroPageTarget(selectedRunQueueItem.kind === 'study'
-        ? selectedRunQueueItem.studyItem.averageTimePerPage : selectedRunQueueItem.reviewGroup.averageTimePerPage,
+        ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === taskSubject.id && !log.reviewParentSubjectId)).averageTimePerPage
+          || selectedRunQueueItem.studyItem.averageTimePerPage
+        : selectedRunQueueItem.reviewGroup.reviewType === 'subject'
+          ? reviewUnitEfficiencyOf(selectedRunQueueItem.reviewGroup.parentSubjectId, selectedRunQueueItem.reviewGroup.subjectId) || selectedRunQueueItem.reviewGroup.averageTimePerPage
+          : selectedRunQueueItem.reviewGroup.averageTimePerPage,
         repeatLog ? getRepeatedReviewRange(repeatLog, taskSubject).remainingPages : getMeasurementRemainingPages(taskSubject), pomodoroMinutes) };
   })() : null;
   const completedStudySubjectIds = useMemo(() => buildCompletedStudySubjectIds(
@@ -1251,7 +1262,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     : selectedSubjectLogs.length > 0 ? calculateTimeAttackAverage(selectedSubjectLogs)
       : Math.max(0, selectedSubject?.initialAverageTimePerPage || 0), [activeReviewRun, activeReviewAttackTiming, selectedSubjectLogs, selectedSubject]);
   const averageSecondsPerPage = timeAttackAverage > 0 ? Math.max(1, Math.round(timeAttackAverage * 60)) : 0;
-  const pomodoroPageTarget = getPomodoroPageTarget(averageTimePerPage, remainingSubjectPages, pomodoroMinutes);
+  // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일). 예상 시간은 전체 평균 그대로다
+  const unitTimePerPage = activeReviewRun && selectedSubject
+    ? reviewUnitEfficiencyOf(activeReviewRun.parentSubjectId, selectedSubject.id)
+    : calculateCurrentUnitEfficiency(selectedSubjectLogs.filter(log => !log.reviewParentSubjectId)).averageTimePerPage;
+  const pomodoroPageTarget = getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, pomodoroMinutes);
   const timeTargetPages = attackCompletedPages;
   const progressBasePages = activeReviewRun ? reviewStartPage : activeSubjectStage?.currentPage || 1;
   const progressCurrentPages = stageChapters.length > 0

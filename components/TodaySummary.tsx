@@ -725,8 +725,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   };
 
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
+  // 뽀모도로 장수는 이번 단위의 평균 효율(효율 칸에 보이는 값)로 정한다(4일)
   const detailPomodoroPages = detailData ? pomodoroPlan?.subjectId === detailData.subject.id
-    ? pomodoroPlan.pages : getPomodoroPageTarget(detailData.efficiency, getMeasurementRemainingPages(detailData.subject), pomodoroMinutes) : null;
+    ? pomodoroPlan.pages : getPomodoroPageTarget(getEfficiencyView(detailData.efficiencyScope).shown?.averageTimePerPage || detailData.efficiency,
+      getMeasurementRemainingPages(detailData.subject), pomodoroMinutes) : null;
   const calculatedRange = editRangeOf(selectedSubject, editRangeStageId, editEndPage);
   const calculatedRangeChapters = calculatedRange.chapters;
   const calculatedPages = editEndPage > 0 && calculatedRange.valid

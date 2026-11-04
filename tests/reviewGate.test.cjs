@@ -5973,7 +5973,7 @@ test('pomodoro ▲▼ buttons: stacked vertically right beside the pomodoro leng
   assert.equal((summary.match(/adjust=\{<PomodoroMinutesStepper \/>\}/g) || []).length, 2);
   // 학습·복습의 모든 계산이 같은 저장 값을 쓴다(25가 굳어 있지 않다)
   assert.ok(!/POMODORO_MINUTES/.test(logger.replace(/^import .*$/gm, '')) && !/\{POMODORO_MINUTES\}|String\(POMODORO_MINUTES\)/.test(summary));
-  assert.ok(logger.includes('getPomodoroPageTarget(averageTimePerPage, remainingSubjectPages, pomodoroMinutes)') && logger.includes('minutes: pomodoroMinutes'));
+  assert.ok(logger.includes('getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, pomodoroMinutes)') && logger.includes('minutes: pomodoroMinutes'));
 });
 
 test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked when a study or review starts, and it counts again if the length is changed mid-run', () => {
@@ -11303,4 +11303,24 @@ test('4일: auto review has no units — auto-registered logs make no unit bound
   assert.equal(autoReviewGradeOf([...past, now], [now]), 'good', '30/h against the total average 30/h');
   const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
   assert.ok(app.includes("...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),"), 'the setting survives loading');
+});
+
+test('4일: pomodoro pages use the current unit average (from the unit start to now), estimates keep the whole average', () => {
+  const { calculateCurrentUnitEfficiency, calculateUnitEfficiency } = loadSource('utils/pageGrowth.ts');
+  const logs = [
+    { id: 'a', subjectId: 's', pagesRead: 5, timeSpentMinutes: 50, timestamp: '2026-11-01T01:00:00.000Z', reviewRegisteredAt: '2026-11-01T02:00:00.000Z' },
+    { id: 'b', subjectId: 's', pagesRead: 10, timeSpentMinutes: 25, timestamp: '2026-11-02T01:00:00.000Z', unitReviewPending: true }
+  ];
+  assert.equal(calculateCurrentUnitEfficiency(logs).averageTimePerPage, 2.5, 'this unit: 25 minutes ÷ 10 pages');
+  assert.equal(calculateUnitEfficiency(logs).averageTimePerPage, 5, 'the whole average: 75 ÷ 15');
+  // 막 복습에 넣어 이번 단위가 비면 전체 평균
+  assert.equal(calculateCurrentUnitEfficiency([logs[0]]).averageTimePerPage, 10);
+  const source = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(source.includes('getPomodoroPageTarget(unitTimePerPage || averageTimePerPage'), 'the measurement pomodoro uses the unit value');
+  // 자동 복습 난도: 그 묶음(단위) 공부의 속도를 전체 평균과 견준다
+  const { autoReviewGradeOf } = loadSource('utils/autoReview.ts');
+  const past = [{ id: 'p', subjectId: 's', pagesRead: 30, timeSpentMinutes: 60, timestamp: '2026-10-01T00:00:00.000Z' }];
+  const fast = { id: 'f', subjectId: 's', pagesRead: 60, timeSpentMinutes: 60, timestamp: '2026-11-04T00:00:00.000Z' };
+  const slow = { id: 'w', subjectId: 's', pagesRead: 10, timeSpentMinutes: 60, timestamp: '2026-11-04T00:00:00.000Z' };
+  assert.deepEqual([autoReviewGradeOf([...past, fast], [fast]), autoReviewGradeOf([...past, slow], [slow])], ['easy', 'hard']);
 });
