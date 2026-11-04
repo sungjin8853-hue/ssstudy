@@ -1155,8 +1155,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   );
   const selectedRunQueueItem = getRunQueueCellLead(runQueueItems, getSelectedRunQueueItem(runQueueItems, selectedTaskKey));
   /** 복습과목의 이번 단위(복습 한 번) 평균 효율. 이번 복습에 아직 기록이 없으면 전체 평균 */
-  const reviewUnitEfficiencyOf = (parentSubjectId: string, reviewSubjectId: string) => calculateCurrentUnitEfficiency(
-    getReviewEfficiencySamples(logs, parentSubjectId, reviewSubjectId), reviewCompletionBoundaries(logs, parentSubjectId, reviewSubjectId)).averageTimePerPage;
+  const reviewUnitOf = (parentSubjectId: string, reviewSubjectId: string) => calculateCurrentUnitEfficiency(
+    getReviewEfficiencySamples(logs, parentSubjectId, reviewSubjectId), reviewCompletionBoundaries(logs, parentSubjectId, reviewSubjectId));
+  const reviewUnitEfficiencyOf = (parentSubjectId: string, reviewSubjectId: string) => reviewUnitOf(parentSubjectId, reviewSubjectId).averageTimePerPage;
   const idlePomodoroPlan: PomodoroPlan | null = selectedRunQueueItem ? (() => {
     const taskSubject = selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.subject : selectedRunQueueItem.reviewGroup.subject;
     if (!taskSubject) return null;
@@ -1253,7 +1254,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     );
   }, [activeReviewRun, logs, selectedSubject, subjects]);
 
-  const averageTimePerPage = activeReviewRun ? activeReviewTiming?.averageTimePerPage || 0 : overallAverage;
+  // 4일: 공부하는 동안의 계산(뽀모도로 장수 · 장당 타임어택 목표 · 이번 속도 비교 · 진행 칸)은 이번 단위의 평균 효율을 쓴다.
+  // 하루 공부 시간 · 계획 같은 전체 계산만 전체 평균이다. 이번 단위에 기록이 없으면 전체 평균
+  const sessionUnit = useMemo(() => (activeReviewRun && selectedSubject
+    ? reviewUnitOf(activeReviewRun.parentSubjectId, selectedSubject.id)
+    : calculateCurrentUnitEfficiency(selectedSubjectLogs.filter(log => !log.reviewParentSubjectId))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [activeReviewRun, selectedSubject, selectedSubjectLogs, logs]);
+  const averageTimePerPage = sessionUnit.averageTimePerPage || (activeReviewRun ? activeReviewTiming?.averageTimePerPage || 0 : overallAverage);
   const activeReviewAttackTiming = useMemo(() => activeReviewRun && selectedSubject
     ? calculateReviewSubjectTiming(logs, activeReviewRun.parentSubjectId, selectedSubject.id, subjects,
       logs.filter(log => activeReviewRun.logIds.includes(log.id)), activeReviewRun.reviewSubjectIds, true)
@@ -1261,11 +1269,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const timeAttackAverage = useMemo(() => activeReviewRun ? activeReviewAttackTiming?.averageTimePerPage || 0
     : selectedSubjectLogs.length > 0 ? calculateTimeAttackAverage(selectedSubjectLogs)
       : Math.max(0, selectedSubject?.initialAverageTimePerPage || 0), [activeReviewRun, activeReviewAttackTiming, selectedSubjectLogs, selectedSubject]);
-  const averageSecondsPerPage = timeAttackAverage > 0 ? Math.max(1, Math.round(timeAttackAverage * 60)) : 0;
-  // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일). 예상 시간은 전체 평균 그대로다
-  const unitTimePerPage = activeReviewRun && selectedSubject
-    ? reviewUnitEfficiencyOf(activeReviewRun.parentSubjectId, selectedSubject.id)
-    : calculateCurrentUnitEfficiency(selectedSubjectLogs.filter(log => !log.reviewParentSubjectId)).averageTimePerPage;
+  const unitAttackPerPage = sessionUnit.timeAttackAverageTimePerPage || timeAttackAverage;
+  const averageSecondsPerPage = unitAttackPerPage > 0 ? Math.max(1, Math.round(unitAttackPerPage * 60)) : 0;
+  // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일)
+  const unitTimePerPage = sessionUnit.averageTimePerPage;
   const pomodoroPageTarget = getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, pomodoroMinutes);
   const timeTargetPages = attackCompletedPages;
   const progressBasePages = activeReviewRun ? reviewStartPage : activeSubjectStage?.currentPage || 1;

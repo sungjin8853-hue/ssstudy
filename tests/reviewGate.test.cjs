@@ -11317,6 +11317,8 @@ test('4일: pomodoro pages use the current unit average (from the unit start to 
   assert.equal(calculateCurrentUnitEfficiency([logs[0]]).averageTimePerPage, 10);
   const source = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   assert.ok(source.includes('getPomodoroPageTarget(unitTimePerPage || averageTimePerPage'), 'the measurement pomodoro uses the unit value');
+  // 공부하는 동안의 계산(장당 타임어택 목표 · 이번 속도 비교)도 이번 단위 값이다
+  assert.ok(source.includes('const averageTimePerPage = sessionUnit.averageTimePerPage ||') && source.includes('const unitAttackPerPage = sessionUnit.timeAttackAverageTimePerPage ||'));
   // 자동 복습 난도: 그 묶음(단위) 공부의 속도를 전체 평균과 견준다
   const { autoReviewGradeOf } = loadSource('utils/autoReview.ts');
   const past = [{ id: 'p', subjectId: 's', pagesRead: 30, timeSpentMinutes: 60, timestamp: '2026-10-01T00:00:00.000Z' }];
