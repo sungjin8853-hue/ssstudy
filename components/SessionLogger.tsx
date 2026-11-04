@@ -2338,8 +2338,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [cutEndPage, setCutEndPage] = useState<string | null>(null);
   const [cutError, setCutError] = useState('');
   const cutStartPage = selectedSubject ? (activeSubjectStage?.currentPage || selectedSubject.completedPages + 1) : 0;
+  // 5일: 단원이 있으면 끝 페이지는 지금 푸는 단원의 끝으로 바로 채운다(남은 양을 넘으면 넣을 수 있는 마지막 페이지). 고쳐 쓸 수 있다
+  const cutChapterEnd = (() => {
+    if (cutStartPage <= 0 || stageChapters.length === 0) return null;
+    const chapter = stageChapters.find(item => cutStartPage >= item.startPage && cutStartPage <= item.endPage);
+    if (!chapter) return null;
+    const last = endPageForSolved(stageChapters, cutStartPage, remainingSubjectPages);
+    return last !== null && last < chapter.endPage ? last : chapter.endPage;
+  })();
   const cutDefaultEnd = cutStartPage > 0
-    ? formatPageNumber(expectedReadAmount > 0
+    ? cutChapterEnd !== null ? formatPageNumber(cutChapterEnd) : formatPageNumber(expectedReadAmount > 0
       ? stageChapters.length > 0
         ? endPageForSolved(stageChapters, cutStartPage, expectedReadAmount) ?? calculateEndPageValue(cutStartPage, expectedReadAmount)
         : calculateEndPageValue(cutStartPage, expectedReadAmount)
@@ -2986,7 +2994,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                           className="h-10 rounded-xl bg-indigo-600 px-4 text-sm font-black text-white transition-colors hover:bg-indigo-700">
                           바로 복습 넣기
                         </button>
-                        <span className="text-[12px] font-bold text-indigo-900/70">{pagePos}.{cutStartPage}부터 지금까지를 복습에 넣고 다음 페이지부터 새로 재요</span>
+                        <span className="text-[12px] font-bold text-indigo-900/70">{pagePos}.{cutStartPage}부터 지금까지를 복습에 넣고 다음 페이지부터 새로 재요{cutChapterEnd !== null && cutEndPage === null ? ' · 끝 페이지는 이 단원의 끝이에요' : ''}</span>
                         {cutError && <span role="alert" className="w-full text-[12px] font-black text-rose-600">{cutError}</span>}
                       </div>
                     )}

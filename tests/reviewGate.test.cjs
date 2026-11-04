@@ -11616,3 +11616,10 @@ test('5일 점검: 바로 복습 넣기의 끝 페이지가 틀리면 넣을 수
   assert.equal(createPageMeasurement(9, 15, 4, 22, chapters), null);
   assert.equal(createPageMeasurement(9, 22, 4, 22, chapters).progressPages, 4);
 });
+
+test('5일: 단원이 있으면 바로 복습 넣기의 끝 페이지는 지금 푸는 단원의 끝으로 채워진다(남은 양 안, 고쳐 쓸 수 있음)', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(/const cutChapterEnd = \(\(\) => \{[\s\S]*?stageChapters\.find\(item => cutStartPage >= item\.startPage && cutStartPage <= item\.endPage\)[\s\S]*?last < chapter\.endPage \? last : chapter\.endPage/.test(logger));
+  assert.ok(logger.includes('cutChapterEnd !== null ? formatPageNumber(cutChapterEnd) :'));
+  assert.ok(logger.includes("' · 끝 페이지는 이 단원의 끝이에요'"));
+});
