@@ -11592,3 +11592,16 @@ test('5일: 연결어(: ; <) 뒤 칸 안의 관계는 "‘A’에서" 대신 "�
   assert.deepEqual([columns.prompt, columns.answer], [['정의'], ['예시']]);
   assert.equal(getReviewQuestionSentence('개념:정의:예시', sets).statement, '개념 ‘A’ 다음 자리의 정의 ‘N’의 예시는?');
 });
+
+test('5일 점검: 빈 칸은 "다음 자리" 글에 넣지 않고, 키를 잇는 대응은 그 줄 안에서만 쓴다', () => {
+  const { buildReviewQuestions, getReviewQuestionSentence } = loadSource('utils/reviewQuestions.ts');
+  const said = memo => buildReviewQuestions(memo).questions.map(q => getReviewQuestionSentence(null, q).statement);
+  assert.ok(said('A: :(B:C)').includes('‘A’ 다음 자리의 ‘B’ 다음 값은?'), said('A: :(B:C)').join(' | '));
+  assert.ok(said(':(B:C)').includes('‘B’ 다음 값은?') && !said(':(B:C)').some(s => s.includes('‘’')));
+  // 빈 칸이 끼어도 키는 바꾸기 전(첫 칸 A)과 같다
+  const key = memo => buildReviewQuestions(memo).questions.find(q => q.kind === 'direct' && q.prompt === 'B').key;
+  assert.equal(key('A: :(B:C)'), key('A:(B:C)'));
+  // 순서 `-`에서 나온 `A 이후` 조건은 다른 줄의 `A:(…)` 때문에 키가 바뀌지 않는다
+  const seqKey = memo => buildReviewQuestions(memo).questions.find(q => q.kind === 'direct' && q.prompt === 'P' && q.conditions.length === 2).key;
+  assert.equal(seqKey('Z:A-(P:Q) // A:(P:Q)'), seqKey('Z:A-(P:Q)'));
+});

@@ -81,7 +81,8 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   conditionSpans: AnswerSpan[][];
 }
 
-interface QuestionCondition { text: string; columns: QuestionColumn[]; spans: AnswerSpan[] }
+/** key: 문제 키에 쓸 조건 글(5일: "다음 자리의"로 바꾼 조건은 바꾸기 전 글로 키를 만들어 복습 기록을 잇는다). 없으면 text */
+interface QuestionCondition { text: string; columns: QuestionColumn[]; spans: AnswerSpan[]; key?: string }
 
 /**
  * 중요도: 맨 왼쪽 칸이 가장 중요하고, 오른쪽으로 한 칸 갈 때마다 덜 중요해진다(`:`·`;`는 1). 점수가 클수록 덜 중요하다.
@@ -988,11 +989,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   const duplicateSpans = new Map<NoteQuestion, { answerSpans: AnswerSpan[]; promptSpans: AnswerSpan[] }>();
   const reverseAlternatives = new Map<string, { question: NoteQuestion; answers: string[] }>();
   /**
-   * 5일: 연결어 뒤 자리를 "‘A’에서" 대신 "‘A’ 다음 자리의"로 읽게 바꾼 조건 글(`A 이후`) → 바꾸기 전 조건 글(`A`).
-   * 문제 키는 바꾸기 전 글로 만들어, 이미 푼 문제의 복습 기록이 그대로 이어진다.
+   * 5일: 지금 읽는 줄의 조건 중 "‘A’ 다음 자리의"로 바꾼 것(`A 이후`) → 바꾸기 전 조건 글(`A`). 그 줄을 읽는 동안만 쓴다
+   * (노트 전체에 두면 순서 `-`에서 나온 같은 글의 `이후` 조건까지 바뀐다). 문제 키는 바꾸기 전 글로 만들어 복습 기록이 이어진다.
    */
-  const afterAlias = new Map<string, string>();
-  const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => afterAlias.get(text) ?? text);
+  let activeAlias = new Map<string, string>();
+  const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => activeAlias.get(text) ?? text);
   const add = (question: Omit<NoteQuestion, 'key' | 'level' | keyof ReviewQuestionDifficulty>) => {
     if (!question.prompt.trim() || !question.answer.trim() || question.prompt === question.answer) return;
     const keyConditions = keyConditionsOf(question.conditions);
@@ -1048,8 +1049,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const headsRelation = parsed.type === 'relation' || trailingRelation().test(titleSource(parent));
       // 5일: 끝이 연결어로 열린 제목(`> A:` · `> A;`) 아래 줄은 그 연결어 뒤에 놓인 것이라 "‘A’ 다음 자리의"로 묻는다(`A:(B:C)`와 같음)
       const open = Boolean(title) && trailingRelation().test(titleSource(parent));
-      if (open && !afterAlias.has(`${title} 이후`)) afterAlias.set(`${title} 이후`, title);
-      result.unshift({ text: open ? `${title} 이후` : title, spans: spans(parsed), columns: parsed.type === 'relation'
+      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: title } : {}), spans: spans(parsed), columns: parsed.type === 'relation'
         ? parsed.fields.flatMap((field, index) => nonempty(field) ? [parsed.classifications[index]] : []) : headsRelation ? [offsetByNode.get(parent.id) ?? 0] : [] });
       parentId = parent.parentId;
     }
@@ -1087,6 +1087,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   };
   const implicitByExpression = new Map<Expression, string[][]>();
   const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
+    const previous = activeAlias;
+    activeAlias = new Map(context.flatMap(item => (item.key === undefined ? [] : [[item.text, item.key] as [string, string]])));
+    try { visitBody(expression, context, inheritedColumn, baseScore); } finally { activeAlias = previous; }
+  };
+  const visitBody = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
     if (expression.type === 'text') return;
     const conditions = context.map(item => item.text);
     const conditionColumns = context.map(item => item.columns);
@@ -1341,10 +1346,12 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
      * 5일: 연결어(`:` `;` `<`) 뒤 칸 안의 관계는 "‘A’에서"가 아니라 순서의 `이후`처럼 "‘A’ 다음 자리의"로 묻는다.
      * 앞 칸이 여럿이면 모두 순서대로 보인다(`a:(b:c):(d:c)`의 d → c는 "‘a → b’ 다음 자리의 ‘d’ 다음 값은?")
      */
-    const afterOf = (index: number): QuestionCondition => {
-      const text = `${expressionLabel(combine('sequence', columns.slice(0, index)))} 이후`;
-      if (!afterAlias.has(text)) afterAlias.set(text, expressionLabel(columns[0]));
-      return { text, columns: expression.classifications.slice(0, index), spans: columns.slice(0, index).flatMap(spans) };
+    // 빈 칸(`A: :(B:C)`)은 자리 글에 넣지 않는다. 앞 칸이 모두 비면 자리 조건이 없다
+    const afterOf = (index: number): QuestionCondition[] => {
+      const before = columns.slice(0, index).map((cell, at) => ({ cell, at })).filter(({ cell }) => nonempty(cell));
+      if (!before.length) return [];
+      return [{ text: `${expressionLabel(combine('sequence', before.map(({ cell }) => cell)))} 이후`, key: expressionLabel(columns[0]),
+        columns: before.map(({ at }) => expression.classifications[at]), spans: before.flatMap(({ cell }) => spans(cell)) }];
     };
     expression.fields.forEach((field, index) => {
       // 능력 변환 줄의 목록 칸에 든 갈래(`[N] C,(V:[P] O)`의 `V:[P] O`)는 안쪽 관계라 따로 읽는다(3일)
@@ -1353,7 +1360,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           if (item.type !== 'relation') return;
           // 갈래의 첫 값은 그 칸의 집합을 따른다(`[N] C,(V:…)`의 V도 N)
           implicitByExpression.set(item, [[convertFields[index]!.set], ...implicit.slice(index + 1)]);
-          visit(item, index > 0 ? [...context, afterOf(index)] : context, expression.classifications[index], scores[index]);
+          visit(item, index > 0 ? [...context, ...afterOf(index)] : context, expression.classifications[index], scores[index]);
         });
         return;
       }
@@ -1361,7 +1368,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
       // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 5일: 안쪽 관계(괄호든 칸 안 `=` · `-`든)는 앞 칸들 다음 자리로 묻는다
-      visit(field, index > 0 ? [...context, afterOf(index)] : context, expression.classifications[index], scores[index]);
+      visit(field, index > 0 ? [...context, ...afterOf(index)] : context, expression.classifications[index], scores[index]);
     });
   };
   /**
