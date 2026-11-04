@@ -10803,7 +10803,7 @@ test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽�
   assert.equal(toggleFrameOf('#'), null);
   assert.equal(toggleFrameOf('A: #'), 'A: #');
   // 형식 토글 바로 아래의 토글 제목도 # 자리에 들어간다(그 아래 줄은 전처럼 그 토글 안)
-  assert.deepEqual(pairs(':::toggle A: #\nx\n:::toggle y\nz:w\n:::end\n:::end'), ['|A>x', '|A>y', 'y|z>w']);
+  assert.deepEqual(pairs(':::toggle A: #\nx\n:::toggle y\nz:w\n:::end\n:::end').sort(), ['|A>x', '|A>y', 'y|z>w'].sort());
   // #이 없는 끝이 열린 제목은 전처럼(그대로 이어짐)
   assert.deepEqual(pairs(':::toggle A:\nx\n:::end'), ['|A>x']);
 });
@@ -11494,4 +11494,45 @@ test('4일: Enter right after a > in the middle of a line (or toggle title) make
   assert.ok(editor.includes("const inner = trailing ? block.text.slice(caret, end).trim() : '';"), 'the rest of the line goes inside the toggle');
   assert.ok(editor.includes("!/^[>=]/.test(block.text.slice(caret))"), '>> and >= are not toggles');
   assert.ok(editor.includes("titleRest.trim() && !/^[>=]/.test(titleRest)"), 'the same in a toggle title');
+});
+
+test('4일: a toggle title with several # (> A:#:V:#) fills each line part into the # in order; fewer parts drop the rest, nested # frames compose, sub-toggle lines sit under the title parts', () => {
+  const { buildReviewQuestions } = questionBuilder;
+  const sig = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}|${q.answer}|${JSON.stringify(q.columns)}`).sort();
+  const same = (framed, plain) => assert.deepEqual(sig(framed), sig(plain), framed);
+  same(':::toggle A:#:V:#\nB:C\nU:G\n:::end', 'A:B:V:C\nA:U:V:G');
+  same(':::toggle A:#:V:#\nB\n:::end', 'A:B:V');
+  same(':::toggle A:#:V:#\nB:C:D\n:::end', 'A:B:V:C:D');
+  same(':::toggle A:#:V:#\n:::toggle B:#\nC\n:::end\n:::end', 'A:B:V:C');
+  same(':::toggle A: #\nx\n:::end', 'A: x');
+  // 형식이 아닌 하위 토글(> B:C) 밑 X:Y: X는 B 자리(1), Y는 C 자리(3)
+  const under = buildReviewQuestions(':::toggle A:#:V:#\n:::toggle B:C\nX:Y\n:::end\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === 'X');
+  assert.deepEqual([under.answer, under.columns.prompt, under.columns.answer, under.conditions], ['Y', [1], [3], ['B:C']]);
+  // [ ]로 형식의 고정 칸 자리에 놓을 수 있다(연결): [A] X:D:[V] Y:B → X 0, D 1, Y V(2), B 3
+  const { placeUnderFrame, fillFrame, unfillFrame, frameSlotsOf, expandFrameLines } = loadSource('utils/noteFrame.ts');
+  assert.deepEqual(placeUnderFrame('A:#:V:#', '[A] X:D:[V] Y:B'), { column: 0, text: '[A] X:D:[V] Y:B' });
+  assert.deepEqual(placeUnderFrame('A:#:V:#', 'X:Y'), { column: 1, text: 'X::Y' });
+  assert.deepEqual(placeUnderFrame('A:#:V:#', 'X:[V] Y:Z'), { column: 1, text: 'X:[V] Y:Z' });
+  const placed = buildReviewQuestions(':::toggle A:#:V:#\n:::toggle B:C\n[A] X:D:[V] Y:B\n:::end\n:::end').questions.filter(q => q.kind === 'direct' && q.conditions.includes('B:C'));
+  assert.deepEqual(placed.map(q => `${q.prompt}>${q.answer}`).sort(), ['D>Y', 'X>D', 'Y>B']);
+  // 형식 판단과 채우기
+  assert.deepEqual(frameSlotsOf('A:#:V:#'), [2, 6]);
+  assert.deepEqual([frameSlotsOf('#-#: #+#'), frameSlotsOf('C# 문법'), frameSlotsOf('#')], [[], [], []]);
+  assert.equal(fillFrame('A:#:V:#', 'B'), 'A:B:V');
+  assert.equal(fillFrame('A:#:V:#', 'B;C'), 'A:B:V:C', 'the frame sets the positions; its own connectors stay');
+  assert.equal(unfillFrame('A:#:V:#', 'A:B:V:C,D', 'B:C'), 'B:C,D');
+  assert.equal(unfillFrame('A:#:V:#', 'A:B:V,W:C', 'B:C'), null, 'a fixed cell of the frame cannot change from one line');
+  // 집합 · 관계도는 펼친 줄로 읽는다
+  assert.equal(expandFrameLines(':::toggle A:#:V:#\nB:C\n:::toggle Q:R\nX:Y\n:::end\n:::end'), 'A:B:V:C\n:::toggle A:Q:V:R\nX:Y\n:::end');
+});
+
+test('4일: merging links and adds into lines under a # frame naturally and writes the change back into the line under the toggle', () => {
+  const { mergeNoteIntoEarlier, scanNoteStatements } = loadSource('utils/noteMerge.ts');
+  const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
+  const framed = ':::toggle A:#:V:#\nB:C\nU:G\n:::end';
+  assert.deepEqual(scanNoteStatements(framed).map(item => item.text), ['A:B:V:C', 'A:U:V:G']);
+  assert.deepEqual(merged('A:B:V:D', framed), [':::toggle A:#:V:#\nB:C,D\nU:G\n:::end'], 'add at the same position');
+  assert.deepEqual(merged('A:B:V:C:Z', framed), [':::toggle A:#:V:#\nB:C:Z\nU:G\n:::end'], 'link at the end');
+  assert.deepEqual(merged(':::toggle A:#:V:#\nB:D\n:::end', 'A:B:V:C'), ['A:B:V:C,D'], 'a framed new note merges into a plain line');
+  assert.deepEqual(merged('A:B:W:C', framed), [], 'a change to the frame itself is not written into one line');
 });

@@ -16,6 +16,7 @@ import { hasTopLevelUnion, joinSets, MASK, processOf, readConvertCell } from './
 import type { ConvertInfo } from './abilityConvert';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { hasQuoteMark, quotedMarkCuts, reviewQuotes } from './reviewQuote';
+import { fillFrame, isFrameTitle, placeUnderFrame } from './noteFrame';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
 import { convertStatement, placeOf, proseOf } from './questionProse';
@@ -258,17 +259,10 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
 /**
  * 토글 제목의 형식 `#`(29일 요청): 아래 줄 값이 들어갈 자리다. `> A: #` · `> A: # :B` · `> A;(#)` · `> A;[#]`처럼 쓰면
  * 아래 줄마다 `#` 자리에 그 줄을 넣은 줄(`A: x` · `A: x :B` · `A;(x)` · `A;[x]`)로 읽는다. 제목 자신은 문제가 아니다.
- * `#`이 하나만, 홀로(앞뒤가 빈칸·관계 기호·괄호) 있을 때만 형식이다(`#-#`처럼 칸을 만드는 틀 줄과 다르다).
+ * `#`이 홀로(앞뒤가 빈칸·관계 기호·괄호) 있을 때만 형식이다(`#-#`처럼 칸을 만드는 틀 줄과 다르다).
+ * 4일: `#`이 여럿이면(`> A:#:V:#`) 아래 줄의 칸을 차례로 넣는다(utils/noteFrame).
  */
-export const toggleFrameOf = (title: string): string | null => {
-  const hashes = [...title.matchAll(/#/g)].map(match => match.index!);
-  if (hashes.length !== 1) return null;
-  const at = hashes[0];
-  const before = title[at - 1];
-  const after = title[at + 1];
-  const edge = (character: string | undefined) => character === undefined || /[\s:;<>()[\]]/.test(character);
-  return edge(before) && edge(after) && title.slice(0, at).trim() ? title : null;
-};
+export const toggleFrameOf = (title: string): string | null => (isFrameTitle(title) ? title : null);
 /** 분류기준 글(`A:B;C`)의 칸 이름들 */
 const criterionColumns = (criterion: string): string[] => {
   const boundaries = [-1, ...splitAt(criterion, 0, criterion.length, ':;<'), criterion.length];
@@ -769,7 +763,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   /** 제목에 형식 `#`을 쓴 토글: 제목은 문제도 자리(조건)도 아니고, 아래 줄을 그 형식으로 펼친다 */
   const frameNodes = new Set<string>();
   const walkBlocks = (text: string, parentId: string | null, inherited: ReadonlyMap<number, string> = new Map(), previous: AtReference | null = null, offset = 0, scopedCriterion?: string, blocked = false, upperCriteria: readonly string[] = noteCriterion ? [noteCriterion] : [],
-    frame?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }, upperAttach?: CriterionAttach) => {
+    frame?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }, upperAttach?: CriterionAttach,
+    /** 형식 토글 밑의 하위 토글 아래 줄: 칸을 그 제목이 들어간 형식 자리에 차례로 놓는다(4일) */
+    place?: { text: string; inherited: ReadonlyMap<number, string>; offset: number }) => {
     parseReviewMemoBlocks(text).forEach((block, index) => {
       const id = `${parentId || 'root'}.${index}`;
       const written = block.type === 'toggle' ? block.title : block.text;
@@ -809,7 +805,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       });
       const ownFrame = block.type === 'toggle' ? toggleFrameOf(blankTitleCriteria(written)) : null;
       if (ownFrame) frameNodes.add(id);
-      const framedLine = (segment: { start: number; end: number }) => frame!.text.replace('#', value.slice(segment.start, segment.end).trim());
+      const framedLine = (segment: { start: number; end: number }) => fillFrame(frame!.text, value.slice(segment.start, segment.end).trim()) ?? value.slice(segment.start, segment.end).trim();
       // 형식 토글 바로 아래의 토글 제목도 # 자리에 넣어 읽는다(`> A: #` 밑 `> y` → `A: y`, 그 아래 줄은 전처럼 ‘y’ 안)
       const parsed = blockedHere || ownFrame ? [] : frame
         ? segments.filter(segment => value.slice(segment.start, segment.end).trim()).map(segment => {
@@ -817,6 +813,14 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, frame.inherited, frame.offset), previous),
             { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
         }).filter(nonempty)
+        : place && block.type === 'text'
+          ? segments.filter(segment => value.slice(segment.start, segment.end).trim()).map(segment => {
+            const placed = placeUnderFrame(place.text, value.slice(segment.start, segment.end).trim());
+            if (!placed) return spellOutColumnSets(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), criteria);
+            const line = placed.text;
+            return spellOutColumnSets(withSpanAll(resolveReferences(parseExpression(line, id, 0, line.length, place.inherited, place.offset + placed.column), previous),
+              { nodeId: id, start: segment.start, end: segment.end, generated: line }), criteria);
+          }).filter(nonempty)
         : segments.map(segment => spellOutColumnSets(attachedLine(resolveReferences(parseExpression(value, id, segment.start, segment.end, inherited, offset), previous), block.type === 'text' ? upperAttach : undefined), criteria)).filter(nonempty);
       expressions.set(id, parsed);
       if (!blockedHere) segments.forEach(segment => {
@@ -825,8 +829,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       });
       // 토글 아래 줄의 `@`는 제목의 마지막 칸을 가리킨다
       if (block.type === 'toggle') {
+        // 형식 토글 밑의 형식 토글은 겹쳐 쓴다(4일: `> A:#:V:#` 밑 `> B:#` = `> A:B:V:#`), 형식이 아닌 하위 토글의 아래 줄은 그 제목이 들어간 자리에 놓는다
+        const nextFrame = ownFrame ? (frame ? { text: fillFrame(frame.text, ownFrame) ?? ownFrame, inherited: frame.inherited, offset: frame.offset } : { text: ownFrame, inherited, offset }) : undefined;
+        const nextPlace = !ownFrame && frame && parsed.length ? { text: frame.text, inherited: frame.inherited, offset: frame.offset } : undefined;
         walkBlocks(block.text, id, ownFrame ? inherited : getReviewFieldOverrides(value, inherited, offset), (parsed.length ? lastCellOf(parsed[parsed.length - 1]) : null) ?? previous,
-          ownFrame ? offset : childOffsetOf(parsed, offset), criterion, blockedHere, criteria, ownFrame ? { text: ownFrame, inherited, offset } : undefined, attach);
+          ownFrame ? offset : childOffsetOf(parsed, offset), criterion, blockedHere, criteria, nextFrame, attach, nextPlace);
       }
     });
   };

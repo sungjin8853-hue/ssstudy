@@ -7,6 +7,7 @@ import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
 import { nestRowsOf } from './noteNest';
+import { fillFrame, isFrameTitle, unfillFrame } from './noteFrame';
 
 /**
  * 연결·첨가 합치기.
@@ -34,7 +35,9 @@ export type NoteMergeKind = 'link' | 'add' | 'group';
 /**
  * labels: 줄 앞에 기준이 없을 때 이 줄의 칸 번호마다 이어받은 칸 이름(토글 제목 · 노트 맨 위 분류기준, 열린 제목의 칸 수만큼 당긴 것).
  */
-export interface NoteStatement { line: number; start: number; end: number; text: string; path: string[]; labels?: string[] }
+export interface NoteStatement { line: number; start: number; end: number; text: string; path: string[]; labels?: string[];
+  /** 형식 토글(`> A:#:V:#`) 밑 줄(4일): text는 형식에 넣은 글이고, 고칠 때는 이 형식으로 다시 아래 줄 글(original)로 돌린다 */
+  frame?: { text: string; original: string } }
 
 /** 합칠 때 칸의 위치를 비교하는 바깥 정보. null이면 위치를 보지 않는다(같은 줄에서 만든 글을 다시 합칠 때). */
 export interface MergePositions {
@@ -497,30 +500,45 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
     const shift = (row: { start: number; text: string }) => ({ start: base + row.start, text: row.text });
     return { lead: split.lead && split.lead.text ? shift(split.lead) : null, rows: split.rows.map(shift) };
   };
-  /** 열린 토글마다 그 제목에서 더 연 경로 수 */
-  const extra: number[] = [];
+  /** 열린 토글마다: 그 토글이 연 경로 수, 그 토글이 형식이면 (겹친) 형식 글 */
+  const opened: Array<{ entered: number; frame: string | null }> = [];
+  const currentFrame = () => opened.at(-1)?.frame ?? null;
   const scanRow = (row: { start: number; text: string }, lineIndex: number) => {
     const body = row.text;
+    const frame = currentFrame();
     const cuts = topLevelCuts(body, '/').filter(cut => isReviewSlash(body, cut));
     const bounds = [-1, ...cuts, body.length];
     bounds.slice(1).forEach((end, index) => {
       const raw = body.slice(bounds[index] + 1, end);
-      const text = raw.trim();
+      const written = raw.trim();
+      // 형식 토글 밑 줄은 형식에 넣은 글로 읽는다(4일: 연결 · 첨가가 펼친 줄로 일어난다)
+      const text = frame && written ? fillFrame(frame, written) ?? written : written;
       if (!text || topLevelCuts(text, relationMarks()).length === 0) return;
       const lead = raw.length - raw.trimStart().length;
       const start = row.start + bounds[index] + 1 + lead;
       const scope = scopes[scopes.length - 1];
-      statements.push({ line: lineIndex, start, end: start + text.length, text, path: [...path], labels: scope.labels.slice(scope.offset) });
+      statements.push({ line: lineIndex, start, end: start + written.length, text, path: [...path], labels: scope.labels.slice(scope.offset),
+        ...(frame && text !== written ? { frame: { text: frame, original: written } } : {}) });
     });
   };
   memo.split('\n').forEach((line, lineIndex) => {
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
-      const { rows } = rowsOf(line.slice(REVIEW_MEMO_TOGGLE_START.length), REVIEW_MEMO_TOGGLE_START.length, true);
-      rows.forEach(row => enter(row.text));
-      extra.push(rows.length - 1);
+      const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
+      const frame = currentFrame();
+      // 형식 토글은 경로가 아니다: 아래 줄이 형식에 넣은 글이 된다(밑의 형식 토글은 겹쳐 쓴다)
+      if (isFrameTitle(blankTitleCriteria(title))) {
+        const own = blankTitleCriteria(title);
+        opened.push({ entered: 0, frame: frame ? fillFrame(frame, own) ?? own : own });
+        return;
+      }
+      const { rows } = rowsOf(title, REVIEW_MEMO_TOGGLE_START.length, true);
+      // 형식 토글 밑의 하위 토글 제목은 형식에 넣은 글이 경로다
+      if (frame && rows.length === 1) enter(fillFrame(frame, rows[0].text) ?? rows[0].text);
+      else rows.forEach(row => enter(row.text));
+      opened.push({ entered: rows.length, frame: null });
       return;
     }
-    if (line === REVIEW_MEMO_TOGGLE_END) { const more = extra.pop() ?? 0; for (let count = 0; count <= more; count += 1) leave(); return; }
+    if (line === REVIEW_MEMO_TOGGLE_END) { const closing = opened.pop(); for (let count = 0; count < (closing?.entered ?? 1); count += 1) leave(); return; }
     if (!line.trim()) return;
     const { lead, rows } = rowsOf(line, 0, false);
     if (lead) scanRow(lead, lineIndex);
@@ -558,7 +576,9 @@ export const mergeNoteIntoEarlier = (newMemo: string, earlier: MergeSource[]): M
       scanNoteStatements(current.get(source.id) ?? '').forEach(existing => {
         if (existing.path.join('\u0001') !== incomingKey) return;
         const merge = mergeNoteChains(existing.text, incoming.text, positionsWith(existing));
-        if (merge && (!best || merge.overlap > best.merge.overlap)) best = { id: source.id, statement: existing, merge };
+        // 형식 토글 밑 줄에 합치면 아래 줄 글로 되돌려 쓴다. 형식의 고정 칸이 바뀌는 합치기는 하지 않는다(그 토글의 모든 줄이 바뀌므로)
+        const written = merge && existing.frame ? unfillFrame(existing.frame.text, merge.text, existing.frame.original) : merge?.text;
+        if (merge && written && (!best || merge.overlap > best.merge.overlap)) best = { id: source.id, statement: existing, merge: { ...merge, text: written } };
       });
     });
     if (!best) return;

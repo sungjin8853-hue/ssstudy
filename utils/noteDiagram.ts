@@ -1,3 +1,4 @@
+import { expandFrameLines } from './noteFrame';
 import { parseReviewMemoBlocks, REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { getReviewFieldOverrides, readReviewFieldOverride, reviewGroups } from './reviewFieldOverride';
 import { isReviewSequenceSeparator } from './reviewMemoLogic';
@@ -410,7 +411,7 @@ const walkBlocks = (memo: string, inherited: string[], chain: string[][], expans
 /** 노트 글을 관계도로. criterion은 세션 노트의 분류 기준(맨 앞 기준)이고, 토글 제목의 `[ ]`가 그 안에서 기준을 바꾼다. */
 export const parseNoteDiagram = (written: string, criterion?: string | null, expansions?: DiagramExpansions): DiagramItem[] => {
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리)
-  const memo = expandNestLines(expandOpenLines(normalizeNotePunctuation(written)));
+  const memo = expandFrameLines(expandNestLines(expandOpenLines(normalizeNotePunctuation(written))));
   const top = parseCriterionLabels(criterion || noteCriterionOf(memo));
   return walkDiagram(memo, top, top.length ? [top] : [], expansions);
 };
