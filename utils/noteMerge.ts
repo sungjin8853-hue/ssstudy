@@ -7,7 +7,7 @@ import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
 import { nestRowsOf } from './noteNest';
-import { fillFrame, isFrameTitle, unfillFrame } from './noteFrame';
+import { fillFrame, isFrameTitle, subFrameOf, unfillFrame } from './noteFrame';
 
 /**
  * 연결·첨가 합치기.
@@ -502,7 +502,9 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
   };
   /** 열린 토글마다: 그 토글이 연 경로 수, 그 토글이 형식이면 (겹친) 형식 글 */
   const opened: Array<{ entered: number; frame: string | null }> = [];
-  const currentFrame = () => opened.at(-1)?.frame ?? null;
+  /** 형식 토글 밑에서 끝이 열린 줄(`B:`) 바로 밑 줄이 쓸 형식(`A:B:V:#`) */
+  let pendingFrame: string | null = null;
+  const currentFrame = () => pendingFrame ?? opened.at(-1)?.frame ?? null;
   const scanRow = (row: { start: number; text: string }, lineIndex: number) => {
     const body = row.text;
     const frame = currentFrame();
@@ -512,7 +514,7 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
       const raw = body.slice(bounds[index] + 1, end);
       const written = raw.trim();
       // 형식 토글 밑 줄은 형식에 넣은 글로 읽는다(4일: 연결 · 첨가가 펼친 줄로 일어난다)
-      const text = frame && written ? fillFrame(frame, written) ?? written : written;
+      const text = frame && written && !written.includes('#') ? fillFrame(frame, written) ?? written : written;
       if (!text || topLevelCuts(text, relationMarks()).length === 0) return;
       const lead = raw.length - raw.trimStart().length;
       const start = row.start + bounds[index] + 1 + lead;
@@ -523,12 +525,13 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
   };
   memo.split('\n').forEach((line, lineIndex) => {
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
+      pendingFrame = null;
       const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
       const frame = currentFrame();
       // 형식 토글은 경로가 아니다: 아래 줄이 형식에 넣은 글이 된다(밑의 형식 토글은 겹쳐 쓴다)
-      if (isFrameTitle(blankTitleCriteria(title))) {
-        const own = blankTitleCriteria(title);
-        opened.push({ entered: 0, frame: frame ? fillFrame(frame, own) ?? own : own });
+      const sub = subFrameOf(blankTitleCriteria(title), frame);
+      if (sub) {
+        opened.push({ entered: 0, frame: sub });
         return;
       }
       const { rows } = rowsOf(title, REVIEW_MEMO_TOGGLE_START.length, true);
@@ -538,13 +541,17 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
       opened.push({ entered: rows.length, frame: null });
       return;
     }
-    if (line === REVIEW_MEMO_TOGGLE_END) { const closing = opened.pop(); for (let count = 0; count < (closing?.entered ?? 1); count += 1) leave(); return; }
+    if (line === REVIEW_MEMO_TOGGLE_END) { pendingFrame = null; const closing = opened.pop(); for (let count = 0; count < (closing?.entered ?? 1); count += 1) leave(); return; }
     if (!line.trim()) return;
+    // 형식 토글 밑의 끝이 열린 줄(`B:`)은 바로 밑 줄과 한 줄이다(4일 점검): 그 줄은 따로 읽지 않고 밑 줄이 `A:B:V:#` 형식으로 읽힌다
+    const openFrame = opened.at(-1)?.frame && !pendingFrame ? subFrameOf(line.trim(), opened.at(-1)!.frame) : null;
+    if (openFrame && !isFrameTitle(line.trim())) { pendingFrame = openFrame; return; }
     const { lead, rows } = rowsOf(line, 0, false);
     if (lead) scanRow(lead, lineIndex);
     rows.slice(0, -1).forEach(row => enter(row.text));
     scanRow(rows[rows.length - 1], lineIndex);
     rows.slice(0, -1).forEach(() => leave());
+    pendingFrame = null;
   });
   return statements;
 };

@@ -1,6 +1,7 @@
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { reviewGroups } from './reviewFieldOverride';
 import { reviewQuotes } from './reviewQuote';
+import { openTailOf } from './noteOpenTail';
 
 /**
  * 토글 제목의 형식 `#`(29일, 4일 넓힘): 제목에 홀로 쓴 `#`은 아래 줄 값이 들어갈 자리다.
@@ -27,6 +28,17 @@ export const frameSlotsOf = (title: string): number[] => {
 };
 
 export const isFrameTitle = (title: string) => frameSlotsOf(title).length > 0;
+
+/**
+ * 형식 토글 밑 하위 토글이 형식으로 읽히는가: 제목에 `#`이 있으면 위 형식과 겹친 형식, 끝이 연결어로 열린 제목(`B:` · 줄 끝이 열린 줄)이면
+ * 그 끝에 `#`을 둔 형식(`B:` 밑 `C` = `B:C`를 위 형식에 넣은 줄). 아니면 null
+ */
+export const subFrameOf = (title: string, parent: string | null): string | null => {
+  if (isFrameTitle(title)) return parent ? fillFrame(parent, title) ?? title : title;
+  if (!parent) return null;
+  const open = openTailOf(title);
+  return open?.connector && !open.logic ? fillFrame(parent, `${title.trimEnd()} #`) : null;
+};
 
 export interface FramePart { start: number; end: number; text: string }
 
@@ -188,8 +200,9 @@ export const expandFrameLines = (memo: string): string => {
     }
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
       const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
-      if (isFrameTitle(title)) {
-        stack.push({ frame: frame ? fillFrame(frame, title) ?? title : title, dropped: true });
+      const sub = subFrameOf(title, frame);
+      if (sub) {
+        stack.push({ frame: sub, dropped: true });
         return;
       }
       const filled = frame && title.trim() ? fillFrame(frame, title) : null;
@@ -197,7 +210,8 @@ export const expandFrameLines = (memo: string): string => {
       stack.push({ frame: null, dropped: false });
       return;
     }
-    if (frame && line.trim()) { out.push(fillFrame(frame, line) ?? line); return; }
+    // `#`를 쓴 줄(틀 줄 `[A] #-#: #+#`)은 형식에 넣지 않는다
+    if (frame && line.trim() && !line.includes('#')) { out.push(fillFrame(frame, line) ?? line); return; }
     out.push(line);
   });
   return out.join('\n');

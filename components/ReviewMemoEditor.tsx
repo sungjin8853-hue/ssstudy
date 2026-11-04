@@ -1,3 +1,4 @@
+import { nestCuts } from '../utils/noteNest';
 import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeNotePunctuation } from '../utils/notePunctuation';
@@ -246,6 +247,18 @@ const GrowingTextarea = ({ value, inputRef, colorColons, dark, fieldOverrides, f
     ref.current = element;
     inputRef(element);
   }} />;
+};
+
+/**
+ * 줄 가운데 `>` 뒤 엔터로 토글을 만들어도 되는가(4일 점검): 그 `>`가 밑에 쓰기로 읽히는 `>`여야 한다(따옴표 · 괄호 안의 `>`는 글자).
+ * 줄 끝(뒤에 글이 없는) `>`는 전처럼 늘 된다.
+ */
+const midLineNestOk = (text: string, lineStart: number, caret: number) => {
+  const lineEnd = text.indexOf('\n', caret) < 0 ? text.length : text.indexOf('\n', caret);
+  const line = text.slice(lineStart, lineEnd);
+  if (!line.slice(caret - lineStart).trim()) return true;
+  const at = text.slice(lineStart, caret).search(/>\s*$/);
+  return at >= 0 && nestCuts(line).includes(at);
 };
 
 export const ReviewMemoEditor: React.FC<Props> = ({
@@ -705,7 +718,7 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                         event.preventDefault();
                         convertLine(index, caret, prefix);
                       } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing && selectionEnd === caret
-                        && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && !/^[>=]/.test(block.text.slice(caret))) {
+                        && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && !/^[>=]/.test(block.text.slice(caret)) && midLineNestOk(block.text, start, caret)) {
                         // 줄 끝에서 `>`를 쓰고 엔터를 치면 그 줄이 제목인 토글이 되어 열리고, 커서가 토글 안으로 들어간다(여러 줄을 밑에 쓸 때).
                         // 줄 가운데 `>` 바로 뒤에서 엔터를 쳐도 같다: `A: > B:C`는 제목 `A:` 아래 첫 줄 `B:C`인 토글이 된다(4일).
                         // `>` 뒤에 띄어 쓰면 토글로 바꾸지 않는다: 같은 줄에 이어 쓰는 `X > Y`는 그 한 행만 X 밑에 쓴 것이다(3일)
@@ -722,7 +735,7 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                       // 제목 가운데 `>` 바로 뒤에서 엔터를 치면(4일: `A: > B:C`) `>` 뒤 글은 토글 안 첫 줄로 내려간다
                       const titleHead = block.title.slice(0, titleCaret);
                       const titleRest = block.title.slice(titleCaret);
-                      if (!event.nativeEvent.isComposing && titleCaret === titleEnd && titleRest.trim() && !/^[>=]/.test(titleRest)
+                      if (!event.nativeEvent.isComposing && titleCaret === titleEnd && titleRest.trim() && !/^[>=]/.test(titleRest) && midLineNestOk(block.title, 0, titleCaret)
                         && /[^\s>].*>\s*$/.test(titleHead) && !/[-=<>:;,]>\s*$/.test(titleHead)) {
                         focus(block.id, 'text', 0);
                         setClosed(prev => { const next = new Set(prev); next.delete(block.id); return next; });

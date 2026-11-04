@@ -16,7 +16,7 @@ import { hasTopLevelUnion, joinSets, MASK, processOf, readConvertCell } from './
 import type { ConvertInfo } from './abilityConvert';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { hasQuoteMark, quotedMarkCuts, reviewQuotes } from './reviewQuote';
-import { fillFrame, isFrameTitle, placeUnderFrame } from './noteFrame';
+import { fillFrame, isFrameTitle, placeUnderFrame, subFrameOf } from './noteFrame';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
 import { convertStatement, placeOf, proseOf } from './questionProse';
@@ -803,7 +803,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         const written = value.slice(segment.start, segment.end);
         if (slots.length && !readNoteSetLine(written) && !hasLogicMark(written) && !templateOf(segment)) slotLines.push({ id, ...segment, text: written, slots, inherited, offset, previous });
       });
-      const ownFrame = block.type === 'toggle' ? toggleFrameOf(blankTitleCriteria(written)) : null;
+      // 형식 토글 밑에서 끝이 열린 제목(`B:`)은 그 끝에 `#`을 둔 형식이다(4일 점검: 밑 줄 `C`가 빠지던 것)
+      const ownFrame = block.type === 'toggle' ? (toggleFrameOf(blankTitleCriteria(written)) ?? (frame && subFrameOf(blankTitleCriteria(written), frame.text) ? `${blankTitleCriteria(written).trimEnd()} #` : null)) : null;
       if (ownFrame) frameNodes.add(id);
       const framedLine = (segment: { start: number; end: number }) => fillFrame(frame!.text, value.slice(segment.start, segment.end).trim()) ?? value.slice(segment.start, segment.end).trim();
       // 형식 토글 바로 아래의 토글 제목도 # 자리에 넣어 읽는다(`> A: #` 밑 `> y` → `A: y`, 그 아래 줄은 전처럼 ‘y’ 안)

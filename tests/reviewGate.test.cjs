@@ -11536,3 +11536,19 @@ test('4일: merging links and adds into lines under a # frame naturally and writ
   assert.deepEqual(merged(':::toggle A:#:V:#\nB:D\n:::end', 'A:B:V:C'), ['A:B:V:C,D'], 'a framed new note merges into a plain line');
   assert.deepEqual(merged('A:B:W:C', framed), [], 'a change to the frame itself is not written into one line');
 });
+
+test('4일 점검: under a # frame an open line (B: then C) is one framed line in questions, merges and sets; template lines stay unframed; > Enter ignores a > inside quotes or ( )', () => {
+  const { buildReviewQuestions } = questionBuilder;
+  const sig = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}|${q.answer}|${JSON.stringify(q.columns)}`).sort();
+  assert.deepEqual(sig(':::toggle A:#:V:#\nB:\nC\n:::end'), sig('A:B:V:C'), 'C was lost before');
+  assert.deepEqual(sig(':::toggle A:#:V:#\n:::toggle B:\nC\nD\n:::end\n:::end'), sig('A:B:V:C\nA:B:V:D'));
+  const { scanNoteStatements, mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
+  const framed = ':::toggle A:#:V:#\nB:\nC\nU:G\n:::end';
+  assert.deepEqual(scanNoteStatements(framed).map(item => item.text), ['A:B:V:C', 'A:U:V:G']);
+  assert.deepEqual(mergeNoteIntoEarlier('A:B:V:D', [{ id: 'e', memo: framed }]).map(update => update.after), [':::toggle A:#:V:#\nB:\nC,D\nU:G\n:::end']);
+  const { expandFrameLines } = loadSource('utils/noteFrame.ts');
+  assert.equal(expandFrameLines(':::toggle A:#:V:#\n:::toggle B:\nC\n:::end\n:::end'), 'A:B:V:C');
+  assert.equal(expandFrameLines(":::toggle X:#\n[A] #'-'#: #+#\n:::end"), "[A] #'-'#: #+#", 'a template line is not put into the frame');
+  const editor = fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8');
+  assert.ok(editor.includes('const midLineNestOk = ') && editor.includes('nestCuts(line).includes(at)'), 'a quoted or bracketed > is a letter');
+});
