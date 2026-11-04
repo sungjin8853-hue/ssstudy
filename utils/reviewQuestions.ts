@@ -1232,14 +1232,27 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (goesBackward(separator)) plainCellBlanks(index, index + 1, separator);
       // 홀로 쓴 `=` 뒤에 `,`로 여러 값이 오면 구성요소, 값 하나면 같은 것으로 묻는다(31일)
       const equalForm = separator === '=' ? { form: (right.type === 'and' ? 'components' : 'equal') as 'equal' | 'components' } : {};
-      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
+      // 4일 점검: `( )`로 묶은 관계 칸(다른 계층)을 보고 묻는 바깥 문제는 그 덩어리 전체를 보인다. 머리 값만 보이면
+      // 안쪽 관계 문제와 글이 같아져 답이 둘이 된다(`공급 : (생산비 감소 : 공급 증가) ; 가격 하락`의 "‘생산비 감소’ 다음 값은?" → 공급 증가 · 가격 하락)
+      // 덩어리는 쓴 모양대로 괄호째 보인다(`(생산비 감소 : 공급 증가)`): 괄호 안이라 바깥 논리어(순서 · 모두)로 읽히지 않는다
+      // 안쪽 첫 관계의 답 칸과 바깥 답 칸이 서로 다른 이름의 기준 칸이면(`[A];[C]` 밑 `(x;y):z`의 C와 B) 글이 달라 머리 값만 보인다.
+      // 거꾸로 묻는 문제는 머리 값을 보여도 안쪽 문제(머리 아닌 값을 보임)와 겹치지 않아 그대로 둔다
+      const shownOf = (at: number) => {
+        const field = expression.fields[at];
+        if (field.type !== 'relation' || !field.grouped || !goesForward(field.separators[0] ?? ':')) return expressionLabel(columns[at]);
+        const outer = expression.classifications[at + 1];
+        const inner = field.classifications[1];
+        if (typeof outer === 'string' && typeof inner === 'string' && outer && inner && outer !== inner) return expressionLabel(columns[at]);
+        return `(${field.fields.map((item, order) => `${order ? ` ${field.separators[order - 1]} ` : ''}${expressionLabel(item)}`).join('')})`;
+      };
+      const base = { prompt: shownOf(index), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
       if (goesForward(separator)) add({ ...base, kind: 'direct' });
       // 오른쪽이 여러 대안(토글 아래 `<`)이면 대안 하나하나를 보고 왼쪽을 떠올린다.
       if (!forwardOnly(separator)) for (const source of right.type === 'or' ? right.items : [right]) {
-        add({ ...base, prompt: expressionLabel(source), answer: base.prompt, direction: 'reverse',
+        add({ ...base, prompt: expressionLabel(source), answer: expressionLabel(left), direction: 'reverse',
           kind: 'reverse', answerSpans: base.promptSpans, promptSpans: spans(source),
           columns: { ...base.columns, prompt: base.columns.answer, answer: base.columns.prompt } });
       }

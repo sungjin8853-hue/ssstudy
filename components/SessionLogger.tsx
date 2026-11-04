@@ -2643,10 +2643,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               const intervals = previewReviewCompletionIntervals(withResults, nowMs);
               const label = getPageLabel(subjects.find(subject => subject.id === preSessionReviewGroup?.parentSubjectId));
               return <section aria-label="난도 피드백" data-basic-feedback="true" className="w-full rounded-2xl border border-indigo-100 bg-white p-4">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
-                  <p className="text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(basicFeedback.speed, label)}</span></p>
-                </div>
+                {/* 4일: 재는 동안 바뀌는 이번 속도는 보이지 않는다(추천에만 쓴다) */}
+                <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
                 <p className="mt-1 text-[13px] font-bold text-slate-700">평균 속도 {formatSpeed(basicFeedback.averageSpeed, label)}{basicFeedback.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</p>
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {SUBJECT_GRADES.map(grade => <button key={grade} type="button" data-basic-feedback-grade={grade} aria-pressed={selected === grade}
@@ -3265,17 +3263,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             </div>
 
             {feedbackInfo && activeReviewRun && (() => {
-              const { speed, summary, recommended, fromQuestions } = feedbackInfo;
+              const { summary, recommended, fromQuestions } = feedbackInfo;
               const selected = chosenFeedbackGrade();
               const parentLog = activeReviewRun ? logs.find(log => log.id === activeReviewRun.logIds[0]) ?? null : null;
               // 이번이 마지막 복습과목이면 마칠 때 실제로 다음 복습이 열리는 때(풀린 문제들의 다음 복습과 과목 난도 중 이른 쪽)를 보여 준다
               // 다음 복습은 마지막 복습과목의 난도로 한 번만 정한다: 앞 복습과목에서는 날짜를 보여 주지 않는다
               const intervals = nextReviewRunSubjectId ? null : previewReviewCompletionIntervals(parentLog, Date.now());
               return <section aria-label="난도 피드백" data-difficulty-feedback="true" className="mb-4 w-full rounded-2xl border border-indigo-100 bg-white p-4">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
-                  <p data-feedback-current="true" className="text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(speed, pageLabel)}</span></p>
-                </div>
+                {/* 4일: 재는 동안 바뀌는 이번 속도는 보이지 않는다(추천에만 쓴다) */}
+                <h4 className="text-base font-black text-indigo-800">난도 피드백</h4>
                 {fromQuestions && <p data-feedback-from-questions="true" className="mt-1 text-[13px] font-bold text-indigo-800">추천은 복습 문제 첫 답변 중 가장 많았던 {SUBJECT_GRADE_LABELS[fromQuestions]}이에요. 직접 골라도 돼요.</p>}
                 <ul className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">
                   <li data-feedback-average="true">평균 속도 {formatSpeed(summary.averageSpeed, pageLabel)}{summary.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</li>

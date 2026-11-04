@@ -1479,7 +1479,8 @@ test('equals is a higher-importance colon while periods, decimals and spaces sta
 test('nested relation columns restart their labels, keep the outer importance, and outer relations use only branch heads', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
   // 4일: `( )`는 다른 계층이라 안쪽 관계에 바깥 첫 칸(a)을 조건으로 주지 않는다(31일엔 a가 자리였다)
-  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'd', 2, []], ['b', 'c', 2, []], ['d', 'c', 3, []]]);
+  // 4일 점검: 덩어리 (b:c)를 보고 바깥 다음 값(d)을 물을 땐 덩어리째 보인다 — 'b'만 보이면 안쪽 b→c와 글이 같아 답이 둘
+  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['(b : c)', 'd', 2, []], ['b', 'c', 2, []], ['d', 'c', 3, []]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
@@ -11577,4 +11578,32 @@ test("4일: ( ) is another layer — A:B,(N=P) asks N → P with only N (and N's
   const q = questionsFor(memo).find(item => item.kind === 'direct' && item.prompt === 'N');
   assert.deepEqual(q.conditions, []);
   assert.ok(renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: q, revealed: false, memo })).includes('N ∈ 과일'));
+});
+
+test('4일 점검: ( ) 덩어리를 보고 바깥 다음 값을 물을 땐 덩어리째 보여 안쪽 관계 문제와 겹치지 않는다', () => {
+  const { buildReviewQuestions, getReviewQuestionSentence } = loadSource('utils/reviewQuestions.ts');
+  const asked = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct' || q.kind === 'reverse')
+    .map(q => [getReviewQuestionSentence(null, q).statement, q.answer]);
+  const econ = asked('공급 : (생산비 감소 : 공급 증가) ; 가격 하락');
+  assert.ok(econ.some(([s, a]) => s === '‘(생산비 감소 : 공급 증가)’ 다음 값은?' && a === '가격 하락'));
+  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 다음 값은?' && a === '공급 증가'));
+  // 같은 글에 답이 둘인 문제가 없다
+  const bySentence = new Map();
+  econ.forEach(([s, a]) => bySentence.set(s, [...(bySentence.get(s) ?? []), a]));
+  assert.ok([...bySentence.values()].every(answers => answers.length === 1), JSON.stringify([...bySentence]));
+  // 거꾸로 묻는 문제는 머리 값만 보여도 안쪽 문제와 겹치지 않아 그대로다
+  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 앞의 값은?' && a === '공급'));
+});
+
+test('4일 점검: [ ]만 쓴 토글 제목은 문제 글에서 괄호 없이 보인다(키는 그대로)', () => {
+  const { readableLabel } = loadSource('utils/questionStatement.ts');
+  assert.equal(readableLabel('[세포 소기관]'), '세포 소기관');
+  assert.equal(readableLabel('[A] x'), '[A] x');
+});
+
+test('4일: 재는 동안의 난도 피드백엔 실시간 이번 속도를 보이지 않는다(복습 넣기 창의 이번 속도는 그대로)', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(!/>이번 속도</.test(logger) && !/이번 속도 <span/.test(logger));
+  const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/RegisterReviewDialog.tsx'), 'utf8');
+  assert.ok(dialog.includes('이번 속도 <span'));
 });

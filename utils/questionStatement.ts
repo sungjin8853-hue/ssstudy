@@ -18,7 +18,11 @@ export const renderCellPieces = (pieces: readonly CellPiece[], glue: Record<Cell
 export const countCellBlanks = (pieces: readonly CellPiece[]) => pieces.filter(piece => typeof piece !== 'string' && 'blank' in piece).length;
 
 /** 문장에 쓰는 글: 논리어 AND·OR는 풀어 쓰고(`a, b` · `a 또는 b`), 순서(→)와 같음(=)은 그대로 둔다 */
-export const readableLabel = (label: string): string => label.replace(/ AND /g, ', ').replace(/ OR /g, ' 또는 ');
+export const readableLabel = (label: string): string => {
+  // `[과일]`처럼 집합 이름만 쓴 토글 제목은 괄호 없이 읽는다(4일 점검: "‘[과일]’에서"로 괄호가 보이던 것)
+  const lone = /^\[([^\[\]]+)\]$/.exec(label.trim());
+  return (lone ? lone[1].trim() : label).replace(/ AND /g, ', ').replace(/ OR /g, ' 또는 ');
+};
 
 /** 속성 이름이 있으면 값 앞에 붙인다: `정의 ‘p’` (이름이 없으면 값만) */
 export const attributeTag = (value: string, labels?: readonly string[]) => (labels && labels.length ? `${labels.join('·')} ‘${value}’` : `‘${value}’`);
