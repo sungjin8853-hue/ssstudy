@@ -11464,3 +11464,12 @@ test('4일 점검: auto review does not fold a study into one from another study
   assert.ok(/const resetAll = \(\) => \{\s+setStep\('idle'\);\s+setCutEndPage\(null\);/.test(logger), 'a typed end page does not carry into the next measurement');
   assert.ok(logger.includes('cutReseedRef.current = subjectId;') && logger.includes('carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0'), 'the sheet is refilled after a folded record');
 });
+
+test('4일 다시 점검: after 바로 복습 넣기 the sheet follows notes changed by merging, and editing several collecting records into one keeps collecting', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  // 넣을 때 새 노트가 이전 쪽 노트에 합쳐져 그 기록의 노트가 바뀌면(사과 : 빨강 → 사과:빨강,둥글다) 노트지도 다시 채운다
+  assert.ok(logger.includes("const unchanged = (part: SheetPart) =>") && logger.includes('if (parts.every(unchanged)) return;'), 'a changed record refills the sheet, not only a missing one');
+  assert.ok(logger.includes('sheet.updates.filter(update => keep.has(update.logId))'), 'old text is never written over a record that merging changed');
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('editingSummary?.logs.some(log => log.unitReviewPending && log.autoReviewWaiting) ? { autoReviewWaiting: true }'), 'several collecting records edited into one keep collecting');
+});

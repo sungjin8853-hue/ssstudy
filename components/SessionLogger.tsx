@@ -2346,8 +2346,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       : cutStartPage)
     : '';
   const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !skipReview;
-  // 바로 복습 넣기로 저장한 기록이 1시간 안 앞 기록에 합쳐지면(자동 복습) 노트지의 그 조각은 없는 기록을 가리킨다:
-  // 넣기가 끝나면 오늘 노트로 노트지를 다시 채우고, 그사이 새로 쓴 글은 뒤에 그대로 둔다(4일 점검)
+  // 바로 복습 넣기로 복습에 넣으면 노트지의 조각이 바뀐 기록과 어긋날 수 있다(4일 점검): 기록이 1시간 안 앞 기록에 합쳐져 없어지거나(자동 복습),
+  // 넣을 때 새 노트가 이전 쪽 노트에 연결 · 첨가로 합쳐져 그 기록의 노트가 바뀐다. 어긋나면 넣기가 끝난 뒤 오늘 노트로 노트지를 다시 채우고,
+  // 그사이 새로 쓴 글은 뒤에 그대로 둔다(바뀐 기록에 옛 글로 고친 것을 덮어쓰지 않는다)
   const cutReseedRef = useRef<string | null>(null);
   useEffect(() => {
     const cutSubjectId = cutReseedRef.current;
@@ -2356,14 +2357,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (logs.some(log => log.subjectId === cutSubjectId && log.unitReviewPending && (log.autoReviewCut || log.autoReviewQueued))) return;
     cutReseedRef.current = null;
     const parts = sheetPartsRef.current;
-    if (!parts.some(part => !logs.some(log => log.id === part.logId))) return;
+    const unchanged = (part: SheetPart) => { const log = logs.find(item => item.id === part.logId); return Boolean(log) && (log!.reviewMemo ?? '') === part.memo; };
+    if (parts.every(unchanged)) return;
     const sheet = splitNoteSheet(parts, reviewMemo);
-    sheet.updates.filter(update => logs.some(log => log.id === update.logId)).forEach(update => onUpdateReviewMemo(update.logId, update.memo));
+    const keep = new Set(parts.filter(unchanged).map(part => part.logId));
+    sheet.updates.filter(update => keep.has(update.logId)).forEach(update => onUpdateReviewMemo(update.logId, update.memo));
     const subject = subjects.find(item => item.id === cutSubjectId);
     const carried = subject ? carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0, subject.startPage ?? 1, activeStudyDate) : [];
     const nextParts = carried
       .filter(log => (log.reviewMemo ?? '').trim().length > 0)
-      .map(log => ({ logId: log.id, memo: sheet.updates.find(update => update.logId === log.id)?.memo ?? log.reviewMemo ?? '' }));
+      .map(log => ({ logId: log.id, memo: (keep.has(log.id) ? sheet.updates.find(update => update.logId === log.id)?.memo : undefined) ?? log.reviewMemo ?? '' }));
     sheetPartsRef.current = nextParts;
     sheetUpdatesRef.current = [];
     const base = mergeSheetParts(nextParts);

@@ -693,8 +693,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewUnitRange ? { reviewUnitRange: editingSummary.logs[0].reviewUnitRange } : {}),
       // 자동 복습 넣기로 들어간 기록은 고쳐도 자동 묶음으로 남는다(4일 점검: 빠지면 직접 넣은 것으로 보여 단위가 나뉘었다)
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewRegistered ? { autoReviewRegistered: true } : {}),
-      // 자동 복습으로 모으는 중인 기록은 고쳐도 계속 모은다(4일)
-      ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewWaiting ? { autoReviewWaiting: true } : {}),
+      // 자동 복습으로 모으는 중인 기록은 고쳐도(여러 기록을 하나로 고쳐도) 계속 모은다(4일)
+      ...(editingSummary?.logs.some(log => log.unitReviewPending && log.autoReviewWaiting) ? { autoReviewWaiting: true } : {}),
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,
