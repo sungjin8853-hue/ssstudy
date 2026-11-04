@@ -2342,6 +2342,30 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       : cutStartPage)
     : '';
   const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !skipReview;
+  // 바로 복습 넣기로 저장한 기록이 1시간 안 앞 기록에 합쳐지면(자동 복습) 노트지의 그 조각은 없는 기록을 가리킨다:
+  // 넣기가 끝나면 오늘 노트로 노트지를 다시 채우고, 그사이 새로 쓴 글은 뒤에 그대로 둔다(4일 점검)
+  const cutReseedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cutSubjectId = cutReseedRef.current;
+    if (!cutSubjectId) return;
+    if (cutSubjectId !== subjectId || (step !== 'timer' && step !== 'organize')) { cutReseedRef.current = null; return; }
+    if (logs.some(log => log.subjectId === cutSubjectId && log.unitReviewPending && (log.autoReviewCut || log.autoReviewQueued))) return;
+    cutReseedRef.current = null;
+    const parts = sheetPartsRef.current;
+    if (!parts.some(part => !logs.some(log => log.id === part.logId))) return;
+    const sheet = splitNoteSheet(parts, reviewMemo);
+    sheet.updates.filter(update => logs.some(log => log.id === update.logId)).forEach(update => onUpdateReviewMemo(update.logId, update.memo));
+    const subject = subjects.find(item => item.id === cutSubjectId);
+    const carried = subject ? carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0, subject.startPage ?? 1, activeStudyDate) : [];
+    const nextParts = carried
+      .filter(log => (log.reviewMemo ?? '').trim().length > 0)
+      .map(log => ({ logId: log.id, memo: sheet.updates.find(update => update.logId === log.id)?.memo ?? log.reviewMemo ?? '' }));
+    sheetPartsRef.current = nextParts;
+    sheetUpdatesRef.current = [];
+    const base = mergeSheetParts(nextParts);
+    setReviewMemo(sheet.added.trim() ? (base ? `${base}\n\n${sheet.added}` : sheet.added) : base);
+    setReviewMemoDocument(undefined);
+  }, [logs]);
 
   const handleCutReview = () => {
     if (!selectedSubject || activeReviewRun || skipReview) return;
@@ -2379,6 +2403,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     applyCarriedSheetEdits();
     setPendingAutoAdvanceLogId(null);
     onLogSession(log);
+    cutReseedRef.current = subjectId;
     sheetPartsRef.current = nextParts;
     sheetUpdatesRef.current = [];
     if (nextParts.length > 0) { setReviewMemo(mergeSheetParts(nextParts)); setReviewMemoDocument(undefined); }

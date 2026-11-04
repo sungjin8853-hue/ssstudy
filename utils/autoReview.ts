@@ -1,5 +1,5 @@
 import type { StudyLog, Subject } from '../types';
-import { getLogProgressPages } from './schedule';
+import { getLogProgressPages, getLogStudyDate } from './schedule';
 import { fsrsReview } from './fsrs';
 import { registerPendingLog } from './review';
 import { pastSessions, previousUnitSpeed, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_RATING } from './subjectFeedback';
@@ -60,7 +60,7 @@ export const mergeStudyLogs = (earlier: StudyLog, later: StudyLog): StudyLog => 
 
 /**
  * 모으는 중인 앞 기록이 끝나고 1시간 안에 시작한 기록이면 앞 기록에 합친다. 합친 뒤의 기록 id를 돌려준다(합치지 않으면 그대로).
- * 같은 과목 · 같은 단계 · 앞으로 이어지는 범위일 때만, 사진이 둘 다 있거나 직접 넣은 기록이면 합치지 않는다.
+ * 같은 과목 · 같은 단계 · 같은 공부한 날 · 앞으로 이어지는 범위일 때만, 사진이 둘 다 있거나 직접 넣은 기록이면 합치지 않는다.
  */
 export const simplifyAutoLog = (logs: StudyLog[], logId: string): { logs: StudyLog[]; id: string } => {
   const incoming = logs.find(log => log.id === logId);
@@ -70,6 +70,8 @@ export const simplifyAutoLog = (logs: StudyLog[], logId: string): { logs: StudyL
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const previous = before[before.length - 1];
   if (!previous || !isAutoWaiting(previous) || previous.manualEntry || incoming.manualEntry) return { logs, id: logId };
+  // 공부한 날이 다르면(자정을 넘김) 합치지 않는다: 합치면 뒤 공부가 앞 날짜로 세어져 그날 계획에서 빠진다
+  if (getLogStudyDate(previous) !== getLogStudyDate(incoming)) return { logs, id: logId };
   if (startMs(incoming) - endMs(previous) > AUTO_REVIEW_SAME_TIME_MS) return { logs, id: logId };
   if (!Number.isInteger(previous.endPage) || !Number.isInteger(incoming.startPage) || incoming.startPage! <= previous.endPage!) return { logs, id: logId };
   if (previous.photoBase64 && incoming.photoBase64) return { logs, id: logId };
@@ -137,4 +139,23 @@ export const registerAutoReview = (
   const minutes = group.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0);
   if (cut || minutes >= hours * 60 - 1e-9) return register(next, group.map(log => log.id));
   return next.map(log => (log.id === incoming.id ? { ...log, autoReviewQueued: undefined, autoReviewCut: undefined, autoReviewWaiting: true } : log));
+};
+
+/**
+ * 모은 시간이 이미 정한 시간 이상인 묶음을 넣는다(설정에서 시간을 줄였을 때 다음 저장을 기다리지 않게). 단계마다 따로, 넣는 때는 그 묶음 마지막 공부 때.
+ * 넣을 것이 없으면 그대로 돌려준다.
+ */
+export const flushFilledAutoGroups = (
+  logs: StudyLog[], subjectId: string, hours: number,
+  beforeRegister: (logs: StudyLog[], ids: string[]) => StudyLog[] = current => current
+): StudyLog[] => {
+  const waiting = logs.filter(log => log.subjectId === subjectId && log.unitReviewPending && log.autoReviewWaiting);
+  const stages = [...new Set(waiting.map(stageOf))];
+  return stages.reduce((current, stage) => {
+    const group = waiting.filter(log => stageOf(log) === stage);
+    const minutes = group.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0);
+    if (minutes < hours * 60 - 1e-9) return current;
+    const ids = group.map(log => log.id);
+    return registerAutoGroup(beforeRegister(current, ids), ids, Math.max(...group.map(endMs)));
+  }, logs);
 };

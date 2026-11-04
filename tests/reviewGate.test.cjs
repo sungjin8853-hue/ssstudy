@@ -11298,7 +11298,7 @@ test('4일: 바로 복습 넣기 during measurement and the auto review hours se
   assert.ok(logger.includes('data-testid="cut-review-button"') && logger.includes('autoReviewCut: true'), 'the note area has the button and the saved study is marked');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
   assert.ok(app.includes('registerAllPendingNow') && app.includes('(log.autoReviewQueued || log.autoReviewCut)'), 'App puts marked studies in at once');
-  assert.ok(app.includes('autoReviewHours: Number(subject.autoReviewHours)'), 'the hours survive loading');
+  assert.ok(app.includes("typeof subject.autoReviewHours === 'number'"), 'the hours survive loading');
   const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/RegisterReviewDialog.tsx'), 'utf8');
   assert.ok(dialog.includes('복습 하나에 모을 공부 시간') && !dialog.includes('3시간 안에'), 'the setting replaces the 3-hour merge text');
 });
@@ -11436,4 +11436,23 @@ test('stage plan times do not leave zero-page study days around a stage change',
   assert.ok(zeroRun(skipping.days) <= 1, `zero-page run ${zeroRun(skipping.days)}`);
   const weekdays = simulatePlan(planBase({ ...timedStages, scheduledWeekdays: [1, 2, 3, 4, 5] }));
   assert.equal(zeroRun(weekdays.days.filter(day => day.weekday >= 1 && day.weekday <= 5)), 0, 'every weekday has some pages');
+});
+
+test('4일 점검: auto review does not fold a study into one from another study day, lowering the hours puts an already filled group in, and the sheet is refilled when a 바로 복습 넣기 record is folded', () => {
+  const { registerAutoReview, flushFilledAutoGroups } = loadSource('utils/autoReview.ts');
+  const mk = (id, end, min, s, e, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: min, pagesRead: e - s + 1, startPage: s, endPage: e, pageCountIsExplicit: true,
+    unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true, ...extra });
+  // 23:50 끝 → 00:10~00:30: 1시간 안이지만 공부한 날이 달라 따로 둔다(합치면 뒤 공부가 앞 날짜로 세어진다)
+  let logs = registerAutoReview([mk('a', '2026-11-04T14:50:00.000Z', 20, 1, 2, { studyDate: '2026-11-04' })], 'a', 2);
+  logs = registerAutoReview([...logs, mk('b', '2026-11-04T15:30:00.000Z', 20, 3, 4, { studyDate: '2026-11-05' })], 'b', 2);
+  assert.deepEqual(logs.map(log => log.id), ['a', 'b']);
+  // 모은 40분: 2시간이면 그대로, 0.5시간으로 줄이면 바로 넣는다(넣는 때 = 마지막 공부 때)
+  assert.equal(flushFilledAutoGroups(logs, 's', 2), logs);
+  const flushed = flushFilledAutoGroups(logs, 's', 0.5);
+  assert.ok(flushed.every(log => log.autoReviewRegistered && !log.unitReviewPending));
+  assert.equal(flushed[0].reviewRegisteredAt, '2026-11-04T15:30:00.000Z');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
+  assert.ok(app.includes('flushFilledAutoGroups(next, subject.id') && app.includes('if (!subject) { next = next.map'), 'App flushes on a settings change and never loops on a missing subject');
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('cutReseedRef.current = subjectId;') && logger.includes('carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0'), 'the sheet is refilled after a folded record');
 });

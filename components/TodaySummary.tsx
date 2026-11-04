@@ -806,7 +806,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   useEffect(() => {
     if (!idle || !detailData || choosingReview) return;
     // 자동 복습으로 모으는 중인 기록만 있는 단원은 창을 띄우지 않는다(4일: 시간이 차면 알아서 넣는다)
-    const finished = chapterGroups.filter(group => group.finished && group.number !== null && group.logs.some(log => !log.autoReviewWaiting));
+    const finished = chapterGroups.filter(group => group.finished && group.number !== null && group.logs.some(log => !(autoReview && log.autoReviewWaiting)));
     if (!finished.length) return;
     const seenKey = 'swp_chapter_review_prompted';
     let seen: string[] = [];

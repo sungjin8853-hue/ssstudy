@@ -21,7 +21,7 @@ import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, co
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
-import { autoReviewHoursOf, registerAutoReview } from './utils/autoReview';
+import { autoReviewHoursOf, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -236,7 +236,7 @@ const App: React.FC = () => {
             reviewEnabled: subject.reviewEnabled ?? true,
             // 자동 복습 넣기(3일): 다시 열어도 켜진 채로 둔다(4일 점검: 불러올 때 빠져 꺼지던 것)
             ...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),
-            ...(Number.isFinite(Number(subject.autoReviewHours)) && subject.autoReviewHours !== undefined ? { autoReviewHours: Number(subject.autoReviewHours) } : {}),
+            ...(typeof subject.autoReviewHours === 'number' && Number.isFinite(subject.autoReviewHours) ? { autoReviewHours: subject.autoReviewHours } : {}),
             reviewSubjectIds: Array.isArray(subject.reviewSubjectIds)
               ? subject.reviewSubjectIds.filter(id => id !== subject.id)
               : [],
@@ -776,12 +776,24 @@ const App: React.FC = () => {
     queued.forEach(log => {
       if (!next.some(item => item.id === log.id && item.unitReviewPending)) return;
       const subject = subjects.find(item => item.id === log.subjectId);
+      // 과목이 없으면 넣을 수 없다: 표시만 지운다(지우지 않으면 이 효과가 계속 돈다)
+      if (!subject) { next = next.map(item => (item.id === log.id ? { ...item, autoReviewQueued: undefined, autoReviewCut: undefined } : item)); return; }
       if (!log.autoReviewQueued) { next = registerAllPendingNow(next, log.subjectId, Date.parse(log.timestamp)); return; }
       const finished = subject ? getSubjectRemainingPageCount(subject) <= 0 : false;
       next = registerAutoReview(next, log.id, autoReviewHoursOf(subject), finished, (current, ids) => mergePendingNotes(current, log.subjectId, ids));
     });
     setLogs(next);
   }, [logs]);
+
+  // 모을 시간을 줄여 이미 찬 묶음은 다음 저장을 기다리지 않고 넣는다(4일 점검)
+  const autoHoursKey = subjects.map(subject => (subject.autoReviewRegister ? `${subject.id}:${autoReviewHoursOf(subject)}` : '')).join('|');
+  useEffect(() => {
+    let next = logs;
+    subjects.filter(subject => subject.autoReviewRegister).forEach(subject => {
+      next = flushFilledAutoGroups(next, subject.id, autoReviewHoursOf(subject), (current, ids) => mergePendingNotes(current, subject.id, ids));
+    });
+    if (next !== logs) setLogs(next);
+  }, [autoHoursKey]);
 
   // 학습을 끝내고 "복습에 넣기"를 누르면: 이 과목에서 쌓인 대기 기록(노트 포함)이 한꺼번에 복습으로 들어간다. 누르지 않으면 계속 대기한다.
   const handleRegisterReview = (subjectId: string, grade: SubjectGrade, logIds?: string[]) => {
