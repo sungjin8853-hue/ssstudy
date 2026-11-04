@@ -612,7 +612,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       attackEfficiency: calculateTimeAttackAverage(growthLogs),
       reviewStartPage: owner ? dueRepeat ? getRepeatedReviewRange(dueRepeat, subject).startPage : getReviewStartPage(subject) : null,
       // 단위: 학습과목은 "복습에 넣기" 사이(처음은 시작부터 첫 복습에 넣기까지), 복습과목은 복습 한 번
-      efficiencyScope: getEfficiencyScope(growthLogs, owner ? reviewCompletionBoundaries(logs, owner.id, subject.id) : registrationBoundaries(subjectLogs)),
+      efficiencyScope: getEfficiencyScope(growthLogs, owner ? reviewCompletionBoundaries(logs, owner.id, subject.id) : registrationBoundaries(subjectLogs), !owner && Boolean(subject.autoReviewRegister)),
       reviewSpeedChanges: owner ? calculateReviewChangeAmounts(logs, owner.id, subject.id, activeStudyDate) : null,
       reviewSpeedSeries: owner ? getReviewSpeedSeries(logs, owner.id, subject.id) : null,
       basicReviewTrend,
@@ -993,6 +993,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const efficiencyNode = detailData
     ? (reviewRateMode ? <></>
       : <UnitGrowthEfficiency key={detailData.subject.id} scope={detailData.efficiencyScope} label={pageLabel} unitEnd={detailData.owner ? 'review' : 'register'}
+        noUnits={!detailData.owner && Boolean(detailData.subject.autoReviewRegister)}
         efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency} done={showDoneCard && Boolean(doneRow)} />)
     : undefined;
   const stepsChips = idle && detailData ? (

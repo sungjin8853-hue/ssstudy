@@ -10939,7 +10939,7 @@ test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 �
   assert.deepEqual(efficiencyCycle([{ kind: 'unit', n: 1 }, { kind: 'unit', n: 2 }, average]), [{ kind: 'unit', n: 1 }, { kind: 'unit', n: 2 }, average]);
   assert.deepEqual(efficiencyCycle([]), [{ kind: 'unit', n: 1 }], 'nothing to compare: the button stays off');
   const source = fs.readFileSync(path.resolve(__dirname, '../components/PageGrowth.tsx'), 'utf8');
-  assert.ok(source.includes('const unitOptions = efficiencyCycle(view.options);') && source.includes('const canCompare = unitOptions.length > 1;')
+  assert.ok(source.includes(': efficiencyCycle(view.options);') && source.includes('const canCompare = unitOptions.length > 1;')
     && source.includes('unitOptions.findIndex(option => sameComparison(option, comparison))'));
 });
 
@@ -11290,4 +11290,29 @@ test('3일: auto review — a saved study goes into review at once; a study star
   assert.equal(autoReviewGroupFor([...manual, d], d), null);
   // 대기 중이 아닌 기록은 그대로
   assert.equal(registerAutoReview(logs, 'a'), logs);
+});
+
+test('4일: auto review has no units — auto-registered logs make no unit boundary, the efficiency cell compares only with the subject average, and the grade compares with the total average', () => {
+  const { registrationBoundaries } = loadSource('utils/reviewUnits.ts');
+  const logs = [
+    { id: 'm', subjectId: 's', timestamp: '2026-11-01T01:00:00.000Z', reviewRegisteredAt: '2026-11-01T02:00:00.000Z' },
+    { id: 'a1', subjectId: 's', timestamp: '2026-11-02T01:00:00.000Z', reviewRegisteredAt: '2026-11-02T01:00:00.000Z', autoReviewRegistered: true },
+    { id: 'a2', subjectId: 's', timestamp: '2026-11-03T01:00:00.000Z', reviewRegisteredAt: '2026-11-03T01:00:00.000Z', autoReviewRegistered: true }
+  ];
+  assert.deepEqual(registrationBoundaries(logs), [Date.parse('2026-11-01T02:00:00.000Z')], 'only the pressed 복습에 넣기 makes a boundary');
+  const { getEfficiencyScope, getEfficiencyView } = loadSource('utils/pageGrowth.ts');
+  const samples = [10, 20, 30].map((pages, at) => ({ pagesRead: pages, timeSpentMinutes: 30, timestamp: `2026-11-0${at + 1}T01:00:00.000Z`, reviewRegisteredAt: `2026-11-0${at + 1}T01:00:00.000Z`, autoReviewRegistered: true }));
+  const per = getEfficiencyScope(samples, samples.map(log => Date.parse(log.timestamp)));
+  assert.ok(getEfficiencyView(per, { kind: 'unit', n: 1 }).inherited, 'with a boundary at every study the cell showed the last single study');
+  const none = getEfficiencyScope(samples, [], true);
+  assert.deepEqual([none.units, none.progress], [[], null]);
+  const view = getEfficiencyView(none, { kind: 'average' });
+  assert.ok(!view.inherited && view.shown);
+  const { autoReviewGradeOf } = loadSource('utils/autoReview.ts');
+  // 지난 공부: 1장/60분, 59장/60분 → 한 번씩의 가운데 값이 아니라 총합 평균 30장/h와 비교한다
+  const past = [{ id: 'p1', subjectId: 's', pagesRead: 1, timeSpentMinutes: 60, timestamp: '2026-10-01T00:00:00.000Z' }, { id: 'p2', subjectId: 's', pagesRead: 59, timeSpentMinutes: 60, timestamp: '2026-10-02T00:00:00.000Z' }];
+  const now = { id: 'n', subjectId: 's', pagesRead: 30, timeSpentMinutes: 60, timestamp: '2026-11-04T00:00:00.000Z' };
+  assert.equal(autoReviewGradeOf([...past, now], [now]), 'good', '30/h against the total average 30/h');
+  const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+  assert.ok(app.includes("...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),"), 'the setting survives loading');
 });

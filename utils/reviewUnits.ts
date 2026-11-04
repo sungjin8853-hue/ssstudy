@@ -14,7 +14,8 @@ export const registrationBoundaries = (logs: readonly StudyLog[]): number[] => {
   // 예전 기록(누른 시각을 남기기 전)은 같은 범위로 함께 들어간 기록들의 가장 늦은 시각을 경계로 본다
   const legacy = new Map<string, number>();
   logs.forEach(log => {
-    if (log.reviewParentSubjectId || log.unitReviewPending) return;
+    // 자동 복습 넣기로 들어간 기록은 단위를 나누지 않는다(4일: 공부할 때마다 단위가 끝나 평균이 타임어택 한 번 값이 되던 것)
+    if (log.reviewParentSubjectId || log.unitReviewPending || log.autoReviewRegistered) return;
     const at = log.reviewRegisteredAt ? Date.parse(log.reviewRegisteredAt) : NaN;
     if (Number.isFinite(at)) { times.add(at); return; }
     if (!log.reviewUnitRange) return;

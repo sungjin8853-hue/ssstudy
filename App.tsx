@@ -234,6 +234,8 @@ const App: React.FC = () => {
             ...(savedChapters.length > 0 ? { chapters: savedChapters } : {}),
             tagIds: subject.tagIds,
             reviewEnabled: subject.reviewEnabled ?? true,
+            // 자동 복습 넣기(3일): 다시 열어도 켜진 채로 둔다(4일 점검: 불러올 때 빠져 꺼지던 것)
+            ...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),
             reviewSubjectIds: Array.isArray(subject.reviewSubjectIds)
               ? subject.reviewSubjectIds.filter(id => id !== subject.id)
               : [],

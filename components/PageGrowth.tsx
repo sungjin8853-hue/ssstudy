@@ -179,15 +179,18 @@ export const UnitGrowthEfficiency: React.FC<{
   done?: boolean;
   /** 단위가 끝나는 때: 학습과목은 "복습에 넣기", 복습과목은 복습을 마칠 때 */
   unitEnd?: 'register' | 'review';
-}> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false, unitEnd = 'register' }) => {
+  /** 단위가 없다(4일: 자동 복습 넣기를 켠 과목). 과목 평균과만 견주고 "이번 단위" 줄이 없다 */
+  noUnits?: boolean;
+}> = ({ scope, efficiency, attackEfficiency, label = DEFAULT_PAGE_LABEL, done = false, unitEnd = 'register', noUnits = false }) => {
   // 이전 단위 대비 값만 보인다(버튼으로 이전 단위 → 이이전 단위 → 평균). 그 아래 한 줄은 그 성장이 25분 전보다 얼마나 늘었는지다.
-  const [comparison, setComparison] = useState<EfficiencyComparison>({ kind: 'unit', n: 1 });
+  const [picked, setComparison] = useState<EfficiencyComparison>({ kind: 'unit', n: 1 });
+  const comparison: EfficiencyComparison = noUnits ? { kind: 'average' } : picked;
   const view = getEfficiencyView(scope, comparison);
   // 같은 기준과 견준 성장의 변화 = 지금 25분과 직전 25분의 차이(기준이 같아서 빼면 기준이 지워진다)
   const recent = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
   const hasRecent = recent.choice.kind === 'pomodoro' && recent.choice.n === 1;
   const progress = scope.progress;
-  const unitOptions = efficiencyCycle(view.options);
+  const unitOptions = noUnits ? view.options.filter(option => option.kind === 'average') : efficiencyCycle(view.options);
   const canCompare = unitOptions.length > 1;
   const nextUnitComparison = (): EfficiencyComparison => {
     const at = unitOptions.findIndex(option => sameComparison(option, comparison));
@@ -208,7 +211,8 @@ export const UnitGrowthEfficiency: React.FC<{
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
         overall={view.overall} headerAction={compare} label={label} done={done}
         recentOverall={view.overall && hasRecent ? recent.overall : null}
-        emptyNote={unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
+        emptyNote={noUnits ? '자동으로 복습에 넣는 과목은 단위가 없어요 · 공부가 쌓이면 과목 평균과 견줘요'
+          : unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">
             <div data-testid="unit-pages-done" className="flex items-baseline justify-between gap-3">

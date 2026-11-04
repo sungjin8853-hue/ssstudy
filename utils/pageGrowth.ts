@@ -228,8 +228,10 @@ export const buildBoundaryUnits = (samples: PageEfficiencySample[], boundaries: 
  * 효율 칸이 쓸 기록과 단위. 단위는 경계 시각(학습과목은 "복습에 넣기", 복습과목은 복습을 마친 때)으로 나눈다.
  * 효율(가장 최근 25분)은 단위를 넘어도 새로 시작하지 않는다. progress는 지금 채우는 단위(몇 번째 · 지금까지 푼 장수)다.
  */
-export const getEfficiencyScope = (samples: PageEfficiencySample[], boundaries: readonly number[] = []): EfficiencyScope => {
+export const getEfficiencyScope = (samples: PageEfficiencySample[], boundaries: readonly number[] = [], noUnits = false): EfficiencyScope => {
   const logs = chronological(samples);
+  // 자동 복습 넣기를 켠 과목은 단위가 없다(4일): 단위 비교 · "이번 단위" 줄이 없고, 효율은 이어지는 25분 평균, 평균은 과목 전체다
+  if (noUnits) return { current: logs, units: [], progress: null };
   const units = buildBoundaryUnits(logs, boundaries);
   const finished = units.filter(unit => unit.complete).length;
   const open = units.find(unit => !unit.complete);
