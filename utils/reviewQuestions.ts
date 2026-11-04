@@ -29,8 +29,8 @@ type QuestionColumn = number | string;
 type Expression =
   /** raw: 칸 글 사이의 `( )`를 그 자리의 값으로 바꾸기 전 글(바꾼 칸에만 있다) */
   | { type: 'text'; text: string; raw?: string; span: AnswerSpan }
-  | { type: 'and' | 'or' | 'sequence' | 'equal'; items: Expression[]; grouped?: boolean }
-  | { type: 'relation'; fields: Expression[]; separators: string[]; classifications: QuestionColumn[]; skips?: number[]; grouped?: boolean };
+  | { type: 'and' | 'or' | 'sequence' | 'equal'; items: Expression[] }
+  | { type: 'relation'; fields: Expression[]; separators: string[]; classifications: QuestionColumn[]; skips?: number[] };
 
 export interface NoteQuestion extends ReviewQuestionDifficulty {
   key: string;
@@ -198,12 +198,7 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   }
   // 칸 전체가 `( )`면 그 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙): 안쪽 첫 값은 그 칸, `:` 뒤는 그다음 칸들의 기준이다.
   // 안에서 분류기준을 직접 쓰면(`:{이름}` · `[ ]`) 그것을 쓴다. `[ ]` 안은 따로 처음부터 센다.
-  if (reviewGroups(text).closed.get(from) === to - 1) {
-    const inner = parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
-    // `( )`로 묶은 덩어리는 다른 계층이다(4일): 안쪽 관계를 물을 때 바깥 줄의 첫 칸을 조건으로 주지 않는다.
-    // 4일 23:46: 능력적 집합은 같은 논리어(`:` `;` `<`)끼리만 이어진다. 괄호 안에 `:` `;` `<`가 있으면 전처럼 바깥 칸을 잇는다(다른 계층으로 떼지 않는다)
-    return text[from] === '(' && inner.type !== 'text' && !hasRelation(inner) ? { ...inner, grouped: true } : inner;
-  }
+  if (reviewGroups(text).closed.get(from) === to - 1) return parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
   let allCuts = splitAt(text, from, to, relationMarks());
   // 다른 연결어(`:` `;` `<`) 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할로 칸을 나눈다
   if (!allCuts.length && isNoteShorthandOn() && splitAt(text, 0, text.length, relationMarks()).length === 0) allCuts = splitAt(text, from, to, '=-');
@@ -305,10 +300,6 @@ const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (e
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
 
-/** 덩어리 안 어디든 `:` `;` `<` 관계가 있는가(있으면 능력적 집합이 바깥과 이어진다) */
-const hasRelation = (expression: Expression): boolean => expression.type === 'relation'
-  ? expression.separators.some(separator => ':;<'.includes(separator)) || expression.fields.some(hasRelation)
-  : expression.type !== 'text' && expression.items.some(hasRelation);
 const head = (expression: Expression): Expression => {
   if (expression.type === 'relation') return head(expression.fields[0]);
   if (expression.type === 'text') return expression;
@@ -996,16 +987,23 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   const bySignature = new Map<string, NoteQuestion>();
   const duplicateSpans = new Map<NoteQuestion, { answerSpans: AnswerSpan[]; promptSpans: AnswerSpan[] }>();
   const reverseAlternatives = new Map<string, { question: NoteQuestion; answers: string[] }>();
+  /**
+   * 5일: 연결어 뒤 자리를 "‘A’에서" 대신 "‘A’ 다음 자리의"로 읽게 바꾼 조건 글(`A 이후`) → 바꾸기 전 조건 글(`A`).
+   * 문제 키는 바꾸기 전 글로 만들어, 이미 푼 문제의 복습 기록이 그대로 이어진다.
+   */
+  const afterAlias = new Map<string, string>();
+  const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => afterAlias.get(text) ?? text);
   const add = (question: Omit<NoteQuestion, 'key' | 'level' | keyof ReviewQuestionDifficulty>) => {
     if (!question.prompt.trim() || !question.answer.trim() || question.prompt === question.answer) return;
-    const reverseIdentity = JSON.stringify([question.prompt, question.conditions, question.priority, question.columns]);
+    const keyConditions = keyConditionsOf(question.conditions);
+    const reverseIdentity = JSON.stringify([question.prompt, keyConditions, question.priority, question.columns]);
     const existingReverse = question.kind === 'reverse' ? reverseAlternatives.get(reverseIdentity) : undefined;
     if (existingReverse) {
       if (!existingReverse.answers.includes(question.answer)) existingReverse.answers.push(question.answer);
       existingReverse.question.answer = existingReverse.answers.map(answer => existingReverse.answers.length > 1 && answer.includes(' AND ') ? `(${answer})` : answer).join(' OR ');
       existingReverse.question.answerSpans.push(...question.answerSpans);
       existingReverse.question.promptSpans.push(...question.promptSpans);
-      existingReverse.question.key = `q2:${hash(JSON.stringify(['reverse', question.prompt, existingReverse.question.answer, question.conditions]))}:0`;
+      existingReverse.question.key = `q2:${hash(JSON.stringify(['reverse', question.prompt, existingReverse.question.answer, keyConditions]))}:0`;
       return;
     }
     // 능력 변환은 노트의 위치(위쪽 토글)나 관계 기호와 상관없이 같은 집합의 같은 값이면 같은 문제다: 조건을 키에 넣지 않는다
@@ -1013,7 +1011,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       ? [question.kind, question.prompt, question.answer, [], question.convert.steps, question.convert.given, question.convert.required, question.convert.partial]
       : question.convert
         ? [question.kind, question.prompt, question.answer, [], question.convert.steps.map(step => step.set)]
-        : [question.kind, question.prompt, question.answer, question.conditions]));
+        : [question.kind, question.prompt, question.answer, keyConditions]));
     const same = bySignature.get(signature);
     if (same) {
       const extra = duplicateSpans.get(same) ?? { answerSpans: [], promptSpans: [] };
@@ -1048,7 +1046,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 칸 이름은 칸의 위치에서만 온다: 관계 제목(`> A:B`)과 끝이 열린 제목(`> A:`)의 머리는 관계의 칸이라 이름이 붙고,
       // 글자만 있는 제목(`> ② 세 가지 표기`)은 아래 줄들의 위치일 뿐 분류기준 안의 칸이 아니라서 이름을 붙이지 않는다.
       const headsRelation = parsed.type === 'relation' || trailingRelation().test(titleSource(parent));
-      result.unshift({ text: title, spans: spans(parsed), columns: parsed.type === 'relation'
+      // 5일: 끝이 연결어로 열린 제목(`> A:` · `> A;`) 아래 줄은 그 연결어 뒤에 놓인 것이라 "‘A’ 다음 자리의"로 묻는다(`A:(B:C)`와 같음)
+      const open = Boolean(title) && trailingRelation().test(titleSource(parent));
+      if (open && !afterAlias.has(`${title} 이후`)) afterAlias.set(`${title} 이후`, title);
+      result.unshift({ text: open ? `${title} 이후` : title, spans: spans(parsed), columns: parsed.type === 'relation'
         ? parsed.fields.flatMap((field, index) => nonempty(field) ? [parsed.classifications[index]] : []) : headsRelation ? [offsetByNode.get(parent.id) ?? 0] : [] });
       parentId = parent.parentId;
     }
@@ -1085,14 +1086,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     return merged;
   };
   const implicitByExpression = new Map<Expression, string[][]>();
-  /**
-   * outer: `( )`로 묶은 안쪽(다른 계층)이 받을 조건. 바깥 줄의 첫 칸(A)은 `A:B,(N=P)`의 N → P와 상관이 없어 주지 않는다(4일 요청:
-   * "N을 보여주고 N의 능력적 집합을 보인 뒤 P를 맞춘다"). 없으면 context
-   */
-  const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0, outer?: QuestionCondition[]) => {
+  const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
     if (expression.type === 'text') return;
-    if (expression.grouped && outer) context = outer;
-    const innerOf = (item: Expression) => (item.type !== 'text' && item.grouped ? outer ?? context : context);
     const conditions = context.map(item => item.text);
     const conditionColumns = context.map(item => item.columns);
     const conditionSpans = context.map(item => item.spans);
@@ -1125,9 +1120,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
             answerSpans: spans(items[from]), promptSpans: spans(items[to]) });
         }
       }
-      expression.items.forEach((item, index) => visit(item, index === 0 ? innerOf(item)
-        : [...innerOf(item), { text: `${expressionLabel(combine('sequence', items.slice(0, index)))} 이후`,
-          columns: [inheritedColumn], spans: items.slice(0, index).flatMap(spans) }], inheritedColumn, baseScore, outer));
+      expression.items.forEach((item, index) => visit(item, index === 0 ? context
+        : [...context, { text: `${expressionLabel(combine('sequence', items.slice(0, index)))} 이후`,
+          columns: [inheritedColumn], spans: items.slice(0, index).flatMap(spans) }], inheritedColumn, baseScore));
       return;
     }
     if (expression.type === 'equal') {
@@ -1144,10 +1139,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         add({ ...base, prompt: base.answer, answer: base.prompt, direction: 'reverse', kind: 'reverse',
           answerSpans: base.promptSpans, promptSpans: base.answerSpans });
       });
-      expression.items.forEach(item => visit(item, innerOf(item), inheritedColumn, baseScore, outer));
+      expression.items.forEach(item => visit(item, context, inheritedColumn, baseScore));
       return;
     }
-    if (expression.type !== 'relation') { expression.items.forEach(item => visit(item, innerOf(item), inheritedColumn, baseScore, outer)); return; }
+    if (expression.type !== 'relation') { expression.items.forEach(item => visit(item, context, inheritedColumn, baseScore)); return; }
     const columns = expression.fields.map(head);
     const scores = columnScores(expression.separators, baseScore, expression.skips);
     // 모든 칸 앞에 `[집합]`을 쓴 관계는 능력 변환 문제의 최소 단위들이다(기본 관계·역방향·연결 추론 대신 낸다).
@@ -1244,7 +1239,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (goesForward(separator)) add({ ...base, kind: 'direct' });
       // 오른쪽이 여러 대안(토글 아래 `<`)이면 대안 하나하나를 보고 왼쪽을 떠올린다.
       if (!forwardOnly(separator)) for (const source of right.type === 'or' ? right.items : [right]) {
-        add({ ...base, prompt: expressionLabel(source), answer: expressionLabel(left), direction: 'reverse',
+        add({ ...base, prompt: expressionLabel(source), answer: base.prompt, direction: 'reverse',
           kind: 'reverse', answerSpans: base.promptSpans, promptSpans: spans(source),
           columns: { ...base.columns, prompt: base.columns.answer, answer: base.columns.prompt } });
       }
@@ -1342,6 +1337,15 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     }
     // 모든 칸이 집합이 있는 칸(능력 변환)이면 칸 안의 덩어리는 위에서 변주로 냈으니 `[ ]` 글이 새는 보통 문제로 다시 내지 않는다
     // (능력 변환 줄에서도 칸 전체가 `( )`인 안쪽 관계는 그 칸을 대표하는 첫 값만 위에서 다뤘으니, 안쪽 관계는 따로 읽는다)
+    /**
+     * 5일: 연결어(`:` `;` `<`) 뒤 칸 안의 관계는 "‘A’에서"가 아니라 순서의 `이후`처럼 "‘A’ 다음 자리의"로 묻는다.
+     * 앞 칸이 여럿이면 모두 순서대로 보인다(`a:(b:c):(d:c)`의 d → c는 "‘a → b’ 다음 자리의 ‘d’ 다음 값은?")
+     */
+    const afterOf = (index: number): QuestionCondition => {
+      const text = `${expressionLabel(combine('sequence', columns.slice(0, index)))} 이후`;
+      if (!afterAlias.has(text)) afterAlias.set(text, expressionLabel(columns[0]));
+      return { text, columns: expression.classifications.slice(0, index), spans: columns.slice(0, index).flatMap(spans) };
+    };
     expression.fields.forEach((field, index) => {
       // 능력 변환 줄의 목록 칸에 든 갈래(`[N] C,(V:[P] O)`의 `V:[P] O`)는 안쪽 관계라 따로 읽는다(3일)
       if (convertible && field.type === 'and') {
@@ -1349,20 +1353,15 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
           if (item.type !== 'relation') return;
           // 갈래의 첫 값은 그 칸의 집합을 따른다(`[N] C,(V:…)`의 V도 N)
           implicitByExpression.set(item, [[convertFields[index]!.set], ...implicit.slice(index + 1)]);
-          visit(item, index > 0 && !item.grouped
-            ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
-            : context, expression.classifications[index], scores[index], context);
+          visit(item, index > 0 ? [...context, afterOf(index)] : context, expression.classifications[index], scores[index]);
         });
         return;
       }
       if (convertible && field.type !== 'relation') return;
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
-      // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 안쪽 관계는 첫 칸을 자리로 두고 묻는다
-      // 4일: `( )`로 묶은 칸(다른 계층)은 첫 칸을 조건으로 주지 않는다(outer = 바깥 줄 조건)
-      visit(field, index > 0
-        ? [...context, { text: expressionLabel(columns[0]), columns: [expression.classifications[0]], spans: spans(columns[0]) }]
-        : context, expression.classifications[index], scores[index], context);
+      // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 5일: 안쪽 관계(괄호든 칸 안 `=` · `-`든)는 앞 칸들 다음 자리로 묻는다
+      visit(field, index > 0 ? [...context, afterOf(index)] : context, expression.classifications[index], scores[index]);
     });
   };
   /**

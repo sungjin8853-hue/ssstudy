@@ -112,7 +112,8 @@ export const placeOf = (conditions: readonly string[], labels?: readonly (readon
   const afters = entries.filter(item => AFTER.test(item.text));
   const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text));
   return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
-    ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(', ')} 다음 자리의 ` : ''}`;
+    // 5일: 겹친 `이후`(바깥 칸 다음 자리 안의 또 다음 자리)는 순서대로 이어 보인다: ‘A’ → ‘B’ 다음 자리의
+    ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(' → ')} 다음 자리의 ` : ''}`;
 };
 
 /** 문제 한 개의 줄글. 줄글로 바꾸지 않는 종류(노트 회상 · 능력 변환)는 null. attrs가 있으면 값마다 속성 이름을 붙인다. */

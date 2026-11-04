@@ -1379,7 +1379,7 @@ test('all sequence stages and partial logical facts keep their containing classi
 test('lines under a toggle title that ends with a colon sit after the title, so each ancestor shifts the classification columns', () => {
   const memo = ':::toggle 상위:설명:\n:::toggle 중간:\n값:뜻\n:::end\n:::end';
   const question = questionsFor(memo).find(q => q.kind === 'direct' && q.prompt === '값');
-  assert.deepEqual(question.conditions, ['상위:설명', '중간']);
+  assert.deepEqual(question.conditions, ['상위:설명 이후', '중간 이후']);
   // 상위:설명 이 0·1번째 칸, 중간이 2번째, 값·뜻이 3·4번째: 세션 기준의 해당 `:`번째 이름을 가져온다
   assert.deepEqual(questionBuilder.getReviewQuestionClassification('대상:정의:예시:쓰임:근거', question), {
     prompt: ['쓰임'], answer: ['근거'], conditions: [['대상', '정의'], ['예시']]
@@ -1479,11 +1479,11 @@ test('equals is a higher-importance colon while periods, decimals and spaces sta
 test('nested relation columns restart their labels, keep the outer importance, and outer relations use only branch heads', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
   // 31일: "A의 B" 해석은 없앴다. 안쪽 관계는 첫 칸이 자리(조건)다
-  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a']], ['b', 'd', 2, []], ['d', 'c', 3, ['a']]]);
+  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a 이후']], ['b', 'd', 2, []], ['d', 'c', 3, ['a → b 이후']]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
-  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a']], ['d', 'c', 2, ['a']]]);
+  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a 이후']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a 이후']], ['d', 'c', 2, ['a 이후']]]);
   const equalColored = memoColors.splitReviewMemoColonColors('a:(b:c)=(d:c):e // f:g');
   assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 0, 1, 0]);
 });
@@ -1503,7 +1503,7 @@ test('reverse questions with identical conditions collect valid alternatives ins
   const reversed = questionsFor('x:(b:c) // x:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(reversed.length, 1);
   assert.equal(reversed[0].answer, 'b OR d');
-  assert.deepEqual(reversed[0].conditions, ['x']);
+  assert.deepEqual(reversed[0].conditions, ['x 이후']);
   const separate = questionsFor('x:(b:c) // y:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(separate.length, 2);
 });
@@ -1552,7 +1552,7 @@ test('sequence questions ask the next and previous stage, then reconstruct the o
   assert.deepEqual(questionsFor('a-b-c').filter(q => q.kind === 'direct' || q.kind === 'reverse').map(q => `${q.kind}|${q.prompt}|${q.answer}`), ['direct|a|b', 'direct|b|c']);
   assert.equal(questionsFor('a-b-c').find(q => q.kind === 'reconstruct').answer, 'b → c');
   // 다른 연결어가 있는 줄의 `-`는 전처럼 한 칸 안의 순서다
-  const questions = questionsFor('X:a-b-c').filter(q => q.conditions.includes('X'));
+  const questions = questionsFor('X:a-b-c').filter(q => q.conditions.includes('X 이후'));
   assert.deepEqual(questions.filter(q => q.kind === 'order-next').map(q => [q.prompt, q.answer, q.level]), [['a', 'b', 1], ['b', 'c', 1]]);
   assert.deepEqual(questions.filter(q => q.kind === 'order-previous').map(q => [q.prompt, q.answer, q.level]), [['b', 'a', 1], ['c', 'b', 1]]);
   const full = questions.find(q => q.kind === 'order-reconstruct');
@@ -1598,9 +1598,9 @@ test('ordered branches only supply completed prefixes', () => {
 test('nested sequence stages retain parent toggle conditions and keep the importance of the column they sit in', () => {
   const memo = reviewMemo.serializeReviewMemoBlocks([{ type: 'toggle', title: '상위:', text: '학습:[a-[b:c]-d],[e,f]' }]);
   const questions = questionsFor(memo);
-  assert.deepEqual(questions.find(q => q.kind === 'order-next' && q.prompt === 'a').conditions, ['상위', '학습']);
+  assert.deepEqual(questions.find(q => q.kind === 'order-next' && q.prompt === 'a').conditions, ['상위 이후', '학습 이후']);
   const nested = questions.find(q => q.kind === 'direct' && q.prompt === 'b');
-  assert.deepEqual(nested.conditions, ['상위', '학습', 'a 이후']);
+  assert.deepEqual(nested.conditions, ['상위 이후', '학습 이후', 'a 이후']);
   assert.equal(nested.priority, 2, 'b:c sits in the second column, so it is not among the most important pairs');
   assert.equal(questions.find(q => q.kind === 'order-reconstruct').answer, '(b → c) → d');
 });
@@ -1640,8 +1640,8 @@ test('ancestor conditions come from the actual toggle path and do not leak a sib
     { type: 'toggle', title: '자전거:', text: '페달<회전' }
   ]);
   const questions = questionsFor(memo);
-  assert.deepEqual(questions.find(q => q.kind === 'direct' && q.prompt === '전기').conditions, ['자동차', '엔진']);
-  assert.deepEqual(questions.find(q => q.kind === 'reverse' && q.prompt === '회전').conditions, ['자전거']);
+  assert.deepEqual(questions.find(q => q.kind === 'direct' && q.prompt === '전기').conditions, ['자동차 이후', '엔진 이후']);
+  assert.deepEqual(questions.find(q => q.kind === 'reverse' && q.prompt === '회전').conditions, ['자전거 이후']);
   assert.ok(!questions.some(q => q.kind === 'direct' && q.prompt === '페달'), '페달<회전 is the reverse relation: only the reverse is asked');
   assert.ok(!questions.some(q => q.kind === 'context'), 'a parent condition is never asked from its child');
 });
@@ -6876,7 +6876,7 @@ test('far questions: one answer several steps away, the process is shown with th
   assert.ok(nested.some(q => q.prompt === 'A' && q.answer === 'D' && q.process === 'A → B → C → D'), 'a chain continues through a last-cell relation');
   assert.ok(!nested.some(q => q.prompt === 'D' && q.direction === 'reverse' && (q.answer === 'A' || q.answer === 'B')), 'a grouped relation can be entered but not walked back out of');
   assert.ok(nested.some(q => q.prompt === 'C' && q.answer === 'D') === false, 'a pair has nothing far away');
-  assert.ok(nested.filter(q => q.prompt === 'B' && q.answer === 'D').every(q => q.conditions.includes('A')), 'a chain inside carries the outer cell as a condition (31일: "A의" 해석 없음)');
+  assert.ok(nested.filter(q => q.prompt === 'B' && q.answer === 'D').every(q => q.conditions.includes('A 이후')), 'a chain inside carries the outer cell as a condition (31일: "A의" 해석 없음)');
   const sequence = far('A-B-C-D', 2).filter(q => q.direction === 'forward');
   assert.deepEqual(sequence.map(q => q.process), ['A → B → C', 'B → C → D']);
   const group = far('A:(B,(K,F)):H');
@@ -6890,8 +6890,8 @@ test('= is a classification-free logic word inside one cell: A:B=C is the cells 
   assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'A'), [['A', 'F = G', 1, []]]);
   assert.ok(questionsFor('A:F=G').some(q => q.kind === 'reverse' && q.prompt === 'F = G' && q.answer === 'A'));
   // 칸 안에서는 이웃한 값끼리 앞으로도 거꾸로도 이어진다(칸이 놓인 자리 A가 조건)
-  assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'F'), [['F', 'G', 1, ['A']]]);
-  assert.ok(questionsFor('A:F=G').some(q => q.kind === 'reverse' && q.prompt === 'G' && q.answer === 'F' && q.conditions.join() === 'A'));
+  assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'F'), [['F', 'G', 1, ['A 이후']]]);
+  assert.ok(questionsFor('A:F=G').some(q => q.kind === 'reverse' && q.prompt === 'G' && q.answer === 'F' && q.conditions.join() === 'A 이후'));
   assert.deepEqual(direct('A=B'), [['A', 'B', 1, []]]);
   // 31일: 다른 연결어 없이 홀로 쓴 `=`는 `:` 역할이라 칸을 나눈다(뒤 칸일수록 덜 중요)
   assert.deepEqual(direct('A=B=C').map(item => item.slice(0, 3)), [['A', 'B', 1], ['B', 'C', 2]]);
@@ -7060,13 +7060,10 @@ test('the note tab has a practice button, and the range dialog offers units and 
 });
 
 test('grouping brackets are ( ): they make the same questions as the old [ ] grouping, and [ ] stays the classification criterion', () => {
-  // 4일: `( )`는 다른 계층이라 안쪽 문제에 바깥 첫 칸을 조건으로 주지 않는다(옛 `[ ]` 묶음은 그대로라 조건만 다르다).
-  // 그래서 옛 묶음의 문제(조건 빼고)는 모두 `( )`에도 있다
   const same = (paren, square) => {
-    const sign = memo => [...new Set(questionsFor(memo).map(q => `${q.kind}|${q.prompt}=>${q.answer}`))];
-    const parenSigns = sign(paren);
-    sign(square).forEach(item => assert.ok(parenSigns.includes(item), `${paren} has ${item}`));
-    assert.ok(parenSigns.length > 0);
+    const sign = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}=>${q.answer}|${q.conditions.join('>')}`);
+    assert.deepEqual(sign(paren), sign(square), `${paren} reads like ${square}`);
+    assert.ok(sign(paren).length > 0);
   };
   same('A:(B:(C-D),(K=F))', 'A:[B:[C-D],[K=F]]');
   same('성립;(a=b),(c=(d,e))', '성립;[a=b],[c=[d,e]]');
@@ -7178,9 +7175,9 @@ test('every question kind is asked as a workbook sentence: no AND/OR in the ques
   assert.equal(by('A:p,q,r', 'remaining', 'A').statement.startsWith('‘A’에 필요한 것 중 ‘'), true);
   assert.ok(questionsFor('A:p,q,r').some(q => q.statement === '‘A’에 필요한 것 중 ‘p, q’ 외에 남은 것은?' && q.answer === 'r'));
   // 순서
-  assert.equal(by('A:p-q-r', 'order-next', 'p').statement, '‘A’에서 ‘p’ 바로 다음에 오는 것은?');
-  assert.equal(by('A:p-q-r', 'order-previous', 'q').statement, '‘A’에서 ‘q’ 바로 앞에 오는 것은?');
-  assert.equal(by('A:p-q-r', 'order-reconstruct').statement, '‘A’에서 ‘p’ 다음에 오는 것을 순서대로 쓰시오.');
+  assert.equal(by('A:p-q-r', 'order-next', 'p').statement, '‘A’ 다음 자리의 ‘p’ 바로 다음에 오는 것은?');
+  assert.equal(by('A:p-q-r', 'order-previous', 'q').statement, '‘A’ 다음 자리의 ‘q’ 바로 앞에 오는 것은?');
+  assert.equal(by('A:p-q-r', 'order-reconstruct').statement, '‘A’ 다음 자리의 ‘p’ 다음에 오는 것을 순서대로 쓰시오.');
   assert.equal(by('A:B:C:D', 'reconstruct').statement, '‘A’ 다음의 값을 끝까지 순서대로 쓰시오.');
   // 연결 추론: 몇 걸음인지
   assert.equal(by('A:B:C:D', 'far', 'A').statement, '‘A’부터 두 걸음 뒤의 값은?');
@@ -7188,9 +7185,9 @@ test('every question kind is asked as a workbook sentence: no AND/OR in the ques
   // 줄 안의 칸을 가린 문제
   assert.ok(questionsFor('A:B:C:D').some(q => q.kind === 'blank' && q.statement === '‘A → ( ㉠ ) → ( ㉡ ) → D’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.' && q.answer === 'B → C'));
   // 한 칸 안의 `=` 이웃 쌍과 위쪽 토글 칸
-  assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’에서 ‘p’에 대응하는 것은?');
-  assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’에서 ‘p’ 다음 자리의 ‘q’에 대응하는 것은?'));
-  assert.equal(questionsFor(':::toggle 자동차 :\n엔진:동력\n:::end').find(q => q.kind === 'direct' && q.prompt === '엔진').statement, '‘자동차’에서 ‘엔진’ 다음 값은?');
+  assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’ 다음 자리의 ‘p’에 대응하는 것은?');
+  assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’ → ‘p’ 다음 자리의 ‘q’에 대응하는 것은?'));
+  assert.equal(questionsFor(':::toggle 자동차 :\n엔진:동력\n:::end').find(q => q.kind === 'direct' && q.prompt === '엔진').statement, '‘자동차’ 다음 자리의 ‘엔진’ 다음 값은?');
   // 노트 회상은 그대로
   assert.equal(questionsFor('그냥 글').find(q => q.kind === 'recall').statement, undefined);
 });
@@ -7234,7 +7231,7 @@ test('an = cell of three words blanks every word and every pair as a prose quest
   // `=`가 `-`보다 단단히 묶인다: `q = r`은 순서 안의 한 덩어리
   const mixed = questionsFor('A:p-q=r');
   assert.ok(mixed.some(q => q.statement === '‘A’에서는 ‘( ㉠ ) → (q = r)’ 순서로 이어진다. ㉠에 알맞은 것은?'));
-  assert.ok(mixed.some(q => q.kind === 'direct' && q.prompt === 'q' && q.answer === 'r' && q.conditions.join('|') === 'A|p 이후'));
+  assert.ok(mixed.some(q => q.kind === 'direct' && q.prompt === 'q' && q.answer === 'r' && q.conditions.join('|') === 'A 이후|p 이후'));
 });
 
 test('merging also holds for every word inside a logic cell: = , - cells take an incoming line at the word, with the same attribute path', () => {
@@ -8413,11 +8410,11 @@ test('prose sentences carry the attribute of every value (given, conditions, ask
   const criterion = '개념:정의:예시';
   const nested = questionsFor(':::toggle 자동차 :\n엔진:동력\n:::end');
   const direct = nested.find(q => q.kind === 'direct' && q.prompt === '엔진');
-  assert.equal(getReviewQuestionSentence(criterion, direct).statement, '개념 ‘자동차’에서 정의 ‘엔진’의 예시는?');
+  assert.equal(getReviewQuestionSentence(criterion, direct).statement, '개념 ‘자동차’ 다음 자리의 정의 ‘엔진’의 예시는?');
   const reverse = nested.find(q => q.kind === 'reverse' && q.prompt === '동력');
-  assert.equal(getReviewQuestionSentence(criterion, reverse).statement, '개념 ‘자동차’에서 예시 ‘동력’의 정의는?');
+  assert.equal(getReviewQuestionSentence(criterion, reverse).statement, '개념 ‘자동차’ 다음 자리의 예시 ‘동력’의 정의는?');
   // 기준이 없으면 속성 이름 없이 같은 문장(조사만 그대로)
-  assert.equal(getReviewQuestionSentence(null, direct).statement, '‘자동차’에서 ‘엔진’ 다음 값은?');
+  assert.equal(getReviewQuestionSentence(null, direct).statement, '‘자동차’ 다음 자리의 ‘엔진’ 다음 값은?');
   // 모든 종류의 문제가 속성이 든 문장을 받는다
   for (const question of questionsFor('자동차 : 바퀴-축 : 타이어').filter(q => q.kind !== 'recall')) {
     const sentence = getReviewQuestionSentence(criterion, question);
@@ -8428,8 +8425,8 @@ test('prose sentences carry the attribute of every value (given, conditions, ask
   const cell = questionsFor(':::toggle 자동차 :\n엔진:점화-가속-출력\n:::end').find(q => q.kind === 'blank' && q.cell);
   assert.ok(cell, 'the cell blank keeps its parts so it can be rewritten');
   const text = getReviewQuestionSentence(criterion, cell).statement;
-  assert.ok(text.startsWith('개념 ‘자동차’에서 정의 ‘엔진’에서는 예시 ‘') && /예시 값/.test(text), text);
-  assert.ok(cell.statement.startsWith('‘자동차’에서 ‘엔진’에서는 ‘'), 'without the criterion the condition is still in the sentence');
+  assert.ok(text.startsWith('개념 ‘자동차’ 다음 자리의 정의 ‘엔진’에서는 예시 ‘') && /예시 값/.test(text), text);
+  assert.ok(cell.statement.startsWith('‘자동차’ 다음 자리의 ‘엔진’에서는 ‘'), 'without the criterion the condition is still in the sentence');
   // 능력 변환 카드
   const convert = questionsFor('[a] b ; [c] d').find(q => q.kind === 'convert');
   assert.ok(getReviewQuestionSentence('대상:설명:예시', convert).statement.includes('값은?'));
@@ -8452,7 +8449,7 @@ test('flash look: conditions, the given attribute and the asked attribute are bi
   const prose = render('prose');
   assert.match(prose, /data-review-style="prose"/);
   assert.ok(!prose.includes('data-flash-condition') && !prose.includes('data-flash-ask') && !prose.includes('data-field-label'));
-  assert.equal(plainText(prose).includes('개념 ‘자동차’에서 정의 ‘엔진’의 예시는?'), true);
+  assert.equal(plainText(prose).includes('개념 ‘자동차’ 다음 자리의 정의 ‘엔진’의 예시는?'), true);
 });
 
 test('ability-convert cards follow the chosen look too', () => {
@@ -8637,7 +8634,7 @@ test('( ) inherits the criterion of its place (31st): inside, the first value ta
   // the sentence carries the inherited names
   const { getReviewQuestionSentence } = questionBuilder;
   const inner = questionBuilder.buildReviewQuestions(':::toggle [개념:정의;예시]\n임진왜란 : (원인 : 일본의 야욕) ; 1592년\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === '원인' && q.answer === '일본의 야욕');
-  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’에서 정의 ‘원인’의 예시는?');
+  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’ 다음 자리의 정의 ‘원인’의 예시는?');
 });
 
 test('[집합(1)] : [집합(2)] connects the sub-values of the two sets: relation lines between them become ability-convert questions', () => {
@@ -9591,7 +9588,7 @@ test('flash keywords: where the question sits, the given value, the linking word
   const direct = questionsFor(memo).find(q => q.kind === 'direct' && q.prompt === '엔진');
   const labels = questionBuilder.getReviewQuestionClassification('개념:정의:예시', direct);
   const card = flashOf(direct, { prompt: labels.prompt, answer: labels.answer, conditions: labels.conditions });
-  assert.deepEqual(card.place.map(chip => [chip.role, chip.label, chip.value]), [['place', ['개념'], '자동차']]);
+  assert.deepEqual(card.place.map(chip => [chip.role, chip.label, chip.value]), [['after', ['개념'], '자동차']]);
   assert.deepEqual(card.given, { label: ['정의'], value: '엔진' });
   assert.deepEqual(card.relation, { word: '다음', arrow: 'forward' });
   assert.deepEqual(card.ask, { label: ['예시'], mode: null });
@@ -9644,7 +9641,7 @@ test('flash card renders one row of keywords; the asked slot is "?" until the an
   assert.match(shown, /data-question-field="answer"[^>]*>[\s\S]*data-flash-ask="true"[\s\S]*data-flash-answer="true"/, 'the answer takes the slot under the same asked label');
   // 줄글은 그대로(문장 하나, 키워드 줄 없음)
   const prose = render('prose', false);
-  assert.ok(!prose.includes('data-flash-row') && plainText(prose).includes('개념 ‘자동차’에서 정의 ‘엔진’의 예시는?'));
+  assert.ok(!prose.includes('data-flash-row') && plainText(prose).includes('개념 ‘자동차’ 다음 자리의 정의 ‘엔진’의 예시는?'));
   // 여럿을 쓰는 문제: 쓰는 방법 한 줄
   const many = questionsFor('a:b,c,d').find(q => q.kind === 'remaining' && q.answer === 'c AND d');
   const manyHtml = inStyle('flash', () => renderToStaticMarkup(React.createElement(ReviewQuestionContent, { memo: 'a:b,c,d', question: many, criterion: null, revealed: false })));
@@ -10250,7 +10247,7 @@ test('a lone [X] on a later cell (no criterion, not all cells set) names that ce
   assert.deepEqual(say('임진왜란 : [원인] 일본의 야욕'), ['‘임진왜란’의 원인은?', '원인 ‘일본의 야욕’ 앞의 값은?']);
   const inner = say('세포 : (막 : [기능] 보호)');
   // `세포 : (막 : …)`는 "세포의 막": 바깥 칸은 "의"로 잇는다(27일)
-  assert.ok(inner.includes('‘세포’에서 ‘막’의 기능은?') && inner.includes('‘세포’에서 기능 ‘보호’ 앞의 값은?'), inner.join(' | '));
+  assert.ok(inner.includes('‘세포’ 다음 자리의 ‘막’의 기능은?') && inner.includes('‘세포’ 다음 자리의 기능 ‘보호’ 앞의 값은?'), inner.join(' | '));
   // 첫 칸만의 [a]는 전처럼 조건, 모든 칸의 [ ]는 전처럼 능력 변환
   assert.deepEqual(questionsFor('[a] X:y').map(q => q.conditions), [['a'], ['a']]);
   assert.ok(questionsFor('[사건] 임진왜란 : [원인] 일본의 야욕').every(q => q.convert));
@@ -10712,12 +10709,12 @@ test('27일 노트 규칙(31일 바뀜): 괄호 안은 놓인 자리의 기준�
   const say = memo => buildReviewQuestions(memo).questions.map(q => ({ q, text: getReviewQuestionSentence(q.criterion ?? null, q)?.statement }));
   // A:(B:C): A는 자리, 괄호 안 B → C는 따로 문제가 된다(31일: "A의 B" 없음)
   const owner = say('A값:(B값:C값)');
-  assert.ok(owner.some(item => item.text === '‘A값’에서 ‘B값’ 다음 값은?' && item.q.answer === 'C값'));
+  assert.ok(owner.some(item => item.text === '‘A값’ 다음 자리의 ‘B값’ 다음 값은?' && item.q.answer === 'C값'));
   assert.ok(owner.some(item => item.text === '‘A값’ 다음 값은?' && item.q.answer === 'B값'));
   assert.ok(!owner.some(item => /‘A값’의/.test(item.text)));
   // (B:C),(d:f): 괄호 안 첫 값은 놓인 칸(B)의 이름을 이어받는다
   const both = say(':::toggle [A:B] 바깥\nA값:(B값:C값),(d값:f값)\n:::end').map(item => item.text);
-  assert.ok(both.includes('‘바깥’, A ‘A값’에서 B ‘B값’ 다음 값은?') && both.includes('‘바깥’, A ‘A값’에서 B ‘d값’ 다음 값은?'), both.join(' | '));
+  assert.ok(both.includes('‘바깥’에서 A ‘A값’ 다음 자리의 B ‘B값’ 다음 값은?') && both.includes('‘바깥’에서 A ‘A값’ 다음 자리의 B ‘d값’ 다음 값은?'), both.join(' | '));
   // (d:e):x는 첫 칸이 괄호: 안쪽 d는 A, e는 B를 이어받고, 괄호 뒤 칸 x는 B다
   const first = buildReviewQuestions(':::toggle [A:B] 바깥\n(d값:e값):x값\n:::end').questions;
   const inner = first.find(q => q.kind === 'direct' && q.prompt === 'd값' && q.answer === 'e값');
@@ -10793,7 +10790,7 @@ test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽�
   assert.deepEqual(pairs(':::toggle A: #\nx\ny:z\n:::end'), ['|A>x', '|A>y', '|y>z']);
   assert.deepEqual(pairs(':::toggle A: # :B\nx\n:::end'), ['|A>x', '|x>B']);
   // 괄호 안에 넣어도 31일부터 "A의 x" 해석은 없다: A는 자리다
-  assert.deepEqual(pairs(':::toggle A;(#)\nx:y\n:::end'), ['|A>x', 'A|x>y']);
+  assert.deepEqual(pairs(':::toggle A;(#)\nx:y\n:::end'), ['|A>x', 'A 이후|x>y']);
   assert.ok(pairs(':::toggle A;[#]\nx\n:::end').includes('|A>x'));
   // 제목의 #은 문제 글에 나오지 않는다
   assert.ok(buildReviewQuestions(':::toggle A: #\nx\n:::end').questions.every(q => !`${q.prompt}${q.answer}${q.conditions.join('')}`.includes('#')));
@@ -11112,7 +11109,7 @@ test('1일: chapters for "복습에 넣기" — only never-registered records, a
 
 test('1일: = in a cell asks "대응하는 것" (as before), a lone = asks "같은 것"; 2일: no # distinction — [X]:[Y] works as before', () => {
   const asked = (memo) => questionsFor(memo).filter(q => q.kind === 'direct' && (q.form === 'match' || q.form === 'equal')).map(q => q.statement);
-  assert.deepEqual(asked('사과:빨강=둥글다'), ['‘사과’에서 ‘빨강’에 대응하는 것은?']);
+  assert.deepEqual(asked('사과:빨강=둥글다'), ['‘사과’ 다음 자리의 ‘빨강’에 대응하는 것은?']);
   assert.deepEqual(asked('물 = H2O'), ['‘물’과 같은 것은?']);
   const ns = loadSource('utils/noteSets.ts');
   assert.deepEqual(ns.buildNoteSetIndex([':::toggle 도형\n원\n:::end\n[도형]:[개념:정의]']).abilities.map(item => [item.expression, item.criterion]), [['도형', '개념:정의']]);
@@ -11556,41 +11553,6 @@ test('4일 점검: under a # frame an open line (B: then C) is one framed line i
   assert.ok(editor.includes('const midLineNestOk = ') && editor.includes('nestCuts(line).includes(at)'), 'a quoted or bracketed > is a letter');
 });
 
-test("4일: ( ) is another layer — A:B,(N=P) asks N → P with only N (and N's ability set), never A; full recall questions stay; without ( ) the in-cell = keeps A", () => {
-  const { getReviewQuestionSentence } = questionBuilder;
-  const said = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}|${q.answer}|${q.conditions.join('/')}|${getReviewQuestionSentence(q.criterion ?? null, q).statement}`);
-  const paren = said('A:B,(N=P)');
-  assert.ok(paren.includes('direct|N|P||‘N’에 대응하는 것은?') && paren.includes('reverse|P|N||‘P’에 대응하는 것은?'));
-  assert.ok(paren.some(item => item.startsWith('direct|A|B AND (N = P)|')), 'the full recall stays');
-  assert.ok(paren.some(item => item.startsWith('remaining|A|N = P|')), 'the remaining recall stays');
-  assert.ok(said('A:B,N=P').includes('direct|N|P|A|‘A’에서 ‘N’에 대응하는 것은?'), 'no ( ): the in-cell = still sits in A');
-  // 4일 23:46: 괄호 안에 `:` `;` `<`가 있으면 능력적 집합이 바깥과 이어져 전처럼 첫 칸(a)을 자리로 둔다
-  assert.ok(said('a:(b:c)').includes('direct|b|c|a|‘a’에서 ‘b’ 다음 값은?'));
-  assert.ok(said('A:B,(N-P:Q)').includes('direct|N → P|Q|A|‘A’에서 ‘N → P’ 다음 값은?'));
-  // N의 능력적 집합이 있으면 그 집합이 문제에 보인다
-  const React = require('react');
-  const { renderToStaticMarkup } = require('react-dom/server');
-  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
-  const memo = '[과일]:[개념:정의]\n:::toggle 과일\nN\n:::end\nA:B,(N=P)';
-  const q = questionsFor(memo).find(item => item.kind === 'direct' && item.prompt === 'N');
-  assert.deepEqual(q.conditions, []);
-  assert.ok(renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: q, revealed: false, memo })).includes('N ∈ 과일'));
-});
-
-test('4일 23:46: 괄호 안에 : ; <가 있으면 다른 계층으로 떼지 않고 전처럼 바깥 칸에 이어진다(문제 글이 겹치지 않음)', () => {
-  const { buildReviewQuestions, getReviewQuestionSentence } = loadSource('utils/reviewQuestions.ts');
-  const asked = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct' || q.kind === 'reverse')
-    .map(q => [getReviewQuestionSentence(null, q).statement, q.answer]);
-  const econ = asked('공급 : (생산비 감소 : 공급 증가) ; 가격 하락');
-  assert.ok(econ.some(([s, a]) => s === '‘공급’에서 ‘생산비 감소’ 다음 값은?' && a === '공급 증가'));
-  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 다음 값은?' && a === '가격 하락'));
-  const bySentence = new Map();
-  econ.forEach(([s, a]) => bySentence.set(s, [...(bySentence.get(s) ?? []), a]));
-  assert.ok([...bySentence.values()].every(answers => answers.length === 1), JSON.stringify([...bySentence]));
-  // `=` `-` `,`만 든 괄호는 그대로 다른 계층(첫 칸을 주지 않음)
-  assert.ok(asked('A:B,(N=P)').some(([s, a]) => s === '‘N’에 대응하는 것은?' && a === 'P'));
-});
-
 test('4일 점검: [ ]만 쓴 토글 제목은 문제 글에서 괄호 없이 보인다(키는 그대로)', () => {
   const { readableLabel } = loadSource('utils/questionStatement.ts');
   assert.equal(readableLabel('[세포 소기관]'), '세포 소기관');
@@ -11602,4 +11564,31 @@ test('4일: 재는 동안의 난도 피드백엔 실시간 이번 속도를 보�
   assert.ok(!/>이번 속도</.test(logger) && !/이번 속도 <span/.test(logger));
   const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/RegisterReviewDialog.tsx'), 'utf8');
   assert.ok(dialog.includes('이번 속도 <span'));
+});
+
+test('5일: 연결어(: ; <) 뒤 칸 안의 관계는 "‘A’에서" 대신 "‘A’ 다음 자리의"로 묻는다 — 괄호든 칸 안 = · -든, 끝이 열린 토글 제목(> A:)도. 문제 키는 그대로', () => {
+  const { buildReviewQuestions, getReviewQuestionSentence, getReviewQuestionClassification } = loadSource('utils/reviewQuestions.ts');
+  const asked = (memo, criterion = null) => buildReviewQuestions(memo).questions.map(q => ({ q, s: getReviewQuestionSentence(criterion, q).statement }));
+  const has = (list, s, answer) => list.some(item => item.s === s && item.q.answer === answer);
+  // 괄호 안 `=`: 82 전과 같은 문제들(전체 회상 · 남은 것 포함)이 나오고, 자리 말만 바뀐다
+  const eq = asked('A:B,(N=P)');
+  assert.ok(has(eq, '‘A’ 다음 자리의 ‘N’에 대응하는 것은?', 'P') && has(eq, '‘A’ 다음 자리의 ‘P’에 대응하는 것은?', 'N'));
+  assert.ok(eq.some(item => item.q.kind === 'direct' && item.q.answer === 'B AND (N = P)') && eq.some(item => item.q.kind === 'remaining' && item.q.answer === 'N = P'));
+  assert.ok(has(asked('A;B,N=P'), '‘A’ 다음 자리의 ‘N’에 대응하는 것은?', 'P'), 'without ( ) and after ;');
+  // 키는 바꾸기 전(조건 `A`)과 같다: 이미 푼 문제의 복습 기록이 이어진다
+  assert.equal(eq.find(item => item.q.kind === 'direct' && item.q.prompt === 'N').q.key, 'q2:1df08kh:0');
+  // 앞 칸이 여럿이면 순서대로: (d:c)는 a → b 다음 자리
+  const chain = asked('a:(b:c):(d:c)');
+  assert.ok(has(chain, '‘a → b’ 다음 자리의 ‘d’ 다음 값은?', 'c') && has(chain, '‘a’ 다음 자리의 ‘b’ 다음 값은?', 'c') && has(chain, '‘b’ 다음 값은?', 'd'));
+  assert.equal(chain.find(item => item.q.kind === 'direct' && item.q.prompt === 'd').q.key, 'q2:1bdqdb6:0');
+  // 겹친 자리는 → 로 잇는다
+  assert.ok(has(asked('A:(B:(C-D),(K=F))'), '‘A’ → ‘B’ 다음 자리의 ‘K’에 대응하는 것은?', 'F'));
+  // 끝이 열린 토글 제목은 연결어 뒤, 그냥 제목은 자리(에서)
+  assert.ok(has(asked(':::toggle 광합성:\n엽록체:틸라코이드\n:::end'), '‘광합성’ 다음 자리의 ‘엽록체’ 다음 값은?', '틸라코이드'));
+  assert.ok(has(asked(':::toggle 조선 전기\n태조:이성계\n:::end'), '‘조선 전기’에서 ‘태조’ 다음 값은?', '이성계'));
+  // 괄호 안에 연결어를 쓰면 그 자리부터 능력(분류기준 칸)이 차례로 이어진다
+  const sets = buildReviewQuestions('A:B,(N:P)').questions.find(q => q.kind === 'direct' && q.prompt === 'N');
+  const columns = getReviewQuestionClassification('개념:정의:예시', sets);
+  assert.deepEqual([columns.prompt, columns.answer], [['정의'], ['예시']]);
+  assert.equal(getReviewQuestionSentence('개념:정의:예시', sets).statement, '개념 ‘A’ 다음 자리의 정의 ‘N’의 예시는?');
 });
