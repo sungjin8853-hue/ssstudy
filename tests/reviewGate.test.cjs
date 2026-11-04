@@ -11605,3 +11605,14 @@ test('5일 점검: 빈 칸은 "다음 자리" 글에 넣지 않고, 키를 잇�
   const seqKey = memo => buildReviewQuestions(memo).questions.find(q => q.kind === 'direct' && q.prompt === 'P' && q.conditions.length === 2).key;
   assert.equal(seqKey('Z:A-(P:Q) // A:(P:Q)'), seqKey('Z:A-(P:Q)'));
 });
+
+test('5일 점검: 바로 복습 넣기의 끝 페이지가 틀리면 넣을 수 있는 범위(단원이 있으면 단원 안)를 알린다', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes("endPageForSolved(stageChapters, cutStartPage, remainingSubjectPages)") && logger.includes("', 단원 안 페이지'"));
+  assert.ok(!logger.includes('(${pagePos}.${cutStartPage} 이상).`'));
+  // 단원 사이 빈 쪽은 끝 페이지가 될 수 없고, 단원을 건너 넣으면 단원 안 장수만 센다(1~10 · 21~30에서 9→22는 4장)
+  const { createPageMeasurement } = loadSource('utils/measurement.ts');
+  const chapters = [{ startPage: 1, endPage: 10 }, { startPage: 21, endPage: 30 }];
+  assert.equal(createPageMeasurement(9, 15, 4, 22, chapters), null);
+  assert.equal(createPageMeasurement(9, 22, 4, 22, chapters).progressPages, 4);
+});

@@ -2379,7 +2379,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const end = Number(cutEndPage ?? cutDefaultEnd);
     const solved = stageChapters.length > 0 ? pagesBetween(stageChapters, cutStartPage, end) : getAutoSolvedPageCount(cutStartPage, end);
     const measurement = Number.isFinite(end) ? createPageMeasurement(cutStartPage, end, Number(solved), remainingSubjectPages, stageChapters) : null;
-    if (!measurement) { setCutError(`끝 페이지를 확인해 주세요(${pagePos}.${cutStartPage} 이상).`); return; }
+    if (!measurement) {
+      // 5일 점검: 넣을 수 있는 끝 페이지 범위를 함께 알린다(단원 사이 빈 쪽 · 남은 양보다 뒤도 안 된다. 전엔 "이상"만 보여 헷갈렸다)
+      const last = stageChapters.length > 0 ? endPageForSolved(stageChapters, cutStartPage, remainingSubjectPages) : cutStartPage + remainingSubjectPages - 1;
+      const range = last && last >= cutStartPage ? `${pagePos}.${cutStartPage}~${pagePos}.${formatPageNumber(last)}` : `${pagePos}.${cutStartPage} 이상`;
+      setCutError(`끝 페이지를 확인해 주세요(${range}${stageChapters.length > 0 ? ', 단원 안 페이지' : ''}).`);
+      return;
+    }
     const elapsed = accumulatedSecondsRef.current + (startTimeRef.current !== null ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0);
     const times = step === 'organize' ? getSessionTimes(studySeconds, elapsed) : getSessionTimes(elapsed, 0);
     const carriedParts = sheetPartsRef.current;
