@@ -11350,3 +11350,66 @@ test('4일: a review grade compares the part with the unit studied right before 
   assert.equal(previousUnitSpeed(logs, 's', [{ ...logs[2], subjectStageId: 'f' }]), null);
   assert.equal(previousUnitSpeed(logs, 's', [logs[0]]), null);
 });
+
+// 11/4 점검: 계획대로 하면 마감까지 끝나고, 단계별 계획 시간이 다른 과목도 단계가 바뀌는 즈음에 며칠씩 0쪽이 되지 않는다
+const simulatePlan = (subject0, factor = () => 1) => {
+  let subject = subject0;
+  const logs = [];
+  const days = [];
+  const cursor = new Date(2026, 10, 5);
+  const target = schedule.parseStudyDate(subject0.targetDate);
+  for (let i = 0; cursor <= target && i < 100; i += 1) {
+    const today = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), 12);
+    const dateKey = schedule.getLocalDateKey(today);
+    const item = buildStudyOrderForDate([subject], logs, today.getDay(), dateKey, today).find(entry => entry.subject.id === subject.id);
+    const planned = item ? item.remainingDayPages : 0;
+    let left = Math.min(schedule.getSubjectRemainingPageCount(subject), Math.round(planned * factor(i)));
+    while (left > 0) {
+      const stage = schedule.getActiveSubjectStage(subject);
+      const pages = Math.min(left, Math.max(1, stage.remainingPages));
+      logs.push({ id: `p${i}_${left}`, subjectId: subject.id, subjectStageId: stage.id, pagesRead: pages, timeSpentMinutes: pages * 2,
+        startPage: stage.currentPage, endPage: stage.currentPage + pages - 1, timestamp: today.toISOString(), studyDate: dateKey, studyWeekday: today.getDay(), reviewEnabled: false, isCondensed: true });
+      subject = schedule.adjustSubjectProgress(subject, pages);
+      left -= pages;
+    }
+    days.push({ planned, weekday: today.getDay(), stage: schedule.getActiveSubjectStage(subject)?.id });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return { left: schedule.getSubjectRemainingPageCount(subject), days };
+};
+const planBase = (extra = {}) => ({ id: 's', name: 'S', createdAt: '2026-11-05T00:00:00.000Z', planResetDate: '2026-11-05', startPage: 1, totalPages: 100, completedPages: 0,
+  targetDate: '2026-12-04', scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], initialAverageTimePerPage: 2, isRequired: false, reviewSubjectIds: [], followUpSubjects: [], ...extra });
+const timedStages = { totalPages: 30, initialAverageTimePerPage: 1, planMinutesPerPage: { s: 1, f: 6, g: 2 },
+  followUpSubjects: [{ id: 'f', name: 'F', startPage: 1, endPage: 30, completedPage: 0, initialAverageTimePerPage: 6 }, { id: 'g', name: 'G', startPage: 1, endPage: 40, completedPage: 0, initialAverageTimePerPage: 2 }] };
+
+test('following the plan finishes every setup by the deadline', () => {
+  const setups = {
+    daily: planBase(),
+    weekdays: planBase({ scheduledWeekdays: [1, 2, 3, 4, 5] }),
+    weekendOnly: planBase({ scheduledWeekdays: [0, 6] }),
+    shortDeadline: planBase({ targetDate: '2026-11-09' }),
+    chapters: planBase({ chapters: [{ startPage: 1, endPage: 30 }, { startPage: 51, endPage: 80 }, { startPage: 91, endPage: 100 }] }),
+    followUp: planBase({ totalPages: 50, followUpSubjects: [{ id: 'f', name: 'F', startPage: 1, endPage: 50, completedPage: 0, initialAverageTimePerPage: 4 }] }),
+    timedStages: planBase(timedStages),
+    timedWeekdays: planBase({ ...timedStages, scheduledWeekdays: [1, 2, 3, 4, 5] })
+  };
+  Object.entries(setups).forEach(([name, subject]) => assert.equal(simulatePlan(subject).left, 0, name));
+  // 앞에서 하루씩 건너뛰어도 밀린 양이 쌓여 끝난다(마지막 날을 건너뛴 경우만 남는다)
+  assert.equal(simulatePlan(planBase(), i => (i === 3 || i === 10 ? 0 : 1)).left, 0, 'skipped days are caught up');
+});
+
+test('stage plan times do not leave zero-page study days around a stage change', () => {
+  const zeroRun = days => {
+    let longest = 0; let run = 0;
+    days.forEach(day => { if (day.stage && day.planned === 0) { run += 1; longest = Math.max(longest, run); } else run = 0; });
+    return longest;
+  };
+  const daily = simulatePlan(planBase(timedStages));
+  assert.equal(daily.left, 0);
+  assert.equal(zeroRun(daily.days), 0, 'every study day has some pages');
+  // 나흘마다 하루 쉬어도 단계가 바뀐 뒤 며칠씩 0쪽이 되지 않는다(예전: 6일 연속 0쪽 뒤 하루 7~9쪽)
+  const skipping = simulatePlan(planBase(timedStages), i => (i % 4 === 1 ? 0 : 1));
+  assert.ok(zeroRun(skipping.days) <= 1, `zero-page run ${zeroRun(skipping.days)}`);
+  const weekdays = simulatePlan(planBase({ ...timedStages, scheduledWeekdays: [1, 2, 3, 4, 5] }));
+  assert.equal(zeroRun(weekdays.days.filter(day => day.weekday >= 1 && day.weekday <= 5)), 0, 'every weekday has some pages');
+});

@@ -643,13 +643,17 @@ export const getPastPlanBalance = (
       .reduce((sum, log) => sum + getLogPlanPages(subject, log), 0);
 
     if (selectedWeekdays.includes(cursorWeekday)) {
+      // 단계마다 계획 시간이 다르면 그날의 할 일은 그날의 단계 기준으로 정하고 지금 단계 페이지로 바꾼다(4일 점검: 지금 단계 기준으로
+      // 지난날을 다시 따지면 단계가 바뀔 때 밀린 양 · 미리 한 양이 크게 생겨 며칠씩 0쪽이 됐다). 계획 시간이 없으면 예전과 같다
+      const subjectThen = subject.planMinutesPerPage ? adjustSubjectProgress(subject, -(remainingThen - remainingPages)) : subject;
+      const stageThen = getActiveSubjectStage(subjectThen)?.id ?? subject.id;
       const dayTarget = getSubjectDayTarget(
-        subject,
+        subjectThen,
         remainingThen,
         getDiffDays(subject.targetDate, new Date(cursor)),
         cursorWeekday,
         new Date(cursor)
-      );
+      ) * (subject.planMinutesPerPage ? getPlanStageRatio(subject, stageThen) : 1);
       shortfallPages += Math.max(0, dayTarget - scopedPages);
       surplusPages += Math.max(0, scopedPages - dayTarget);
     } else {
