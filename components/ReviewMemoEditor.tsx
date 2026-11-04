@@ -459,8 +459,10 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     const nextBreak = block.text.indexOf('\n', caret);
     const end = nextBreak < 0 ? block.text.length : nextBreak;
     const line = block.text.slice(start, end);
-    const title = trailing ? line.replace(/>\s*$/, '').trimEnd() : command ? line.slice(command.length) : line;
-    const toggle = { ...makeBlock({ type: 'toggle', title, text: '' }),
+    // 줄 가운데의 `>` 바로 뒤에서 엔터를 치면(4일 요청: `A: > B:C`) `>` 앞이 제목, `>` 뒤가 토글 안 첫 줄이다
+    const inner = trailing ? block.text.slice(caret, end).trim() : '';
+    const title = trailing ? block.text.slice(start, caret).replace(/>\s*$/, '').trimEnd() : command ? line.slice(command.length) : line;
+    const toggle = { ...makeBlock({ type: 'toggle', title, text: inner }),
       ...(start === 0 ? { id: block.id } : {}) };
     const replacements: Block[] = [];
     if (start > 0) replacements.push({ ...block, text: block.text.slice(0, start - 1) });
@@ -703,8 +705,9 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                         event.preventDefault();
                         convertLine(index, caret, prefix);
                       } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing && selectionEnd === caret
-                        && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && (block.text[caret] === undefined || block.text[caret] === '\n')) {
+                        && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && !/^[>=]/.test(block.text.slice(caret))) {
                         // 줄 끝에서 `>`를 쓰고 엔터를 치면 그 줄이 제목인 토글이 되어 열리고, 커서가 토글 안으로 들어간다(여러 줄을 밑에 쓸 때).
+                        // 줄 가운데 `>` 바로 뒤에서 엔터를 쳐도 같다: `A: > B:C`는 제목 `A:` 아래 첫 줄 `B:C`인 토글이 된다(4일).
                         // `>` 뒤에 띄어 쓰면 토글로 바꾸지 않는다: 같은 줄에 이어 쓰는 `X > Y`는 그 한 행만 X 밑에 쓴 것이다(3일)
                         event.preventDefault();
                         convertLine(index, caret, '', true);
@@ -716,6 +719,20 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                       event.preventDefault();
                       // 제목 끝에 `>`를 쓰고 엔터를 치면(본문 줄과 같이) 그 `>`는 빼고 토글 안으로 들어간다(3일 점검: 제목에 `>`가 글자로 남던 것)
                       const { start: titleCaret, end: titleEnd } = readField(field);
+                      // 제목 가운데 `>` 바로 뒤에서 엔터를 치면(4일: `A: > B:C`) `>` 뒤 글은 토글 안 첫 줄로 내려간다
+                      const titleHead = block.title.slice(0, titleCaret);
+                      const titleRest = block.title.slice(titleCaret);
+                      if (!event.nativeEvent.isComposing && titleCaret === titleEnd && titleRest.trim() && !/^[>=]/.test(titleRest)
+                        && /[^\s>].*>\s*$/.test(titleHead) && !/[-=<>:;,]>\s*$/.test(titleHead)) {
+                        focus(block.id, 'text', 0);
+                        setClosed(prev => { const next = new Set(prev); next.delete(block.id); return next; });
+                        update(index, { ...block, title: titleHead.replace(/>\s*$/, '').trimEnd(), text: block.text ? `${titleRest.trim()}\n${block.text}` : titleRest.trim(), childDocument: undefined });
+                        window.setTimeout(() => {
+                          const inner = childEditors.current.get(`${block.id}:text`)?.querySelector('textarea');
+                          if (inner) { inner.focus(); inner.setSelectionRange(0, 0); }
+                        }, 0);
+                        return;
+                      }
                       if (!event.nativeEvent.isComposing && titleCaret === titleEnd && titleCaret === block.title.length
                         && /[^\s>].*>\s*$/.test(block.title) && !/[-=<>:;,]>\s*$/.test(block.title)) {
                         focus(block.id, 'text', 0);

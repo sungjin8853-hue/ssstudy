@@ -11488,3 +11488,10 @@ test('4일: a line ending in , - = draws its next lines inside the same cell, ex
   // 아래에 토글이 더 있으면 전처럼 묶음
   assert.equal(parseNoteDiagram('A : B,\n:::toggle X\nY\n:::end')[0].kind, 'group');
 });
+
+test('4일: Enter right after a > in the middle of a line (or toggle title) makes a toggle: A: > B:C becomes > A: with B:C inside', () => {
+  const editor = fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8');
+  assert.ok(editor.includes("const inner = trailing ? block.text.slice(caret, end).trim() : '';"), 'the rest of the line goes inside the toggle');
+  assert.ok(editor.includes("!/^[>=]/.test(block.text.slice(caret))"), '>> and >= are not toggles');
+  assert.ok(editor.includes("titleRest.trim() && !/^[>=]/.test(titleRest)"), 'the same in a toggle title');
+});

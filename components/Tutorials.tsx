@@ -177,7 +177,7 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '접어서 정리해요', accent: 'indigo', symbol: '>', title: '접어서 정리해요',
-    lead: '줄 맨 앞에서 > 와 스페이스를 누르면 토글이 돼요. 토글 안의 줄들은 하나로 묶여요. 줄 끝에 > 를 쓰고 엔터를 치면 그 줄이 토글이 되어 밑에 여러 줄을 쓸 수 있어요. > 뒤에 띄어 쓰고 이어 쓰면 그 한 행만 앞 행 밑에 쓴 것과 같아요(수열의 합 > 등비수열:첫항과 공비).',
+    lead: '줄 맨 앞에서 > 와 스페이스를 누르면 토글이 돼요. 토글 안의 줄들은 하나로 묶여요. 줄 끝에 > 를 쓰고 엔터를 치면 그 줄이 토글이 되어 밑에 여러 줄을 쓸 수 있어요. 줄 가운데 > 바로 뒤에서 엔터를 쳐도 돼요: A: > B:C는 A: 토글 밑에 B:C가 들어가요. > 뒤에 띄어 쓰고 이어 쓰면 그 한 행만 앞 행 밑에 쓴 것과 같아요(수열의 합 > 등비수열:첫항과 공비).',
     body: <>
       <NoteSample lines={[
         <><span className="text-indigo-800">▾ </span><span className="font-semibold">수열의 합</span><Mono tone="colon">:</Mono></>,
