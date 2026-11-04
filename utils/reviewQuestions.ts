@@ -445,9 +445,8 @@ const cellBlankForms = (expression: Expression, skipSuffix = false, top = true):
   const leaves = items.reduce((sum, item) => sum + spans(item).length, 0);
   const join = (parts: CellPiece[][]): CellPiece[] => parts.flatMap((part, index) => (index ? [{ glue: kind } as CellPiece, ...part] : part));
   const forms: CellBlankForm[] = [];
-  // 값이 둘뿐인 `=`는 칸 안의 이웃 쌍 문제(앞으로·거꾸로)가 이미 같은 것을 묻는다. 다만 다른 값과 묶인 `( )` 안의 `=`(`B,(N=P)`)는
-  // 바깥 논리를 보인 채 안쪽 하나를 가린다(4일: 그 덩어리 통째를 답으로 묻지 않는다)
-  if (!(top && kind === 'and') && !(kind === 'equal' && items.length < 3 && top)) hiddenSetsOf(items.length).forEach(hidden => {
+  // 값이 둘뿐인 `=`는 칸 안의 이웃 쌍 문제(앞으로·거꾸로)가 이미 같은 것을 묻는다
+  if (!(top && kind === 'and') && !(kind === 'equal' && items.length < 3)) hiddenSetsOf(items.length).forEach(hidden => {
     if (skipSuffix && kind === 'sequence' && hidden[hidden.length - 1] === items.length - 1 && hidden.every((index, position) => index === hidden[0] + position)) return;
     const visible = items.map((_, order) => order).filter(order => !hidden.includes(order));
     const order = kind === 'and' ? [...visible, ...hidden] : items.map((_, index) => index);
@@ -593,8 +592,6 @@ const chainOf = (expression: Expression, base = 0): { columns: Expression[]; sep
 };
 
 // Explore satisfied facts breadth-first, retaining each remaining AND/OR/order structure.
-/** 답이 칸 안 `=` 덩어리를 통째로 쓰는가: 그 덩어리 자체이거나, `,`로 이은 값들 중 하나가 그 덩어리 */
-const answersEqualChunk = (expression: Expression) => expression.type === 'equal' || (expression.type === 'and' && expression.items.some(item => item.type === 'equal'));
 const partialConditions = (expression: Expression): Array<{ given: Expression[]; remaining: Expression }> => {
   if (expression.type === 'text' || expression.type === 'equal') return [];
   const facts = [...new Map(allFacts(expression).map(item => [expressionLabel(item), item])).values()];
@@ -1229,16 +1226,14 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
-      // 4일: 답이 칸 안 `=` 덩어리(`B=C`, `B,(N=P)`의 `N=P`)를 통째로 쓰는 문제는 내지 않는다: 자리는 알아도 무엇을 쓸지 논리로 정해지지 않는다.
-      // 그 덩어리는 바깥을 보인 채 안쪽 하나를 가린 문제(`B, (( ㉠ ) = P)`)와 그 자리에서 대응하는 것 문제(`‘A’에서 ‘N’에 대응하는 것은?`)로 묻는다
-      if (goesForward(separator) && !answersEqualChunk(right)) add({ ...base, kind: 'direct' });
+      if (goesForward(separator)) add({ ...base, kind: 'direct' });
       // 오른쪽이 여러 대안(토글 아래 `<`)이면 대안 하나하나를 보고 왼쪽을 떠올린다.
-      if (!forwardOnly(separator) && !answersEqualChunk(left)) for (const source of right.type === 'or' ? right.items : [right]) {
+      if (!forwardOnly(separator)) for (const source of right.type === 'or' ? right.items : [right]) {
         add({ ...base, prompt: expressionLabel(source), answer: base.prompt, direction: 'reverse',
           kind: 'reverse', answerSpans: base.promptSpans, promptSpans: spans(source),
           columns: { ...base.columns, prompt: base.columns.answer, answer: base.columns.prompt } });
       }
-      if (goesForward(separator)) partialConditions(right).filter(({ remaining }) => !answersEqualChunk(remaining)).forEach(({ given, remaining }) => add({ ...base, kind: 'remaining',
+      if (goesForward(separator)) partialConditions(right).forEach(({ given, remaining }) => add({ ...base, kind: 'remaining',
         answer: expressionLabel(remaining), answerSpans: spans(remaining),
         conditions: [...conditions, ...given.map(fact => `${expressionLabel(fact)} 충족`)],
         conditionSpans: [...conditionSpans, ...given.map(spans)],
@@ -1251,7 +1246,6 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         const others = branched.items.filter((_, other) => other !== at).map(head);
         if (!others.length) return;
         const next = item.fields[1];
-        if (answersEqualChunk(next)) return;
         add({ ...base, kind: 'remaining', beyond: true, answer: expressionLabel(next), answerSpans: spans(next),
           conditions: [...conditions, ...others.map(fact => `${expressionLabel(fact)} 충족`)],
           conditionSpans: [...conditionSpans, ...others.map(spans)],
@@ -1288,8 +1282,6 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
             const fromLeft = start > 0 && keep.has(start - 1) && expression.separators.slice(start - 1, right - 1).every(goesForward);
             const fromRight = right < count && keep.has(right) && expression.separators.slice(start, right).every(goesBackward);
             if (!fromLeft && !fromRight) continue;
-            // 4일: 가린 칸이 `=` 덩어리면 통째로 맞히는 문제라 내지 않는다(그 덩어리는 안쪽 하나를 가린 문제로 묻는다)
-            if (!convertible && hidden.some(item => answersEqualChunk(item.column))) continue;
             const blankStage = (blanks + dropped / others.length) / count;
             // 두 칸만 남은 변주는 단위 문제(또는 자유도로 건너뛴 결합)와 같아서 따로 내지 않는다
             if (convertible) {

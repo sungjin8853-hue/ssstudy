@@ -1357,8 +1357,7 @@ test('nested questions reset classification columns while retaining classified a
   const classify = question => questionBuilder.getReviewQuestionClassification('대상:설명:예시', question);
   const inner = questions.find(q => q.kind === 'direct' && q.prompt === 'b' && q.answer === 'c');
   assert.deepEqual(classify(inner), { prompt: ['대상'], answer: ['설명'], conditions: [['대상']] });
-  // 4일: `a`를 보고 `=` 덩어리 통째(b = d)를 맞히는 문제는 내지 않는다
-  assert.ok(!questions.some(q => q.kind === 'direct' && q.prompt === 'a'));
+  assert.deepEqual(classify(questions.find(q => q.kind === 'direct' && q.prompt === 'a')).answer, ['설명']);
   assert.ok(!questions.some(q => q.kind === 'context'), 'there is no question that asks a parent condition from its child');
 });
 
@@ -1484,8 +1483,7 @@ test('nested relation columns restart their labels, keep the outer importance, a
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
-  // 4일: a를 보고 `=` 덩어리 통째(b = d)를 맞히는 문제는 없다
-  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['b', 'c', 2, ['a']], ['d', 'c', 2, ['a']]]);
+  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a']], ['d', 'c', 2, ['a']]]);
   const equalColored = memoColors.splitReviewMemoColonColors('a:(b:c)=(d:c):e // f:g');
   assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 0, 1, 0]);
 });
@@ -6888,8 +6886,8 @@ test('far questions: one answer several steps away, the process is shown with th
 
 test('= is a classification-free logic word inside one cell: A:B=C is the cells A and "B = C", and inside a cell = comes before - and ,', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
-  // `A:F=G`는 `A`와 `F=G` 두 칸이다. 4일: A를 보고 "F = G" 전체를 맞히는 문제는 내지 않는다(무엇을 쓸지 논리로 정해지지 않는다)
-  assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'A'), []);
+  // `A:F=G`는 `A`와 `F=G` 두 칸이다: A를 보고 "F = G" 전체를 맞힌다(칸을 더 나누지 않는다)
+  assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'A'), [['A', 'F = G', 1, []]]);
   assert.ok(questionsFor('A:F=G').some(q => q.kind === 'reverse' && q.prompt === 'F = G' && q.answer === 'A'));
   // 칸 안에서는 이웃한 값끼리 앞으로도 거꾸로도 이어진다(칸이 놓인 자리 A가 조건)
   assert.deepEqual(direct('A:F=G').filter(item => item[0] === 'F'), [['F', 'G', 1, ['A']]]);
@@ -6901,10 +6899,9 @@ test('= is a classification-free logic word inside one cell: A:B=C is the cells 
   // 분류기준 이름은 `:` 칸만 센다: `A:F=G:H`의 칸은 A · F=G · H
   const classify = q => questionBuilder.getReviewQuestionClassification('개념:정의:예시', q);
   const cells = questionsFor('A:F=G:H').filter(q => q.kind === 'direct');
-  // 4일: A → F = G는 없다(`=` 덩어리 통째). 뒤 칸 문제의 기준으로 확인한다
-  assert.ok(!cells.some(q => q.prompt === 'A'));
+  const outer = cells.find(q => q.prompt === 'A');
   const next = cells.find(q => q.prompt === 'F = G');
-  assert.deepEqual(classify(questionsFor('A:F=G:H').find(q => q.kind === 'reverse' && q.answer === 'A')), { prompt: ['정의'], answer: ['개념'], conditions: [] });
+  assert.deepEqual(classify(outer), { prompt: ['개념'], answer: ['정의'], conditions: [] });
   assert.deepEqual(classify(next), { prompt: ['정의'], answer: ['예시'], conditions: [] });
   // 한 칸 안의 논리어 중 `=`가 `-`·`,`보다 중요도가 높아 먼저 낸다(선 출제)
   const mixed = questionsFor('A:B-C=D');
@@ -6921,8 +6918,8 @@ test('= is a classification-free logic word inside one cell: A:B=C is the cells 
 test('pair tiers: important + important first, important + less second, less + less third', () => {
   const tiers = memo => Object.fromEntries(questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt + q.answer, q.priority]));
   assert.deepEqual(tiers('A:B:C:D'), { AB: 1, BC: 2, CD: 3 });
-  assert.deepEqual(tiers('A:B=C'), { BC: 1 });
-  assert.deepEqual(tiers('A:B:C=D'), { AB: 1, CD: 3 });
+  assert.deepEqual(tiers('A:B=C'), { 'AB = C': 1, BC: 1 });
+  assert.deepEqual(tiers('A:B:C=D'), { AB: 1, 'BC = D': 2, CD: 3 });
   const far = questionsFor('A:B:C:D').filter(q => q.kind === 'far');
   assert.deepEqual(far.map(q => [q.prompt + q.answer, q.priority]).sort(), [['AC', 2], ['AD', 2], ['BD', 2], ['CA', 2], ['DA', 2], ['DB', 2]].sort());
   // 변주(빈칸·전체 재구성)는 난도만 다르고 중요도는 기본 문제의 것을 따른다: 한 행 전체를 떠올리는 문제와 같은 묶음
@@ -10173,7 +10170,7 @@ test('{A} means the set A wherever its cells were written: a plain {A} line take
   // 쉼표는 원소를 나누지 않는다
   assert.deepEqual(greet('[A] B,N\n인사: {A}아'), ['B AND N아']);
   // 따옴표로 묶은 `=`는 한 원소
-  assert.ok(!greet("[A] 'B=N'\n인사: {A}아").some(answer => answer === 'B아' || answer === 'N아'));
+  assert.deepEqual(greet("[A] 'B=N'\n인사: {A}아"), ["'B = N'아"]);
 });
 
 test('layers: a text-less title `[수]:[성질]` is the criterion 수:성질 (no title question), like `[수:성질]` and `[[수]:[성질]]`', () => {
@@ -11175,9 +11172,7 @@ test('2일: in a branch, giving the other values lets the hidden one be found, s
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const beyond = memo => questionsFor(memo).filter(q => q.beyond).map(q => `${q.statement} → ${q.answer}`);
-  // 4일: 다음 값에 `=` 덩어리(F=G)가 있으면 통째로 맞히는 문제라 내지 않는다
-  assert.deepEqual(beyond('A:(B:F=G,H),C,D'), []);
-  assert.deepEqual(beyond('A:(B:F,H),C,D'), ['‘A’에 필요한 것 중 ‘C, D’ 외에 남은 것의 다음 값을 모두 쓰시오. → F AND H']);
+  assert.deepEqual(beyond('A:(B:F=G,H),C,D'), ['‘A’에 필요한 것 중 ‘C, D’ 외에 남은 것의 다음 값을 모두 쓰시오. → (F = G) AND H']);
   assert.deepEqual(beyond('A:(B:F),(C:K),D'), ['‘A’에 필요한 것 중 ‘C, D’ 외에 남은 것의 다음 값은? → F', '‘A’에 필요한 것 중 ‘B, D’ 외에 남은 것의 다음 값은? → K']);
   assert.deepEqual(beyond('A:B,C,D'), [], 'nothing continues');
   const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
@@ -11556,23 +11551,4 @@ test('4일 점검: under a # frame an open line (B: then C) is one framed line i
   assert.equal(expandFrameLines(":::toggle X:#\n[A] #'-'#: #+#\n:::end"), "[A] #'-'#: #+#", 'a template line is not put into the frame');
   const editor = fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8');
   assert.ok(editor.includes('const midLineNestOk = ') && editor.includes('nestCuts(line).includes(at)'), 'a quoted or bracketed > is a letter');
-});
-
-test("4일: seeing A, a question never asks for a whole = chunk (A:B,(N=P) → no 'A → N = P'); the chunk is asked with the outer logic shown and one inner value hidden, or as its pair in place", () => {
-  const { getReviewQuestionSentence } = questionBuilder;
-  const said = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}|${q.answer}|${getReviewQuestionSentence(q.criterion ?? null, q).statement}`);
-  const questions = said('A:B,(N=P)');
-  assert.ok(!questions.some(item => /\|A\|(B AND \(N = P\)|N = P)\|/.test(item)), 'no A → N = P and no A → B, (N = P)');
-  assert.ok(questions.includes('blank|A : B AND (＿ = P)|N|‘A’에는 ‘B, (( ㉠ ) = P)’ 모두가 해당한다. ㉠에 알맞은 것은?'));
-  assert.ok(questions.includes('blank|A : B AND (N = ＿)|P|‘A’에는 ‘B, (N = ( ㉠ ))’ 모두가 해당한다. ㉠에 알맞은 것은?'));
-  assert.ok(questions.includes('direct|N|P|‘A’에서 ‘N’에 대응하는 것은?'), 'in place: show N, answer P');
-  assert.ok(questions.some(item => item.startsWith('remaining|A|B|')), 'the other value can still be asked with N = P given');
-  // `( )`가 없어도 같다: A:B=C에는 A → B = C가 없다
-  assert.ok(!said('A:B=C').some(item => item.startsWith('direct|A|')));
-  // 앞 값 · 빈칸 · 갈래 다음 값도 같다(전체 재구성은 줄 전체를 쓰는 문제라 그대로)
-  const row = questionsFor('A:B=C:D').map(q => `${q.kind}|${q.answer}`);
-  assert.ok(!row.some(item => /^(direct|reverse|blank|remaining)\|B = C$/.test(item)) && row.includes('reconstruct|B = C → D'));
-  // `-` `:` 덩어리는 그대로(순서대로 쓰기 · 머리 값)
-  assert.ok(said('A:B,(N-P)').some(item => item.startsWith('remaining|A|N → P|')));
-  assert.ok(said('A:B,(N:P)').some(item => item.startsWith('direct|A|B AND N|')));
 });
