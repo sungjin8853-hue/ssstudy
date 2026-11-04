@@ -1,22 +1,20 @@
 /**
- * 따옴표 `'…'`: 분류기준 없는 한 칸. 안에 쓴 `:` `;` `<`는 칸을 나누지 않고 한 칸 안의 논리어로 쓰인다.
- *   `:` → `=` (같음, 양쪽)   `;` → `-` (앞→뒤 순서)   `<` → `-`의 반대(뒤→앞 순서)
- * 앞의 분류기준을 그대로 이으므로(바뀌지 않으므로) 같은 칸이다. `( )` `[ ]` 안은 다시 보통 규칙이라 그 안의 `:` `;` `<`는 그대로 칸을 나눈다.
- * 단, 따옴표 안에는 논리어가 없다는 규칙은 괄호 안에서도 그대로다: `'(f(x+h)-f(x))/h'`의 `-`는 순서가 아니라 글자다(순서를 쓰려면 `;`).
- * 기호만 감싼 `':'` `';'` `'<'`는 단어에 붙여 써도(`f':'g`) 그 기호가 논리어다(`a:f':'g` = `a:(f=g)`).
- * 따옴표 안에는 논리어가 없다: 안에 쓴 `,` `-` `=`는 논리어가 아니라 글자다(`'B-C'`는 한 셀 `B-C`).
+ * 따옴표 `'…'`: 안에 쓴 것은 모두 글자다(논리어가 없다). 4일: 따옴표로 `:` `;` `<`를 한 칸 안의 논리어(`=` `-`)로 바꾸던 것은 없앴다
+ * ("‘’를 더해 분류기준을 없애는 것을 없애").
+ *  - 안에 쓴 `:` `;` `<` `,` `-` `=` `//`는 괄호 안이어도 칸을 나누지 않고 논리어도 아니다: `A:'B:C'`, `A:'B;C'`, `A:'B-C'`는 모두 A와 한 셀.
+ *  - 기호만 감싼 `':'` `';'` `'<'`는 단어에 붙여 써도(`f':'g`) 그 기호를 글자로 쓴 것이다(`f:g` 한 셀).
+ *  - 휴대폰 · 태블릿 자판이 바꿔 넣는 둥근 따옴표 `‘…’`도 같은 따옴표다(4일: 둥근 따옴표 안의 논리어로 문제가 나오던 것).
  * 단어 속 `'`(don't)와 짝이 없는 `'`는 따옴표가 아니라 그냥 글자다. 같은 줄 안에서만 짝이 된다.
  */
-import { isNoteShorthandOn } from './noteShorthand';
 
 export type QuoteRole = 'equal' | 'sequence' | 'reverse';
 
 export interface ReviewQuotes {
-  /** 따옴표 안(묶음 괄호 바깥)의 `:` `;` `<` 위치 → 맡은 논리어 */
+  /** 따옴표 안(괄호 안이어도)의 `:` `;` `<` 위치. 4일부터 글자다(칸을 나누지 않고 논리어도 아니다) */
   marks: ReadonlyMap<number, QuoteRole>;
   /** 따옴표 글자(여는 것과 닫는 것) 위치 */
   edges: ReadonlySet<number>;
-  /** 따옴표 안(묶음 괄호 안이어도)에 쓴 `,` `-` `=`의 위치: 논리어가 아니라 글자다 */
+  /** 따옴표 안(괄호 안이어도)에 쓴 `,` `-` `=` `/`의 위치: 논리어가 아니라 글자다 */
   literal: ReadonlySet<number>;
 }
 
@@ -30,8 +28,14 @@ const CLOSE_BEFORE = /[\s)\]},:;<=\-/.]/;
 let cachedText: string | undefined;
 let cached: ReviewQuotes = { marks: new Map(), edges: new Set(), literal: new Set() };
 
-export const reviewQuotes = (text: string): ReviewQuotes => {
-  if (cachedText === text) return cached;
+/** 따옴표 글자(곧은 `'`, 둥근 `‘` `’`) */
+export const isQuoteMark = (character: string | undefined) => character === "'" || character === '‘' || character === '’';
+export const hasQuoteMark = (text: string) => /['‘’]/.test(text);
+
+export const reviewQuotes = (original: string): ReviewQuotes => {
+  if (cachedText === original) return cached;
+  // 둥근 따옴표는 곧은 따옴표로 읽는다(글자 수가 같아 자리가 그대로다)
+  const text = /[‘’]/.test(original) ? original.replace(/[‘’]/g, "'") : original;
   const marks = new Map<number, QuoteRole>();
   const edges = new Set<number>();
   const literal = new Set<number>();
@@ -61,9 +65,10 @@ export const reviewQuotes = (text: string): ReviewQuotes => {
         const character = text[at];
         if (character === '(' || character === '[') depth += 1;
         else if (character === ')' || character === ']') { depth -= 1; if (depth < 0) balanced = false; }
-        else if (depth === 0 && ROLE[character]) found.push(at);
-        // `,` `-` `=`는 괄호 안에서도 글자다: 수식 `'(f(x+h)-f(x))/h'`의 `-`가 순서가 되지 않는다
-        else if (character === ',' || character === '-' || character === '=') plain.push(at);
+        // 4일: `:` `;` `<`도 괄호 안이어도 글자다(칸을 나누지 않고 논리어도 아니다)
+        else if (ROLE[character]) found.push(at);
+        // `,` `-` `=` `/`는 괄호 안에서도 글자다: 수식 `'(f(x+h)-f(x))/h'`의 `-`가 순서가 되지 않는다
+        else if (character === ',' || character === '-' || character === '=' || character === '/') plain.push(at);
       }
       if (!balanced || depth !== 0) continue;
       found.forEach(at => marks.set(at, ROLE[text[at]]));
@@ -73,12 +78,12 @@ export const reviewQuotes = (text: string): ReviewQuotes => {
       open = close;
     }
   }
-  cachedText = text;
+  cachedText = original;
   cached = { marks, edges, literal };
   return cached;
 };
 
 export const reviewQuoteMarks = (text: string): ReadonlyMap<number, QuoteRole> => reviewQuotes(text).marks;
 
-/** 이 글자 집합(`delimiters`)으로 칸 안을 자를 때 따옴표 안의 이 기호도 자르는 곳인가: `=`·`-` 단축어가 켜져 있고 맡은 논리어 글자가 `delimiters`에 있을 때 */
-export const quotedMarkCuts = (role: QuoteRole, delimiters: string): boolean => isNoteShorthandOn() && delimiters.includes(quoteGlue(role));
+/** 이 글자 집합(`delimiters`)으로 칸 안을 자를 때 따옴표 안의 이 기호도 자르는 곳인가: 4일부터 따옴표 안은 모두 글자라 자르지 않는다 */
+export const quotedMarkCuts = (_role: QuoteRole, _delimiters: string): boolean => false;

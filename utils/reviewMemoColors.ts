@@ -3,7 +3,7 @@ import { isReviewGroupClose, isReviewGroupOpen, readReviewFieldOverride, reviewG
 import { isNoteShorthandOn, isRelationMark } from './noteShorthand';
 import { isReviewSequenceSeparator } from './reviewMemoLogic';
 import { matchingBracket } from './setExpression';
-import { reviewQuoteMarks, reviewQuotes } from './reviewQuote';
+import { hasQuoteMark, isQuoteMark, reviewQuoteMarks, reviewQuotes } from './reviewQuote';
 import { readNoteTemplate } from './noteSets';
 import { openTailOf } from './noteOpenTail';
 
@@ -80,8 +80,9 @@ const frameQuotes = (text: string) => {
   text.split('\n').forEach(line => {
     if (line.includes('#') && readNoteTemplate(line.trim())) {
       for (let at = 0; at < line.length; at += 1) {
-        if (line[at] === "'") {
-          const close = line.indexOf("'", at + 1);
+        if (isQuoteMark(line[at])) {
+          const rest = line.slice(at + 1).search(/['‘’]/);
+          const close = rest < 0 ? -1 : at + 1 + rest;
           if (close > at + 1) {
             quotes.push(lineStart + at, lineStart + close);
             for (let inner = at + 1; inner < close; inner += 1) literal.add(lineStart + inner);
@@ -128,7 +129,7 @@ export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): 
       if (override) { mark(override.start, override.end); index = override.end - 1; }
     }
   }
-  if (text.includes("'")) reviewQuotes(text).edges.forEach(at => mark(at, at + 1));
+  if (hasQuoteMark(text)) reviewQuotes(text).edges.forEach(at => mark(at, at + 1));
   if (text.includes('@')) {
     for (let index = 0; index < text.length; index += 1) {
       if (text[index] === '@' && !(index > 0 && /[\p{L}\p{N}_]/u.test(text[index - 1]))) mark(index, index + 1);
@@ -160,7 +161,7 @@ export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): 
 /** 따옴표 `'…'` 안쪽 글자 위치(따옴표 글자 제외). 기호 하나만 감싼 `':'` `';'` `'<'`는 그 기호가 논리어라서 넣지 않는다. */
 export const quotedInterior = (text: string): Set<number> => {
   const result = new Set<number>();
-  if (!text.includes("'")) return result;
+  if (!hasQuoteMark(text)) return result;
   const edges = [...reviewQuotes(text).edges].sort((a, b) => a - b);
   for (let index = 0; index + 1 < edges.length; index += 2) {
     const open = edges[index];
@@ -199,7 +200,7 @@ export const markReviewMemoOperators = (text: string, parts: MemoColorPart[]): M
     if (role) {
       // 따옴표 안의 `:`는 `=`처럼(같음), `;`와 `<`는 `-`처럼(순서) 한 칸 안의 논리어다. 단축어가 켜진 때만 읽힌다.
       // 색은 일반 글자 색이다(29일: 따옴표는 안에 논리어가 없다는 표시). 기호 하나만 감싼 `':'`만 논리어 색이다
-      if (isNoteShorthandOn() && !interior.has(index)) kinds.set(index, role === 'equal' ? 'equal' : 'sequence');
+      // 4일: 따옴표 안은 모두 글자라 논리어 색을 입히지 않는다
     } else if (isRelationMark(character)) {
       const override = readReviewFieldOverride(text, index + 1);
       if (override) index = override.end - 1;

@@ -1,4 +1,4 @@
-import { parseReviewMemoBlocks } from './reviewMemo';
+import { parseReviewMemoBlocks, REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import { getReviewFieldOverrides, readReviewFieldOverride, reviewGroups } from './reviewFieldOverride';
 import { isReviewSequenceSeparator } from './reviewMemoLogic';
 import { isReviewSlash } from './reviewSlash';
@@ -376,6 +376,16 @@ const walkBlocks = (memo: string, inherited: string[], chain: string[][], expans
   const open = openTailOf(cleanTitle);
   const tail = open?.connector ? toggleTail().exec(blankOpenLogic(cleanTitle)) : null;
   const head = (tail ? cleanTitle.slice(0, tail.index) : open?.logic ? cleanTitle.slice(0, open.start) : cleanTitle).trim();
+  // 4일: 논리관계어(`,` `-` `=`)만으로 끝난 줄(`A : B,`)의 아래 줄은 같은 칸 안에서 이어지는 값이다: 한 줄로 쓴 `A : B, C`와 똑같이 그린다
+  // (전에는 `A : B`를 머리로 한 포함 · 상하 묶음으로 그려, 칸을 나누지 않는 `,`가 `:` `;` `<`보다 크게 보였다). 아래에 토글이 더 있거나 기준을 쓰면 전처럼 묶음이다
+  if (open?.logic && !open.connector && head && !criteria.length) {
+    const lines = (block.text || '').split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.length && lines.every(line => !line.startsWith(REVIEW_MEMO_TOGGLE_START) && line !== REVIEW_MEMO_TOGGLE_END)) {
+      const glue = open.logic === ',' ? ', ' : ` ${open.logic} `;
+      const joined = `${head}${glue}${lines.map(line => (parseRelation(line) ? `(${line})` : line)).join(glue)}`;
+      return parseLine(joined, expansions).map(item => spellOutDots(item, inherited, chain));
+    }
+  }
   const labels = readGroupLabels(cleanTitle, criteria, inherited);
   const extra = { ...(criteria.length ? { criteria } : {}), ...(labels ? { labels } : {}) };
   // 토글에 분류기준을 새로 쓰면 그것만 쓴다(위쪽 기준 아래로 쌓지 않는다: `[A]:[B]` 아래 `[P]:[q]`는 `[P:q]`)

@@ -251,14 +251,14 @@ const NOTE_STEPS: TutorialStep[] = [
   },
   {
     label: '한 칸으로 묶어요', accent: 'teal', symbol: "' '", title: '한 칸으로 묶어요',
-    lead: "따옴표 안의 글은 한 칸이에요. 안에 쓴 :은 같다(=)처럼, ;와 <는 순서(-)처럼 읽고, 쉼표·-·=는 그냥 글자예요.",
+    lead: "따옴표 안의 글은 모두 글자인 한 칸이에요. 안에 쓴 : ; < , - = //는 칸을 나누지도 않고 논리어도 아니에요. 휴대폰 자판의 둥근 따옴표 ‘ ’(거꾸로 쓴 ’ ‘도)도 같아요.",
     body: <>
       <NoteSample lines={[
-        <><span>주제</span><Mono tone="colon">:</Mono><Mono tone="logic">'</Mono><span>서울</span><Mono tone="logic">:</Mono><span>부산</span><Mono tone="logic">'</Mono></>,
+        <><span>주제</span><Mono tone="colon">:</Mono><Mono tone="logic">'</Mono><span>서울:부산</span><Mono tone="logic">'</Mono></>,
         <><Mono tone="logic">'</Mono><span>3-2</span><Mono tone="logic">'</Mono><Mono tone="colon">:</Mono><span>1</span></>
       ]} />
       <QuestionSamples items={[
-        { kind: '같은 칸 안', q: '‘주제’에서 ‘서울’에 대응하는 것은?', a: '부산' },
+        { kind: '한 칸 그대로', q: '‘주제’ 다음 값은?', a: '서울:부산' },
         { kind: '글자 그대로', q: '‘3-2’ 다음 값은?', a: '1' }
       ]} />
     </>

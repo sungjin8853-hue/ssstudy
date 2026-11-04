@@ -15,7 +15,7 @@ import type { OpenTail } from './noteOpenTail';
 import { hasTopLevelUnion, joinSets, MASK, processOf, readConvertCell } from './abilityConvert';
 import type { ConvertInfo } from './abilityConvert';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
-import { quotedMarkCuts, reviewQuotes } from './reviewQuote';
+import { hasQuoteMark, quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
 import { convertStatement, placeOf, proseOf } from './questionProse';
@@ -174,13 +174,26 @@ const groupHead = (inner: string): string | null => {
 /** `base`: 이 줄이 시작하는 칸 번호. 맨 위 줄은 0이고, `> 제목 :` 아래 줄은 제목 칸 수만큼 뒤에서 시작한다(분류기준은 세션·상위 토글의 해당 `:`번째를 따른다). */
 function parseExpression(text: string, nodeId: string, from = 0, to = text.length, inherited: ReadonlyMap<number, string> = new Map(), base = 0): Expression {
   const edges = reviewQuotes(text).edges;
+  const sortedEdges = edges.size ? [...edges].sort((a, b) => a - b) : [];
+  /** 따옴표 글자의 짝(여는 것 ↔ 닫는 것) */
+  const partnerOf = (at: number): number | undefined => {
+    const index = sortedEdges.indexOf(at);
+    return index < 0 ? undefined : sortedEdges[index % 2 ? index - 1 : index + 1];
+  };
   for (let changed = true; changed;) {
     changed = false;
     while (from < to && /\s/.test(text[from])) from += 1;
     while (to > from && /\s/.test(text[to - 1])) to -= 1;
-    // 칸 가장자리의 따옴표 글자 `'`는 묶음을 나타내는 표시라 글이 아니다.
-    if (from < to && edges.has(from)) { from += 1; changed = true; }
-    if (to > from && edges.has(to - 1)) { to -= 1; changed = true; }
+    // 칸 전체가 따옴표 한 쌍이면(4일) 안은 모두 글자다: 괄호도 묶음이 아니고 논리어도 없다(`'p ; (q : r) ; s'`는 그 글 그대로 한 셀)
+    if (from + 1 < to && edges.has(from) && edges.has(to - 1) && ![...edges].some(at => at > from && at < to - 1)) {
+      const inner = text.slice(from + 1, to - 1);
+      const start = from + 1 + (inner.length - inner.trimStart().length);
+      return { type: 'text', text: inner.trim(), span: { nodeId, start, end: start + inner.trim().length } };
+    }
+    // 칸 가장자리의 따옴표 글자 `'`는 묶음을 나타내는 표시라 글이 아니다. 단 짝이 이 범위 안에 있는 따옴표는 떼지 않는다
+    // (4일: `A : '…'` 줄 끝의 닫는 따옴표를 떼면 칸 `'…`가 열린 채 남아 안의 괄호가 묶음으로 읽혔다)
+    if (from < to && edges.has(from) && !((partnerOf(from) ?? -1) > from && (partnerOf(from) ?? -1) < to - 1)) { from += 1; changed = true; }
+    if (to > from && edges.has(to - 1) && !((partnerOf(to - 1) ?? -1) >= from && (partnerOf(to - 1) ?? -1) < to - 1)) { to -= 1; changed = true; }
   }
   // 칸 전체가 `( )`면 그 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙): 안쪽 첫 값은 그 칸, `:` 뒤는 그다음 칸들의 기준이다.
   // 안에서 분류기준을 직접 쓰면(`:{이름}` · `[ ]`) 그것을 쓴다. `[ ]` 안은 따로 처음부터 센다.
@@ -893,7 +906,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 따옴표로 감싸도 그대로 한 칸으로 읽히는 글만 쓴다: 프라임 `(x^2)'`처럼 낱말 뒤의 `'`는 따옴표가 아니라 글자라 괜찮다
       const quotable = (text: string) => {
         if (text.includes('\n')) return false;
-        if (!text.includes("'")) return true;
+        if (!hasQuoteMark(text)) return true;
         const edges = reviewQuotes(quote(text)).edges;
         return edges.size === 2 && edges.has(0) && edges.has(text.length + 1);
       };

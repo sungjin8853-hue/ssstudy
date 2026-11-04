@@ -45,7 +45,8 @@ export const parseReviewMemoSyntax = (text: string, newlineOperator: Operator | 
       const character = text[index];
       const quotedRole = quoted.get(index);
       const override = !quotedRole && (character === ':' || character === ';' || character === '<') ? readReviewFieldOverride(text, index + 1, end) : undefined;
-      if (quotedRole) { if (quotedRole !== 'equal' && isNoteShorthandOn()) found.push({ index, operator: 'sequence' }); }
+      // 따옴표 안의 `:` `;` `<`는 글자다(4일: 순서 · 같음으로 읽던 것을 없앴다)
+      if (quotedRole) { /* 글자 */ }
       else if (override) index = override.end - 1;
       else if (groups.skip.has(index)) index = Math.min(groups.skip.get(index)!, end - 1);
       else if (character === ',') found.push({ index, operator: 'and' });

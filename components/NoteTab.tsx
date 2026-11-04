@@ -7,6 +7,7 @@ import type { SymbolTarget } from './ReviewMemoEditor';
 import { NoteSymbolBar } from './NoteSymbolBar';
 import { NoteTutorial } from './Tutorials';
 import { parseNoteDiagram, parseCriterionRelation, parseCriterionLabels, parseLogicText } from '../utils/noteDiagram';
+import { hasQuoteMark } from '../utils/reviewQuote';
 import type { LogicNode, DiagramLogicOperator as ReviewLogicalOperator } from '../utils/noteDiagram';
 import { groupLogsByReviewUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS, paginateNoteSections } from '../utils/noteUnits';
 import type { NoteSheetPage, NoteSheetSection } from '../utils/noteUnits';
@@ -112,7 +113,7 @@ const LogicView: React.FC<{ node: LogicNode; parent?: ReviewLogicalOperator }> =
 
 const LogicText: React.FC<{ text: string }> = ({ text }) => {
   const node = useMemo(() => parseLogicText(text), [text]);
-  return node.kind === 'text' ? <>{text.includes("'") ? node.text : text}</> : <LogicView node={node} />;
+  return node.kind === 'text' ? <>{hasQuoteMark(text) ? node.text : text}</> : <LogicView node={node} />;
 };
 
 const RelationRow: React.FC<{ fields: string[]; arrows: DiagramArrow[]; columns: number; atValues?: Record<number, string> }> = ({ fields, arrows, columns, atValues }) => (

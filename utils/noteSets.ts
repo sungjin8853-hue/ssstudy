@@ -9,7 +9,7 @@ import type { SetExprNode } from './setExpression';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { expandOpenLines } from './noteOpenTail';
 import { expandNestLines } from './noteNest';
-import { reviewQuotes } from './reviewQuote';
+import { isQuoteMark, reviewQuotes } from './reviewQuote';
 
 /**
  * 집합과 능력 집합.
@@ -173,8 +173,9 @@ const templateTokens = (text: string, optionsOf?: TemplateSlotOptions): Template
   const flush = () => { if (literal) { tokens.push({ text: literal }); literal = ''; } };
   for (let at = 0; at < text.length; at += 1) {
     const character = text[at];
-    if (character === "'") {
-      const close = text.indexOf("'", at + 1);
+    if (isQuoteMark(character)) {
+      const rest = text.slice(at + 1).search(/['‘’]/);
+      const close = rest < 0 ? -1 : at + 1 + rest;
       // 따옴표는 논리어(`- , =`)를 글자로 만들 뿐, 텍스트어 `#`는 따옴표 안에서도 자리다(`'#′'` → `x^2′`)
       if (close > at + 1) {
         text.slice(at + 1, close).split('#').forEach((piece, index) => { if (index) { flush(); tokens.push({ any: true }); } literal += piece; });

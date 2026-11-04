@@ -3923,7 +3923,7 @@ test('tutorials walk through every step and open from a help button', () => {
   has(asked('a:{원인}b'), '‘a’의 원인은?', 'b');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 개념 ‘산업혁명’의 원인은?', '증기기관');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 원인 ‘증기기관’의 개념은?', '산업혁명');
-  has(asked("주제:'서울:부산'"), '‘주제’에서 ‘서울’에 대응하는 것은?', '부산');
+  has(asked("주제:'서울:부산'"), '‘주제’ 다음 값은?', '서울:부산');
   has(asked("'3-2':1"), '‘3-2’ 다음 값은?', '1');
   assert.ok(buildReviewQuestions('1 : @+1 : @+1').questions.some(q => q.prompt === '1' && q.answer === '1+1'));
   has(asked(":::toggle A\n'B-C'\n'X-Y'\n:::end\n[A] #'-'#: #+#"), '‘A’에서 ‘B-C’ 다음 값은?', 'B+C');
@@ -8517,38 +8517,39 @@ test('inside the note, the logic words = , - share the one logic colour and the 
   }
 });
 
-test("quotes '…': inside one, : ; < are logic words (= - and reversed -), never column separators", () => {
+test("4일: quotes '…' (and curly ‘…’): everything inside is letters — : ; < , - = // split nothing and make no questions, also inside ( )", () => {
   const shorthand = loadSource('utils/noteShorthand.ts');
   const { reviewQuotes } = loadSource('utils/reviewQuote.ts');
-  const signature = memo => questionsFor(memo).map(q => JSON.stringify([q.kind, q.prompt, q.answer, q.conditions, q.key])).sort();
-  const same = (quoted, plain) => assert.deepEqual(signature(quoted), signature(plain), `${quoted}  ==  ${plain}`);
-  // : → =, ; → -, < → reversed -  (precedence is the same as the plain forms: = binds tightest, then -, then ,)
-  same("A : '가 ; 나 : 다'", 'A : 가 - 나 = 다');
-  same("A : '다 < 나 : 가'", 'A : 나 = 가 - 다');
-  same("A : '가 < 나 < 다'", 'A : 다 - 나 - 가');
-  same("A : 'a ; b ; c' : z", 'A : a - b - c : z');
-  same("A ; x : 'p ; q' ; z", 'A ; x : p - q ; z');
-  same("[a] 'p ; q' ; [c] d", '[a] p - q ; [c] d');
-  same("A : 'p ; (q : r) ; s'", 'A : p - (q : r) - s');
+  const pairs = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}|${q.answer}`).sort();
+  const one = (memo, cell) => assert.deepEqual(pairs(memo), [`direct|A|${cell}`, `reverse|${cell}|A`], memo);
+  one("A : '가 ; 나 : 다'", '가 ; 나 : 다');
+  one("A : '다 < 나 : 가'", '다 < 나 : 가');
+  one("A : 'B-C'", 'B-C');
+  one("A : 'p ; (q : r) ; s'", 'p ; (q : r) ; s');
+  one("A : 'p//q'", 'p//q');
+  // 휴대폰 자판의 둥근 따옴표도 같은 따옴표다(전에는 ‘B-C’의 -로 순서 문제가 나왔다)
+  one('A : ‘B-C’', 'B-C');
+  one('A : ‘가 ; 나’', '가 ; 나');
+  // 거꾸로 쓴 ’…‘와 섞어 쓴 ‘…‘ · ’…’도 같다(4일 요청)
+  one('A : ’B-C‘', 'B-C');
+  one('A : ‘B-C‘', 'B-C');
+  one('A : ’B-C’', 'B-C');
+  // 따옴표 밖은 그대로 칸을 나눈다
+  assert.ok(pairs('A : 가 ; 나').length > 2);
   // the quote marks themselves are not text
-  assert.ok(questionsFor("A : '가 ; 나'").every(q => !q.prompt.includes("'") && !q.answer.includes("'")));
-  // ...and outside a quote nothing changes: the same marks still split columns
-  assert.ok(signature('A : 가 ; 나').length > 0 && JSON.stringify(signature("A : 가 ; 나")) !== JSON.stringify(signature('A : 가 - 나')));
+  assert.ok(questionsFor("A : '가 ; 나'").every(q => !/['‘’]/.test(q.prompt) && !/['‘’]/.test(q.answer)));
   // apostrophes in words and unmatched quotes are plain letters
   assert.equal(reviewQuotes("it's a don't").marks.size, 0);
   assert.equal(reviewQuotes("A : 'x ; y").marks.size, 0, 'no closing quote');
   assert.equal(reviewQuotes("A : x ; y'").marks.size, 0, 'no opening quote');
-  assert.deepEqual([...reviewQuotes("A : 'x ; y'").marks.values()], ['sequence']);
-  assert.deepEqual([...reviewQuotes("'a:b' 'c<d'").marks.values()], ['equal', 'reverse'], 'two quotes on one line');
   assert.equal(reviewQuotes("'a ;\nb'").marks.size, 0, 'a quote never crosses a line');
-  // inside ( ) the ordinary rule comes back: the : there splits columns
-  assert.deepEqual([...reviewQuotes("'p ; (q : r) ; s'").marks.values()], ['sequence', 'sequence']);
-  // the = - shorthand off: marks inside a quote still do not split columns, and they are plain letters
+  assert.equal(reviewQuotes("'p ; (q : r) ; s'").marks.size, 3, 'inside ( ) too');
+  // = - 단축어를 꺼도 켜도 같다
   shorthand.setNoteShorthand(false);
-  try {
-    assert.ok(questionsFor("A : 'x ; y'").some(q => q.prompt === 'A' && q.answer === 'x ; y'), 'the whole quoted text is one plain cell');
-    assert.ok(!questionsFor("A : 'x : y'").some(q => q.prompt === 'x' || q.answer === 'y'), 'x and y are not separate cells');
-  } finally { shorthand.setNoteShorthand(true); }
+  try { one("A : 'x ; y'", 'x ; y'); one("A : 'x : y'", 'x : y'); } finally { shorthand.setNoteShorthand(true); }
+  // 편집기가 받는 둥근 따옴표는 곧은 따옴표로 바뀐다(글자 수 그대로)
+  const { normalizeNotePunctuation } = loadSource('utils/notePunctuation.ts');
+  assert.equal(normalizeNotePunctuation('A : ‘B-C’ don’t'), "A : 'B-C' don't");
 });
 
 test("quotes '…' are read the same way by the diagram, the editor colours, the syntax reader and the merge", () => {
@@ -8558,8 +8559,9 @@ test("quotes '…' are read the same way by the diagram, the editor colours, the
   const diagram = parseNoteDiagram("A : '가 ; 나 : 다'");
   assert.equal(diagram.length, 1);
   assert.equal(diagram[0].fields.length, 2);
-  assert.deepEqual(parseLogicText(diagram[0].fields[1]), { kind: 'op', operator: 'sequence', items: [text('가'), { kind: 'op', operator: 'equal', items: [text('나'), text('다')] }] });
-  assert.deepEqual(parseLogicText("'다 < 나 : 가'"), { kind: 'op', operator: 'sequence', items: [{ kind: 'op', operator: 'equal', items: [text('나'), text('가')] }, text('다')] });
+  // 4일: 따옴표 안은 모두 글자라 한 덩어리다
+  assert.deepEqual(parseLogicText(diagram[0].fields[1]), text('가 ; 나 : 다'));
+  assert.deepEqual(parseLogicText("'다 < 나 : 가'"), text('다 < 나 : 가'));
   assert.deepEqual(parseLogicText("'그냥 글'"), text('그냥 글'), 'the quote marks are not shown');
   // editor colours: the marks inside a quote are no columns (no colon colours) and, since a quote means "no logic words inside" (29일), plain text colour; the text is unchanged
   const colors = loadSource('utils/reviewMemoColors.ts');
@@ -8568,23 +8570,24 @@ test("quotes '…' are read the same way by the diagram, the editor colours, the
   assert.equal(parts.map(part => part.text).join(''), memo);
   assert.deepEqual(parts.filter(part => part.colonIndex !== undefined).map(part => part.colonIndex), [0, 1], 'only the two outside : count as columns');
   assert.deepEqual(parts.filter(part => part.operator || part.logic).map(part => part.text), ["'", "'"], 'only the quote marks keep the logic colour');
-  // a quote around a single mark (`':'`) is that logic word, so it keeps the colour; brackets and parentheses inside a quote are plain
+  // 4일: 기호 하나만 감싼 `':'`도 글자다(논리어 색 없음); brackets and parentheses inside a quote are plain
   const single = "a:f':'g";
-  assert.deepEqual(colors.markReviewMemoOperators(single, colors.markReviewMemoLogicWords(single, colors.splitReviewMemoColonColors(single))).filter(part => part.operator).map(part => part.text), [':']);
+  assert.deepEqual(colors.markReviewMemoOperators(single, colors.markReviewMemoLogicWords(single, colors.splitReviewMemoColonColors(single))).filter(part => part.operator).map(part => part.text), []);
   const inner = "x:'(f(x+h)-f(x))/h [c] d'";
   assert.deepEqual(colors.markReviewMemoOperators(inner, colors.markReviewMemoLogicWords(inner, colors.splitReviewMemoColonColors(inner))).filter(part => part.operator || part.logic).map(part => part.text), ["'", "'"]);
-  // syntax reader: a quoted ; is an order word, no column separator and no toggle-tail relation
+  // syntax reader: a quoted ; is a letter — no order word, no column separator and no toggle-tail relation
   const { parseReviewMemoSyntax } = loadSource('utils/reviewMemoLogic.ts');
   const syntax = parseReviewMemoSyntax("A : '가 ; 나'");
-  assert.deepEqual(syntax.logicalOperators.map(item => item.operator), ['sequence']);
+  assert.deepEqual(syntax.logicalOperators.map(item => item.operator), []);
   assert.equal(syntax.childrenRelation, undefined);
   assert.equal(parseReviewMemoSyntax("A '가 ;'").childrenRelation, undefined);
-  // merge: the quoted cell stays one cell; a word in it can take a new link
+  // merge: the quoted cell stays one cell; a word inside it is letters, so it takes no link (4일)
   const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
   const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
   assert.deepEqual(merged('A : 다', "A : '가 ; 나'"), ["A:'가 ; 나',다"]);
-  assert.deepEqual(merged('나 : 마', "A : '가 ; 나 ; 다'"), ["A:'가 ; (나:마) ; 다'"]);
-  assert.deepEqual(merged('가 : 마', "A : '가 ; 나'"), ["A:'(가:마) ; 나'"], 'the quote mark at the cell edge is not part of the word');
+  assert.deepEqual(merged('나 : 마', "A : '가 ; 나 ; 다'"), []);
+  assert.deepEqual(merged('가 : 마', "A : '가 ; 나'"), []);
+  assert.deepEqual(merged("'B-C' : 마", "A : 'B-C'"), ["A:('B-C':마)"], 'the whole quoted cell still links');
 });
 
 test('editor : colours count from the column an open toggle title leaves off, the same number the questions use', () => {
@@ -9113,10 +9116,9 @@ test('logic words in one cell: a:b-c reads as a:(b-c), and a quoted operator in 
   assert.deepEqual(shape('a:b-c'), shape('a:(b-c)'));
   assert.deepEqual(shape('a:b=c'), shape('a:(b=c)'));
   assert.deepEqual(shape('a:b,c'), shape('a:(b,c)'));
-  // 기호만 따옴표로 감싸면 단어에 붙여 써도 그 기호가 논리어다: ':' = '=' · ';' = '-'
-  assert.deepEqual(shape("a:f':'g"), shape('a:(f=g)'));
-  assert.deepEqual(shape("a:f';'g"), shape('a:(f-g)'));
-  assert.deepEqual(shape("a:f':'g"), shape("a:f ':' g"), 'with or without spaces around the quoted operator');
+  // 4일: 기호만 따옴표로 감싸면 그 기호는 글자다(논리어 · 칸 나눔이 아니다): a:f':'g = a와 한 셀 f:g
+  assert.deepEqual(shape("a:f':'g"), [JSON.stringify(['direct', 'a', 'f:g']), JSON.stringify(['reverse', 'f:g', 'a'])]);
+  assert.deepEqual(shape("a:f';'g"), [JSON.stringify(['direct', 'a', 'f;g']), JSON.stringify(['reverse', 'f;g', 'a'])]);
   // 따옴표가 단어 속 글자(don't)이거나 짝이 없으면 그냥 글자다
   assert.ok(shape("a:don't").every(item => !item.includes('=')));
 });
@@ -9181,7 +9183,7 @@ test('= - , never change the classification criterion, so they group tighter tha
   const shape = memo => buildReviewQuestions(memo).questions.map(question => JSON.stringify([question.kind, question.prompt, question.answer])).sort();
   assert.deepEqual(shape('a:b-c:d'), shape('a:(b-c):d'), 'in the middle of a chain');
   assert.deepEqual(shape('a-b:c'), shape('(a-b):c'), 'before the colon');
-  assert.deepEqual(shape("a:f':'g:h"), shape('a:(f=g):h'), 'a quoted operator in the middle');
+  assert.deepEqual(shape("a:f':'g:h"), shape("a:'f:g':h"), 'a quoted mark in the middle is a letter of that cell (4일)');
   assert.notDeepEqual(shape('a:b:c'), shape('a:(b:c)'), ': changes the criterion, so it is not grouped');
   assert.deepEqual(shape('[x] a:b-c'), shape('[x] a:(b-c)'), 'with a position in front');
   assert.deepEqual(shape(':::toggle T :\na:b-c\n:::end'), shape(':::toggle T :\na:(b-c)\n:::end'), 'inside a toggle');
@@ -10220,8 +10222,8 @@ test("quotes: , - = stay letters even inside ( ) within the quote, so a formula 
   assert.deepEqual(kinds("A:'x (b-c) y'"), ['direct', 'reverse']);
   assert.deepEqual(kinds("도함수:'f′(x) = lim h→0 (f(x+h)-f(x))/h'"), ['direct', 'reverse']);
   assert.deepEqual(kinds("등차수열:'a_n = a + (n-1)d'"), ['direct', 'reverse']);
-  // 괄호 안의 `:` `;` `<`는 전처럼 보통 규칙(안쪽 관계)
-  assert.ok(kinds("A : 'p ; (q : r) ; s'").includes('order-next'));
+  // 4일: 괄호 안의 `:` `;` `<`도 따옴표 안이면 글자다
+  assert.deepEqual(kinds("A : 'p ; (q : r) ; s'"), ['direct', 'reverse']);
 });
 
 test("templates: {#%S} is a chunk free of S's symbols and parentheses, {@}/{@n} re-use matched slots, and a quoted '=' is a set element", () => {
@@ -11472,4 +11474,17 @@ test('4일 다시 점검: after 바로 복습 넣기 the sheet follows notes cha
   assert.ok(logger.includes('sheet.updates.filter(update => keep.has(update.logId))'), 'old text is never written over a record that merging changed');
   const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes('editingSummary?.logs.some(log => log.unitReviewPending && log.autoReviewWaiting) ? { autoReviewWaiting: true }'), 'several collecting records edited into one keep collecting');
+});
+
+test('4일: a line ending in , - = draws its next lines inside the same cell, exactly like one line (only : ; < make groups)', () => {
+  const { parseNoteDiagram } = loadSource('utils/noteDiagram.ts');
+  const same = (split, oneLine) => assert.deepEqual(parseNoteDiagram(split), parseNoteDiagram(oneLine), split);
+  same('A : B,\nC', 'A : B, C');
+  same('A : B,\nC : D', 'A : B, (C : D)');
+  same(':::toggle A ,\nB\nC\n:::end', 'A, B, C');
+  same('사과 : 빨강 -\n노랑', '사과 : 빨강 - 노랑');
+  // `:`로 끝난 줄은 전처럼 아래 줄을 묶는다
+  assert.equal(parseNoteDiagram('자동차 :\n바퀴 : 4개')[0].kind, 'group');
+  // 아래에 토글이 더 있으면 전처럼 묶음
+  assert.equal(parseNoteDiagram('A : B,\n:::toggle X\nY\n:::end')[0].kind, 'group');
 });

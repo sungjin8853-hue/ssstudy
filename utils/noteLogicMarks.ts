@@ -1,6 +1,6 @@
 import { matchingBracket, parseSetExpression } from './setExpression';
 import type { SetExprNode } from './setExpression';
-import { reviewQuotes } from './reviewQuote';
+import { hasQuoteMark, reviewQuotes } from './reviewQuote';
 import { REVIEW_MEMO_TOGGLE_END, REVIEW_MEMO_TOGGLE_START } from './reviewMemo';
 import type { ReviewMemoOldLine } from '../types';
 
@@ -28,7 +28,7 @@ export const setRequiresLogicMark = (inner: string): boolean => {
 
 const quotedPositions = (text: string): ReadonlySet<number> => {
   const quoted = new Set<number>();
-  if (!text.includes("'")) return quoted;
+  if (!hasQuoteMark(text)) return quoted;
   const edges = [...reviewQuotes(text).edges].sort((a, b) => a - b);
   for (let index = 0; index + 1 < edges.length; index += 2) {
     for (let at = edges[index]; at <= edges[index + 1]; at += 1) quoted.add(at);
