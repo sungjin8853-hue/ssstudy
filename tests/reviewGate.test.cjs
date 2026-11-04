@@ -1478,20 +1478,19 @@ test('equals is a higher-importance colon while periods, decimals and spaces sta
 
 test('nested relation columns restart their labels, keep the outer importance, and outer relations use only branch heads', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
-  // 4일: `( )`는 다른 계층이라 안쪽 관계에 바깥 첫 칸(a)을 조건으로 주지 않는다(31일엔 a가 자리였다)
-  // 4일 점검: 덩어리 (b:c)를 보고 바깥 다음 값(d)을 물을 땐 덩어리째 보인다 — 'b'만 보이면 안쪽 b→c와 글이 같아 답이 둘
-  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['(b : c)', 'd', 2, []], ['b', 'c', 2, []], ['d', 'c', 3, []]]);
+  // 31일: "A의 B" 해석은 없앴다. 안쪽 관계는 첫 칸이 자리(조건)다
+  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a']], ['b', 'd', 2, []], ['d', 'c', 3, ['a']]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
-  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['a', 'b = d', 1, []], ['b', 'c', 2, []], ['d', 'c', 2, []]]);
+  assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a']], ['d', 'c', 2, ['a']]]);
   const equalColored = memoColors.splitReviewMemoColonColors('a:(b:c)=(d:c):e // f:g');
   assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 0, 1, 0]);
 });
 
 test('flat and nested chains put the important pairs first: leftmost with its neighbour, then the next pairs', () => {
   const direct = questionsFor('a:b:c // x:(y:z:q)').filter(q => q.kind === 'direct');
-  assert.deepEqual(direct.map(q => [q.prompt, q.answer, q.priority]), [['a', 'b', 1], ['x', 'y', 1], ['b', 'c', 2], ['y', 'z', 2], ['z', 'q', 3]]);
+  assert.deepEqual(direct.map(q => [q.prompt, q.answer, q.priority]), [['a', 'b', 1], ['x', 'y', 1], ['y', 'z', 2], ['b', 'c', 2], ['z', 'q', 3]]);
 });
 
 test('whole reconstruction includes nested relations instead of repeating the easy branch-head answer', () => {
@@ -1501,14 +1500,12 @@ test('whole reconstruction includes nested relations instead of repeating the ea
 });
 
 test('reverse questions with identical conditions collect valid alternatives instead of asking an ambiguous duplicate', () => {
-  const reversed = questionsFor('[x] b:c // [x] d:c').filter(q => q.kind === 'reverse' && q.prompt === 'c');
+  const reversed = questionsFor('x:(b:c) // x:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(reversed.length, 1);
   assert.equal(reversed[0].answer, 'b OR d');
   assert.deepEqual(reversed[0].conditions, ['x']);
-  const separate = questionsFor('[x] b:c // [y] d:c').filter(q => q.kind === 'reverse' && q.prompt === 'c');
+  const separate = questionsFor('x:(b:c) // y:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c');
   assert.equal(separate.length, 2);
-  // 4일: `( )` 안은 바깥 첫 칸을 조건으로 주지 않아, 바깥이 달라도 같은 질문의 대안으로 모인다
-  assert.deepEqual(questionsFor('x:(b:c) // y:(d:c)').filter(q => q.kind === 'reverse' && q.prompt === 'c').map(q => [q.answer, q.conditions]), [['b OR d', []]]);
 });
 
 test('AND partial questions give some of the requirements and ask for the rest', () => {
@@ -8640,7 +8637,7 @@ test('( ) inherits the criterion of its place (31st): inside, the first value ta
   // the sentence carries the inherited names
   const { getReviewQuestionSentence } = questionBuilder;
   const inner = questionBuilder.buildReviewQuestions(':::toggle [개념:정의;예시]\n임진왜란 : (원인 : 일본의 야욕) ; 1592년\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === '원인' && q.answer === '일본의 야욕');
-  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '정의 ‘원인’의 예시는?');
+  assert.equal(getReviewQuestionSentence(inner.criterion, inner).statement, '개념 ‘임진왜란’에서 정의 ‘원인’의 예시는?');
 });
 
 test('[집합(1)] : [집합(2)] connects the sub-values of the two sets: relation lines between them become ability-convert questions', () => {
@@ -10252,8 +10249,8 @@ test('a lone [X] on a later cell (no criterion, not all cells set) names that ce
   const say = memo => questionsFor(memo).filter(q => q.kind === 'direct' || q.kind === 'reverse').map(q => getReviewQuestionSentence(q.criterion ?? null, q).statement);
   assert.deepEqual(say('임진왜란 : [원인] 일본의 야욕'), ['‘임진왜란’의 원인은?', '원인 ‘일본의 야욕’ 앞의 값은?']);
   const inner = say('세포 : (막 : [기능] 보호)');
-  // 4일: `( )` 안은 다른 계층이라 바깥 칸(세포)을 붙이지 않는다
-  assert.ok(inner.includes('‘막’의 기능은?') && inner.includes('기능 ‘보호’ 앞의 값은?'), inner.join(' | '));
+  // `세포 : (막 : …)`는 "세포의 막": 바깥 칸은 "의"로 잇는다(27일)
+  assert.ok(inner.includes('‘세포’에서 ‘막’의 기능은?') && inner.includes('‘세포’에서 기능 ‘보호’ 앞의 값은?'), inner.join(' | '));
   // 첫 칸만의 [a]는 전처럼 조건, 모든 칸의 [ ]는 전처럼 능력 변환
   assert.deepEqual(questionsFor('[a] X:y').map(q => q.conditions), [['a'], ['a']]);
   assert.ok(questionsFor('[사건] 임진왜란 : [원인] 일본의 야욕').every(q => q.convert));
@@ -10715,14 +10712,12 @@ test('27일 노트 규칙(31일 바뀜): 괄호 안은 놓인 자리의 기준�
   const say = memo => buildReviewQuestions(memo).questions.map(q => ({ q, text: getReviewQuestionSentence(q.criterion ?? null, q)?.statement }));
   // A:(B:C): A는 자리, 괄호 안 B → C는 따로 문제가 된다(31일: "A의 B" 없음)
   const owner = say('A값:(B값:C값)');
-  // 4일: 바깥 첫 칸(A값)은 괄호 안 문제와 상관이 없어 붙이지 않는다
-  assert.ok(owner.some(item => item.text === '‘B값’ 다음 값은?' && item.q.answer === 'C값'));
+  assert.ok(owner.some(item => item.text === '‘A값’에서 ‘B값’ 다음 값은?' && item.q.answer === 'C값'));
   assert.ok(owner.some(item => item.text === '‘A값’ 다음 값은?' && item.q.answer === 'B값'));
   assert.ok(!owner.some(item => /‘A값’의/.test(item.text)));
   // (B:C),(d:f): 괄호 안 첫 값은 놓인 칸(B)의 이름을 이어받는다
   const both = say(':::toggle [A:B] 바깥\nA값:(B값:C값),(d값:f값)\n:::end').map(item => item.text);
-  // 4일: 괄호 안 문제에 바깥 첫 칸(A값)은 붙이지 않는다(위쪽 토글 '바깥'은 그대로 자리)
-  assert.ok(both.includes('‘바깥’에서 B ‘B값’ 다음 값은?') && both.includes('‘바깥’에서 B ‘d값’ 다음 값은?'), both.join(' | '));
+  assert.ok(both.includes('‘바깥’, A ‘A값’에서 B ‘B값’ 다음 값은?') && both.includes('‘바깥’, A ‘A값’에서 B ‘d값’ 다음 값은?'), both.join(' | '));
   // (d:e):x는 첫 칸이 괄호: 안쪽 d는 A, e는 B를 이어받고, 괄호 뒤 칸 x는 B다
   const first = buildReviewQuestions(':::toggle [A:B] 바깥\n(d값:e값):x값\n:::end').questions;
   const inner = first.find(q => q.kind === 'direct' && q.prompt === 'd값' && q.answer === 'e값');
@@ -10797,8 +10792,8 @@ test('29일: 토글 제목의 형식 # — 아래 줄을 # 자리에 넣어 읽�
   const pairs = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => `${q.conditions.join('/')}|${q.prompt}>${q.answer}`);
   assert.deepEqual(pairs(':::toggle A: #\nx\ny:z\n:::end'), ['|A>x', '|A>y', '|y>z']);
   assert.deepEqual(pairs(':::toggle A: # :B\nx\n:::end'), ['|A>x', '|x>B']);
-  // 괄호 안에 넣으면 다른 계층이라(4일) 안쪽 x → y에 A를 붙이지 않는다
-  assert.deepEqual(pairs(':::toggle A;(#)\nx:y\n:::end'), ['|A>x', '|x>y']);
+  // 괄호 안에 넣어도 31일부터 "A의 x" 해석은 없다: A는 자리다
+  assert.deepEqual(pairs(':::toggle A;(#)\nx:y\n:::end'), ['|A>x', 'A|x>y']);
   assert.ok(pairs(':::toggle A;[#]\nx\n:::end').includes('|A>x'));
   // 제목의 #은 문제 글에 나오지 않는다
   assert.ok(buildReviewQuestions(':::toggle A: #\nx\n:::end').questions.every(q => !`${q.prompt}${q.answer}${q.conditions.join('')}`.includes('#')));
@@ -11569,7 +11564,9 @@ test("4일: ( ) is another layer — A:B,(N=P) asks N → P with only N (and N's
   assert.ok(paren.some(item => item.startsWith('direct|A|B AND (N = P)|')), 'the full recall stays');
   assert.ok(paren.some(item => item.startsWith('remaining|A|N = P|')), 'the remaining recall stays');
   assert.ok(said('A:B,N=P').includes('direct|N|P|A|‘A’에서 ‘N’에 대응하는 것은?'), 'no ( ): the in-cell = still sits in A');
-  assert.ok(said('a:(b:c)').includes('direct|b|c||‘b’ 다음 값은?'));
+  // 4일 23:46: 괄호 안에 `:` `;` `<`가 있으면 능력적 집합이 바깥과 이어져 전처럼 첫 칸(a)을 자리로 둔다
+  assert.ok(said('a:(b:c)').includes('direct|b|c|a|‘a’에서 ‘b’ 다음 값은?'));
+  assert.ok(said('A:B,(N-P:Q)').includes('direct|N → P|Q|A|‘A’에서 ‘N → P’ 다음 값은?'));
   // N의 능력적 집합이 있으면 그 집합이 문제에 보인다
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
@@ -11580,19 +11577,18 @@ test("4일: ( ) is another layer — A:B,(N=P) asks N → P with only N (and N's
   assert.ok(renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question: q, revealed: false, memo })).includes('N ∈ 과일'));
 });
 
-test('4일 점검: ( ) 덩어리를 보고 바깥 다음 값을 물을 땐 덩어리째 보여 안쪽 관계 문제와 겹치지 않는다', () => {
+test('4일 23:46: 괄호 안에 : ; <가 있으면 다른 계층으로 떼지 않고 전처럼 바깥 칸에 이어진다(문제 글이 겹치지 않음)', () => {
   const { buildReviewQuestions, getReviewQuestionSentence } = loadSource('utils/reviewQuestions.ts');
   const asked = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct' || q.kind === 'reverse')
     .map(q => [getReviewQuestionSentence(null, q).statement, q.answer]);
   const econ = asked('공급 : (생산비 감소 : 공급 증가) ; 가격 하락');
-  assert.ok(econ.some(([s, a]) => s === '‘(생산비 감소 : 공급 증가)’ 다음 값은?' && a === '가격 하락'));
-  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 다음 값은?' && a === '공급 증가'));
-  // 같은 글에 답이 둘인 문제가 없다
+  assert.ok(econ.some(([s, a]) => s === '‘공급’에서 ‘생산비 감소’ 다음 값은?' && a === '공급 증가'));
+  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 다음 값은?' && a === '가격 하락'));
   const bySentence = new Map();
   econ.forEach(([s, a]) => bySentence.set(s, [...(bySentence.get(s) ?? []), a]));
   assert.ok([...bySentence.values()].every(answers => answers.length === 1), JSON.stringify([...bySentence]));
-  // 거꾸로 묻는 문제는 머리 값만 보여도 안쪽 문제와 겹치지 않아 그대로다
-  assert.ok(econ.some(([s, a]) => s === '‘생산비 감소’ 앞의 값은?' && a === '공급'));
+  // `=` `-` `,`만 든 괄호는 그대로 다른 계층(첫 칸을 주지 않음)
+  assert.ok(asked('A:B,(N=P)').some(([s, a]) => s === '‘N’에 대응하는 것은?' && a === 'P'));
 });
 
 test('4일 점검: [ ]만 쓴 토글 제목은 문제 글에서 괄호 없이 보인다(키는 그대로)', () => {

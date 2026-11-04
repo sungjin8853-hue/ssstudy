@@ -200,8 +200,9 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   // 안에서 분류기준을 직접 쓰면(`:{이름}` · `[ ]`) 그것을 쓴다. `[ ]` 안은 따로 처음부터 센다.
   if (reviewGroups(text).closed.get(from) === to - 1) {
     const inner = parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
-    // `( )`로 묶은 덩어리는 다른 계층이다(4일): 안쪽 관계를 물을 때 바깥 줄의 첫 칸을 조건으로 주지 않는다
-    return text[from] === '(' && inner.type !== 'text' ? { ...inner, grouped: true } : inner;
+    // `( )`로 묶은 덩어리는 다른 계층이다(4일): 안쪽 관계를 물을 때 바깥 줄의 첫 칸을 조건으로 주지 않는다.
+    // 4일 23:46: 능력적 집합은 같은 논리어(`:` `;` `<`)끼리만 이어진다. 괄호 안에 `:` `;` `<`가 있으면 전처럼 바깥 칸을 잇는다(다른 계층으로 떼지 않는다)
+    return text[from] === '(' && inner.type !== 'text' && !hasRelation(inner) ? { ...inner, grouped: true } : inner;
   }
   let allCuts = splitAt(text, from, to, relationMarks());
   // 다른 연결어(`:` `;` `<`) 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할로 칸을 나눈다
@@ -304,6 +305,10 @@ const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (e
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
 
+/** 덩어리 안 어디든 `:` `;` `<` 관계가 있는가(있으면 능력적 집합이 바깥과 이어진다) */
+const hasRelation = (expression: Expression): boolean => expression.type === 'relation'
+  ? expression.separators.some(separator => ':;<'.includes(separator)) || expression.fields.some(hasRelation)
+  : expression.type !== 'text' && expression.items.some(hasRelation);
 const head = (expression: Expression): Expression => {
   if (expression.type === 'relation') return head(expression.fields[0]);
   if (expression.type === 'text') return expression;
@@ -1232,20 +1237,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (goesBackward(separator)) plainCellBlanks(index, index + 1, separator);
       // 홀로 쓴 `=` 뒤에 `,`로 여러 값이 오면 구성요소, 값 하나면 같은 것으로 묻는다(31일)
       const equalForm = separator === '=' ? { form: (right.type === 'and' ? 'components' : 'equal') as 'equal' | 'components' } : {};
-      // 4일 점검: `( )`로 묶은 관계 칸(다른 계층)을 보고 묻는 바깥 문제는 그 덩어리 전체를 보인다. 머리 값만 보이면
-      // 안쪽 관계 문제와 글이 같아져 답이 둘이 된다(`공급 : (생산비 감소 : 공급 증가) ; 가격 하락`의 "‘생산비 감소’ 다음 값은?" → 공급 증가 · 가격 하락)
-      // 덩어리는 쓴 모양대로 괄호째 보인다(`(생산비 감소 : 공급 증가)`): 괄호 안이라 바깥 논리어(순서 · 모두)로 읽히지 않는다
-      // 안쪽 첫 관계의 답 칸과 바깥 답 칸이 서로 다른 이름의 기준 칸이면(`[A];[C]` 밑 `(x;y):z`의 C와 B) 글이 달라 머리 값만 보인다.
-      // 거꾸로 묻는 문제는 머리 값을 보여도 안쪽 문제(머리 아닌 값을 보임)와 겹치지 않아 그대로 둔다
-      const shownOf = (at: number) => {
-        const field = expression.fields[at];
-        if (field.type !== 'relation' || !field.grouped || !goesForward(field.separators[0] ?? ':')) return expressionLabel(columns[at]);
-        const outer = expression.classifications[at + 1];
-        const inner = field.classifications[1];
-        if (typeof outer === 'string' && typeof inner === 'string' && outer && inner && outer !== inner) return expressionLabel(columns[at]);
-        return `(${field.fields.map((item, order) => `${order ? ` ${field.separators[order - 1]} ` : ''}${expressionLabel(item)}`).join('')})`;
-      };
-      const base = { prompt: shownOf(index), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
+      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
