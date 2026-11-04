@@ -2,7 +2,7 @@ import type { StudyLog, Subject } from '../types';
 import { fsrsIntervalMs, fsrsReview, FSRS_DEFAULT_RETENTION } from './fsrs';
 import type { FsrsCard } from './fsrs';
 import { getStageChapters, getSubjectStages } from './schedule';
-import { pastSessions, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_RATING, SUBJECT_GRADES, summarizeSpeedFeedback } from './subjectFeedback';
+import { pastSessions, previousUnitSpeed, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_RATING, SUBJECT_GRADES, summarizeSpeedFeedback } from './subjectFeedback';
 import type { SpeedFeedbackSummary, SubjectGrade } from './subjectFeedback';
 
 /**
@@ -96,8 +96,10 @@ export interface ChapterFeedback {
   summary: SpeedFeedbackSummary;
   /** 고른 기록마다 공부했을 때의 난도(시간순) */
   sessionGrades: SubjectGrade[];
-  /** 그 난도들의 평균: 마지막 평가의 추천 */
+  /** 마지막 평가의 추천: 바로 앞에 공부한 단위와 견준 난도(4일), 앞 단위가 없으면 그 난도들의 평균 */
   recommended: SubjectGrade | null;
+  /** 고른 단원 바로 앞에 공부한 단위의 속도(없으면 null) */
+  previousSpeed: number | null;
   /** 난도마다 지금부터 다음 복습까지(ms, 이미 지났으면 0) */
   intervals: Record<SubjectGrade, number>;
 }
@@ -112,7 +114,10 @@ export const chapterFeedbackOf = (logs: readonly StudyLog[], subjectId: string, 
     const due = simulatedDueMs(simulateStudyCard(logs, subjectId, selected, grade));
     return [grade, Number.isFinite(due) ? Math.max(0, due - nowMs) : 0];
   })) as Record<SubjectGrade, number>;
-  return { pages, minutes, speed: speedPerHour(pages, minutes), summary, sessionGrades, recommended: selected.length ? averageGradeOf(sessionGrades) : null, intervals };
+  const speed = speedPerHour(pages, minutes);
+  const previousSpeed = previousUnitSpeed(logs, subjectId, selected);
+  const recommended = !selected.length ? null : (previousSpeed !== null ? recommendSubjectGrade(speed, previousSpeed) : null) ?? averageGradeOf(sessionGrades);
+  return { pages, minutes, speed, summary, sessionGrades, recommended, previousSpeed, intervals };
 };
 
 /** 고른 기록들에 마지막 평가(grade)와 계산한 기억을 매긴다. 등록은 registerPendingReviews(…, ids)가 한다 */

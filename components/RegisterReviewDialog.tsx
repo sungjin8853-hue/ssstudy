@@ -51,7 +51,7 @@ export const RegisterReviewDialog: React.FC<{
               className="mt-0.5 h-5 w-5 shrink-0 accent-indigo-600" />
             <span className="flex flex-col gap-0.5">
               <span className="text-sm font-black text-slate-800">자동으로 복습에 넣기</span>
-              <span className="text-[12px] font-bold leading-relaxed text-slate-500">복습에 넣기를 누르지 않아도 공부를 저장하면 바로 복습에 들어가요. 앞 공부가 끝나고 3시간 안에 이어 하면 같은 때 공부한 것으로 보고 맨 앞 공부 때로 합쳐요. 난도는 그 공부들의 속도로 정한 추천 난도예요.</span>
+              <span className="text-[12px] font-bold leading-relaxed text-slate-500">복습에 넣기를 누르지 않아도 공부를 저장하면 바로 복습에 들어가요. 앞 공부가 끝나고 3시간 안에 이어 하면 같은 때 공부한 것으로 보고 맨 앞 공부 때로 합쳐요. 난도는 그 공부들의 속도를 바로 앞에 공부한 단위와 견준 추천 난도예요.</span>
               {auto.on && pendingCount > 0 && <span data-testid="auto-review-backlog" className="text-[12px] font-black text-indigo-700">켜기 전에 저장한 기록 {pendingCount}개는 아래에서 난도를 골라 넣어요.</span>}
             </span>
           </label>
@@ -74,12 +74,13 @@ export const RegisterReviewDialog: React.FC<{
           </div>
           {chapterInfo && selectedLogs.length > 0 && (
             <p data-testid="chapter-review-grades" className="mt-2 text-[13px] font-bold text-slate-600">
-              공부한 때마다 복습한 것으로 계산해요 · 그때 난도 {chapterInfo.sessionGrades.map(grade => SUBJECT_GRADE_LABELS[grade]).join(' → ')} · 평균 {chapterInfo.recommended ? SUBJECT_GRADE_LABELS[chapterInfo.recommended] : '-'}
+              공부한 때마다 복습한 것으로 계산해요 · 그때 난도 {chapterInfo.sessionGrades.map(grade => SUBJECT_GRADE_LABELS[grade]).join(' → ')} · 추천 {chapterInfo.recommended ? SUBJECT_GRADE_LABELS[chapterInfo.recommended] : '-'}
             </p>
           )}
         </>}
         <p data-feedback-current="true" className="mt-1 text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(speed, pageLabel)}</span></p>
         <ul className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">
+          {(chapterInfo ?? info).previousSpeed !== null && <li data-feedback-previous="true" className="text-indigo-800">바로 앞 단위 속도 {formatSpeed((chapterInfo ?? info).previousSpeed, pageLabel)} · 추천은 이 단위와 견줘요</li>}
           <li data-feedback-average="true">평균 속도 {formatSpeed(summary.averageSpeed, pageLabel)}{summary.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</li>
           {summary.byGrade.map(item => <li key={item.grade} data-feedback-history={item.grade} className="text-slate-600">
             {SUBJECT_GRADE_LABELS[item.grade]} · 평균 속도 {formatSpeed(item.averageSpeed, pageLabel)} · {item.count}회

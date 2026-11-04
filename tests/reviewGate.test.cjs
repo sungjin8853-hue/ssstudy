@@ -11326,3 +11326,25 @@ test('4일: pomodoro pages use the current unit average (from the unit start to 
   const slow = { id: 'w', subjectId: 's', pagesRead: 10, timeSpentMinutes: 60, timestamp: '2026-11-04T00:00:00.000Z' };
   assert.deepEqual([autoReviewGradeOf([...past, fast], [fast]), autoReviewGradeOf([...past, slow], [slow])], ['easy', 'hard']);
 });
+
+test('4일: a review grade compares the part with the unit studied right before it (laid out in study order), not with the average', () => {
+  const { previousUnitSpeed, pendingFeedbackOf } = loadSource('utils/subjectFeedback.ts');
+  const { autoReviewGradeOf } = loadSource('utils/autoReview.ts');
+  const log = (id, pages, minutes, at, extra = {}) => ({ id, subjectId: 's', pagesRead: pages, timeSpentMinutes: minutes, timestamp: at, ...extra });
+  const logs = [
+    log('u1', 60, 60, '2026-10-01T01:00:00.000Z', { reviewRegisteredAt: '2026-10-01T02:00:00.000Z' }), // 60P/h
+    log('u2', 10, 60, '2026-10-02T01:00:00.000Z', { reviewRegisteredAt: '2026-10-02T02:00:00.000Z' }), // 10P/h (바로 앞 단위)
+    log('n', 12, 60, '2026-10-03T01:00:00.000Z', { unitReviewPending: true })
+  ];
+  assert.equal(previousUnitSpeed(logs, 's', [logs[2]]), 10);
+  // 지난 평균(35P/h)과 견주면 어려움이지만, 바로 앞 단위(10P/h)와 견주면 빨라졌다 → 쉬움
+  const info = pendingFeedbackOf(logs, 's', Date.parse('2026-10-03T02:00:00.000Z'));
+  assert.equal(info.previousSpeed, 10);
+  assert.equal(info.recommended, 'easy');
+  // 자동 복습 묶음도 앞 묶음과 견준다
+  const auto = { ...logs[2], unitReviewPending: undefined };
+  assert.equal(autoReviewGradeOf(logs.map(item => (item.id === 'n' ? auto : item)), [auto]), 'easy');
+  // 다른 단계 · 복습 기록 · 뒤에 공부한 단위는 앞 단위가 아니다
+  assert.equal(previousUnitSpeed(logs, 's', [{ ...logs[2], subjectStageId: 'f' }]), null);
+  assert.equal(previousUnitSpeed(logs, 's', [logs[0]]), null);
+});

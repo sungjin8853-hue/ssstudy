@@ -111,9 +111,35 @@ export interface PendingFeedback {
   minutes: number;
   speed: number | null;
   summary: SpeedFeedbackSummary;
+  /** 복습할 부분 바로 앞에 공부한 단위의 속도(4일). 없으면 null */
+  previousSpeed: number | null;
   recommended: SubjectGrade | null;
   intervals: Record<SubjectGrade, number>;
 }
+
+/**
+ * 복습할 묶음(current) 바로 앞에 공부한 단위의 속도(4일 요청): 같은 과목 · 같은 단계에서 복습에 넣은 공부 기록을 넣은 때(묶음)로 나눠
+ * 공부한 순서대로 놓고, current의 맨 앞 기록보다 앞선 마지막 묶음의 속도(장수 합 ÷ 시간 합). 앞 단위가 없으면 null.
+ * "복습에 넣기"로 넣은 묶음과 자동 복습 넣기의 묶음(3시간 안에 이어 한 공부) 모두 한 단위다.
+ */
+export const previousUnitSpeed = (logs: readonly StudyLog[], subjectId: string, current: readonly StudyLog[]): number | null => {
+  if (!current.length) return null;
+  const ids = new Set(current.map(log => log.id));
+  const stageOf = (log: StudyLog) => log.subjectStageId || log.subjectId;
+  const stage = stageOf(current[0]);
+  const firstMs = Math.min(...current.map(log => Date.parse(log.timestamp)).filter(Number.isFinite));
+  const groups = new Map<string, { start: number; pages: number; minutes: number }>();
+  logs.forEach(log => {
+    if (ids.has(log.id) || log.subjectId !== subjectId || log.reviewParentSubjectId || log.isRepeatReview || log.unitReviewPending || !log.reviewRegisteredAt) return;
+    if (stageOf(log) !== stage || logSpeed(log) === null) return;
+    const at = Date.parse(log.timestamp);
+    const group = groups.get(log.reviewRegisteredAt) ?? { start: Infinity, pages: 0, minutes: 0 };
+    groups.set(log.reviewRegisteredAt, { start: Math.min(group.start, at), pages: group.pages + log.pagesRead, minutes: group.minutes + log.timeSpentMinutes });
+  });
+  const before = [...groups.values()].filter(group => group.start < firstMs).sort((a, b) => a.start - b.start);
+  const last = before[before.length - 1];
+  return last ? speedPerHour(last.pages, last.minutes) : null;
+};
 
 export const pendingFeedbackOf = (logs: readonly StudyLog[], subjectId: string, nowMs: number): PendingFeedback => {
   const pending = logs.filter(log => log.unitReviewPending && log.subjectId === subjectId);
@@ -122,7 +148,9 @@ export const pendingFeedbackOf = (logs: readonly StudyLog[], subjectId: string, 
   const minutes = pending.reduce((sum, log) => sum + (Number.isFinite(log.timeSpentMinutes) ? log.timeSpentMinutes : 0), 0);
   const speed = speedPerHour(pages, minutes);
   const summary = summarizeSpeedFeedback(pastSessions(logs.filter(log => !ids.has(log.id)), subjectId, 'study'));
-  return { pending, pages, minutes, speed, summary, recommended: recommendSubjectGrade(speed, summary.averageSpeed), intervals: previewSubjectIntervals(pending[0] ?? null, nowMs) };
+  // 추천 난도는 바로 앞에 공부한 단위와 견준다(4일). 앞 단위가 없으면 평균 속도와 견준다
+  const previousSpeed = previousUnitSpeed(logs, subjectId, pending);
+  return { pending, pages, minutes, speed, summary, previousSpeed, recommended: recommendSubjectGrade(speed, previousSpeed ?? summary.averageSpeed), intervals: previewSubjectIntervals(pending[0] ?? null, nowMs) };
 };
 
 /** 고른 난도를 그 과목의 복습 대기 기록 모두에 매긴다: 평가(feedbackGrade)와 그 평가가 정한 기억(reviewFsrs). 등록은 registerPendingReviews가 한다. */
