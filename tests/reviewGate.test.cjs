@@ -11303,6 +11303,8 @@ test('4일: auto review has no units — auto-registered logs make no unit bound
   assert.equal(autoReviewGradeOf([...past, now], [now]), 'good', '30/h against the total average 30/h');
   const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
   assert.ok(app.includes("...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),"), 'the setting survives loading');
+  const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes("editingSummary.logs[0].autoReviewRegistered ? { autoReviewRegistered: true } : {}"), 'editing an auto-registered record keeps it in its auto group');
 });
 
 test('4일: pomodoro pages use the current unit average (from the unit start to now), estimates keep the whole average', () => {

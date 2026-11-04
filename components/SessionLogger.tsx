@@ -1169,7 +1169,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           : selectedRunQueueItem.reviewGroup.logs.reduce((sum, log) => sum + log.pagesRead, 0),
       // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일): 학습과목은 "복습에 넣기" 사이, 복습과목은 복습 한 번이 한 단위. 기본 복습은 그대로
       pages: getPomodoroPageTarget(selectedRunQueueItem.kind === 'study'
-        ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === taskSubject.id && !log.reviewParentSubjectId)).averageTimePerPage
+        ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === taskSubject.id)).averageTimePerPage
           || selectedRunQueueItem.studyItem.averageTimePerPage
         : selectedRunQueueItem.reviewGroup.reviewType === 'subject'
           ? reviewUnitEfficiencyOf(selectedRunQueueItem.reviewGroup.parentSubjectId, selectedRunQueueItem.reviewGroup.subjectId) || selectedRunQueueItem.reviewGroup.averageTimePerPage
@@ -1258,7 +1258,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 하루 공부 시간 · 계획 같은 전체 계산만 전체 평균이다. 이번 단위에 기록이 없으면 전체 평균
   const sessionUnit = useMemo(() => (activeReviewRun && selectedSubject
     ? reviewUnitOf(activeReviewRun.parentSubjectId, selectedSubject.id)
-    : calculateCurrentUnitEfficiency(selectedSubjectLogs.filter(log => !log.reviewParentSubjectId))
+    : calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === subjectId))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [activeReviewRun, selectedSubject, selectedSubjectLogs, logs]);
   const averageTimePerPage = sessionUnit.averageTimePerPage || (activeReviewRun ? activeReviewTiming?.averageTimePerPage || 0 : overallAverage);

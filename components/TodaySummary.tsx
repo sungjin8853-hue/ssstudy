@@ -665,8 +665,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     const rangeChapters = range.chapters;
     const pages = !range.valid ? 0 : rangeChapters.length > 0 ? pagesBetween(rangeChapters, editStartPage, editEndPage) : calculateAmountFromEndPage(editStartPage, editEndPage);
     const existingTimedSamples = logs.filter(log => log.subjectId === subjectId);
-    // 시간을 비운 기록은 이번 단위의 평균 효율로 채운다(4일: 실제 공부 기록이라 단위 기준)
-    const measuredAverage = calculateCurrentUnitEfficiency(existingTimedSamples.filter(log => !log.reviewParentSubjectId)).averageTimePerPage;
+    // 시간을 비운 기록은 이번 단위의 평균 효율(효율 칸과 같은 기록)로 채운다(4일: 실제 공부 기록이라 단위 기준)
+    const measuredAverage = calculateCurrentUnitEfficiency(existingTimedSamples).averageTimePerPage;
     const existingAverage = measuredAverage || Math.max(0, targetSubject?.initialAverageTimePerPage || 0);
     const minutes = editMinutes.trim() === ''
       ? Number((pages * existingAverage).toFixed(2))
@@ -690,6 +690,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ...(editingSummary && editingSummary.logs.length > 0 && editingSummary.logs.every(log => !log.manualEntry) ? {} : { manualEntry: true }),
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewRegisteredAt ? { reviewRegisteredAt: editingSummary.logs[0].reviewRegisteredAt } : {}),
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewUnitRange ? { reviewUnitRange: editingSummary.logs[0].reviewUnitRange } : {}),
+      // 자동 복습 넣기로 들어간 기록은 고쳐도 자동 묶음으로 남는다(4일 점검: 빠지면 직접 넣은 것으로 보여 단위가 나뉘었다)
+      ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewRegistered ? { autoReviewRegistered: true } : {}),
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,
@@ -854,7 +856,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const addLabel = getPageLabel(selectedSubject);
   // 시간을 비우면 이번 단위의 평균 효율로 계산한다(4일). 잰 값도 임시 값도 없으면 0분이 되어 효율을 흐리므로 시간을 넣어야 저장된다
   const addKnownAverage = addingInline && subjectId
-    ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === subjectId && !log.reviewParentSubjectId)).averageTimePerPage || Math.max(0, selectedSubject?.initialAverageTimePerPage || 0) : 0;
+    ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === subjectId)).averageTimePerPage || Math.max(0, selectedSubject?.initialAverageTimePerPage || 0) : 0;
   const addNeedsMinutes = addingInline && editMinutes.trim() === '' && !(addKnownAverage > 0);
   const setSolvedPages = (count: number) => {
     const chapters = calculatedRange.chapters;
