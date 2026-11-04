@@ -2329,6 +2329,84 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setPostSaveNextSubjectId(null);
   };
 
+  // 측정 도중 "바로 복습 넣기"(4일): 창 없이 지금까지의 공부를 저장해 곧바로 복습에 넣고(자동 복습이면 모으던 기록과 한 묶음, 아니면 복습에 넣기 창의 추천 난도로),
+  // 같은 과목을 그다음 쪽부터 새로 잰다. 정리노트는 그대로 두고, 이미 저장한 부분은 다음 저장 때 다시 담지 않는다
+  const [cutEndPage, setCutEndPage] = useState<string | null>(null);
+  const [cutError, setCutError] = useState('');
+  const cutStartPage = selectedSubject ? (activeSubjectStage?.currentPage || selectedSubject.completedPages + 1) : 0;
+  const cutDefaultEnd = cutStartPage > 0
+    ? formatPageNumber(expectedReadAmount > 0
+      ? stageChapters.length > 0
+        ? endPageForSolved(stageChapters, cutStartPage, expectedReadAmount) ?? calculateEndPageValue(cutStartPage, expectedReadAmount)
+        : calculateEndPageValue(cutStartPage, expectedReadAmount)
+      : cutStartPage)
+    : '';
+  const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !skipReview;
+
+  const handleCutReview = () => {
+    if (!selectedSubject || activeReviewRun || skipReview) return;
+    const end = Number(cutEndPage ?? cutDefaultEnd);
+    const solved = stageChapters.length > 0 ? pagesBetween(stageChapters, cutStartPage, end) : getAutoSolvedPageCount(cutStartPage, end);
+    const measurement = Number.isFinite(end) ? createPageMeasurement(cutStartPage, end, Number(solved), remainingSubjectPages, stageChapters) : null;
+    if (!measurement) { setCutError(`끝 페이지를 확인해 주세요(${pagePos}.${cutStartPage} 이상).`); return; }
+    const elapsed = accumulatedSecondsRef.current + (startTimeRef.current !== null ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0);
+    const times = step === 'organize' ? getSessionTimes(studySeconds, elapsed) : getSessionTimes(elapsed, 0);
+    const carriedParts = sheetPartsRef.current;
+    const sheet = carriedParts.length > 0 ? splitNoteSheet(carriedParts, reviewMemo) : null;
+    const updates = sheet ? sheet.updates : [];
+    const savedMemo = sheet ? sheet.added : reviewMemo;
+    const log: StudyLog = {
+      id: Math.random().toString(36).substr(2, 9),
+      subjectId,
+      ...measurement,
+      pomodoroSession: true,
+      ...times,
+      timestamp: new Date().toISOString(),
+      studyDate: activeStudyDate,
+      studyWeekday: activeWeekday,
+      isReviewed: false,
+      isCondensed: false,
+      reviewMemo: savedMemo || undefined,
+      reviewMemoDocument: sheet ? undefined : reviewMemoDocument,
+      reviewEnabled: true,
+      autoReviewCut: true
+    };
+    const nextParts: SheetPart[] = [
+      ...carriedParts.map(part => ({ logId: part.logId, memo: updates.find(update => update.logId === part.logId)?.memo ?? part.memo })),
+      ...(savedMemo.trim() ? [{ logId: log.id, memo: savedMemo }] : [])
+    ];
+    sheetUpdatesRef.current = updates;
+    applyCarriedSheetEdits();
+    setPendingAutoAdvanceLogId(null);
+    onLogSession(log);
+    sheetPartsRef.current = nextParts;
+    sheetUpdatesRef.current = [];
+    if (nextParts.length > 0) { setReviewMemo(mergeSheetParts(nextParts)); setReviewMemoDocument(undefined); }
+    // 그다음 쪽부터 새로 잰다(뽀모도로 · 타임어택도 처음부터)
+    setStudySeconds(0);
+    setOrganizationSeconds(0);
+    setAttackCompletedPages(0);
+    setPageAttackTargetSeconds(averageSecondsPerPage);
+    setPageElapsedSeconds(0);
+    setSessionTimerSeconds({});
+    setSessionTimerCompletedSeconds({});
+    setSessionTimerPages({});
+    setSessionTimerPageSeconds({});
+    activeTimerSecondsRef.current = {};
+    activeTimerCompletedSecondsRef.current = {};
+    activeTimerPagesRef.current = {};
+    activeTimerPageSecondsRef.current = {};
+    currentPageMeasuredSecondsRef.current = 0;
+    lastAttackSecondRef.current = 0;
+    accumulatedSecondsRef.current = 0;
+    if (startTimeRef.current !== null) startTimeRef.current = Date.now();
+    setSeconds(0);
+    setCutEndPage(null);
+    setCutError('');
+    setStep('timer');
+    setIsTimerRunning(true);
+  };
+
   const handleSwitchToNextReviewSubject = (repeat = false) => {
     if (!activeReviewRun || !selectedSubject) return;
 
@@ -2862,6 +2940,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                         쓰는 법
                       </button>
                     </div>
+                    {canCutReview && (
+                      <div data-testid="cut-review" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+                        <label htmlFor="cut-review-end" className="text-sm font-black text-indigo-700">끝 페이지</label>
+                        <input id="cut-review-end" type="number" inputMode="numeric" value={cutEndPage ?? cutDefaultEnd}
+                          onChange={event => { setCutEndPage(event.target.value); setCutError(''); }}
+                          className="h-10 w-20 rounded-lg border border-indigo-200 bg-white px-2 text-right text-base font-black text-slate-900 outline-none focus:border-indigo-500" />
+                        <button type="button" data-testid="cut-review-button" onClick={handleCutReview}
+                          className="h-10 rounded-xl bg-indigo-600 px-4 text-sm font-black text-white transition-colors hover:bg-indigo-700">
+                          바로 복습 넣기
+                        </button>
+                        <span className="text-[12px] font-bold text-indigo-900/70">{pagePos}.{cutStartPage}부터 지금까지를 복습에 넣고 다음 페이지부터 새로 재요</span>
+                        {cutError && <span role="alert" className="w-full text-[12px] font-black text-rose-600">{cutError}</span>}
+                      </div>
+                    )}
                     {showNoteTutorial && <NoteTutorial onClose={() => setShowNoteTutorial(false)} />}
                     <NoteSetSourceContext.Provider value={noteSetMemos}>
                     <NoteSetEditContext.Provider value={rewriteSessionNotes}>

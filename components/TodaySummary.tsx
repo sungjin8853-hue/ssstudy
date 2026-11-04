@@ -33,6 +33,7 @@ import { NoteSheet } from './NoteSheet';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
+import { autoReviewHoursOf } from '../utils/autoReview';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
 import { pendingFeedbackOf } from '../utils/subjectFeedback';
 import { pendingChapterGroups } from '../utils/chapterReview';
@@ -692,6 +693,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].reviewUnitRange ? { reviewUnitRange: editingSummary.logs[0].reviewUnitRange } : {}),
       // 자동 복습 넣기로 들어간 기록은 고쳐도 자동 묶음으로 남는다(4일 점검: 빠지면 직접 넣은 것으로 보여 단위가 나뉘었다)
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewRegistered ? { autoReviewRegistered: true } : {}),
+      // 자동 복습으로 모으는 중인 기록은 고쳐도 계속 모은다(4일)
+      ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewWaiting ? { autoReviewWaiting: true } : {}),
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,
@@ -802,7 +805,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 단원 하나를 끝내면 복습에 넣기를 추천한다: 끝낸 단원마다 한 번 창이 뜨고 그 단원이 골라져 있다(학습 실행 첫 화면에서만)
   useEffect(() => {
     if (!idle || !detailData || choosingReview) return;
-    const finished = chapterGroups.filter(group => group.finished && group.number !== null);
+    // 자동 복습으로 모으는 중인 기록만 있는 단원은 창을 띄우지 않는다(4일: 시간이 차면 알아서 넣는다)
+    const finished = chapterGroups.filter(group => group.finished && group.number !== null && group.logs.some(log => !log.autoReviewWaiting));
     if (!finished.length) return;
     const seenKey = 'swp_chapter_review_prompted';
     let seen: string[] = [];
@@ -820,6 +824,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const autoReview = Boolean(detailData && !detailIsReview && detailData.subject.autoReviewRegister);
   const canSetAutoReview = Boolean(detailData && !detailIsReview && onUpdateSubjects);
   const setAutoReview = (on: boolean) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewRegister: on || undefined }]); };
+  const setAutoReviewHours = (hours: number) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewHours: hours }]); };
+  // 자동 복습으로 모으는 중인 기록(4일): 정한 공부 시간이 차면 한 묶음으로 들어간다
+  const autoWaiting = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.autoReviewWaiting && log.subjectId === detailData.subject.id) : []), [logs, detailData, detailIsReview]);
   // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다(자동으로 넣는 중이면 설정을 보도록 둔다)
   useEffect(() => { if (pendingReviewCount === 0 && !autoReview) setChoosingReview(false); }, [pendingReviewCount, autoReview]);
   useEffect(() => { setChoosingReview(false); }, [detailData?.subject.id]);
@@ -1116,7 +1123,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
 
       {choosingReview && onRegisterReview && detailData && !detailIsReview && (pendingReviewCount > 0 || autoReview) && (
         <RegisterReviewDialog key={`${detailData.subject.id}:${(reviewPick?.keys ?? []).join(',')}`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
-          pendingCount={pendingReviewCount} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview } : undefined}
+          pendingCount={pendingReviewCount} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview, hours: autoReviewHoursOf(detailData.subject), onHoursChange: setAutoReviewHours,
+            waitingCount: autoWaiting.length, waitingMinutes: autoWaiting.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0) } : undefined}
           chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
           onClose={() => setChoosingReview(false)}
           onChoose={(grade, logIds) => { onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />

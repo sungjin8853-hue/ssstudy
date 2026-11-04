@@ -15,13 +15,13 @@ import { resizeSessionTimes } from './utils/measurement';
 import { getLogProgressPages } from './utils/measurement';
 import { fsrsIntervalMs } from './utils/fsrs';
 import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
-import { gradeSelectedPending } from './utils/chapterReview';
+import { chapterFeedbackOf, gradeSelectedPending, pendingChapterGroups } from './utils/chapterReview';
 import type { SubjectGrade } from './utils/subjectFeedback';
 import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, skipEditIntake, updateReviewGateMemo } from './utils/reviewGate';
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
-import { registerAutoReview } from './utils/autoReview';
+import { autoReviewHoursOf, registerAutoReview } from './utils/autoReview';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -236,6 +236,7 @@ const App: React.FC = () => {
             reviewEnabled: subject.reviewEnabled ?? true,
             // 자동 복습 넣기(3일): 다시 열어도 켜진 채로 둔다(4일 점검: 불러올 때 빠져 꺼지던 것)
             ...(subject.autoReviewRegister ? { autoReviewRegister: true } : {}),
+            ...(Number.isFinite(Number(subject.autoReviewHours)) && subject.autoReviewHours !== undefined ? { autoReviewHours: Number(subject.autoReviewHours) } : {}),
             reviewSubjectIds: Array.isArray(subject.reviewSubjectIds)
               ? subject.reviewSubjectIds.filter(id => id !== subject.id)
               : [],
@@ -513,8 +514,11 @@ const App: React.FC = () => {
     // 페이지 단위가 있는 과목은 세션마다 복습을 등록하지 않고, 단위 끝 페이지까지 풀었을 때 그 단위 범위를 등록한다.
     setLogs(prev => {
       const result = applyUnitReviewRegistration(subject, prev, newLog);
-      // 자동 복습 넣기를 켠 과목은 대기시키지 않고 곧바로 복습에 넣는다(아래 효과가 노트 합치기와 함께 넣는다, 3일)
-      const incoming = subject?.autoReviewRegister && result.incoming.unitReviewPending ? { ...result.incoming, autoReviewQueued: true } : result.incoming;
+      // 자동 복습 넣기를 켠 과목은 아래 효과가 모으다가(정한 공부 시간이 차면) 노트 합치기와 함께 복습에 넣는다(3일, 4일).
+      // "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다. 복습을 기다리지 않는 기록에는 그 표시를 남기지 않는다
+      const waits = result.incoming.unitReviewPending;
+      const incoming = subject?.autoReviewRegister && waits ? { ...result.incoming, autoReviewQueued: true }
+        : !waits && result.incoming.autoReviewCut ? { ...result.incoming, autoReviewCut: undefined } : result.incoming;
       return [...result.logs, incoming];
     });
     setSubjects(prev => prev.map(sub => {
@@ -750,12 +754,32 @@ const App: React.FC = () => {
     return merged;
   };
 
-  // 자동 복습 넣기(3일): 저장하며 표시한 대기 기록을 곧바로 복습에 넣는다(노트 합치기도 복습에 넣기와 같다). 3시간 안에 이어 한 공부는 앞 묶음에 합친다
+  // 복습에 넣기 창에서 고를 때와 같은 추천 난도로, 이 과목의 대기 기록을 모두 바로 복습에 넣는다(4일: 측정 도중 "바로 복습 넣기")
+  const registerAllPendingNow = (base: StudyLog[], subjectId: string, nowMs: number): StudyLog[] => {
+    const subject = subjects.find(item => item.id === subjectId);
+    const merged = mergePendingNotes(base, subjectId);
+    const groups = subject ? pendingChapterGroups(subject, merged) : [];
+    const selected = groups.flatMap(group => group.logs);
+    if (!selected.length) return merged;
+    const ids = selected.map(log => log.id);
+    const grade = chapterFeedbackOf(merged, subjectId, selected, nowMs).recommended ?? 'good';
+    return registerPendingReviews(subjectId, gradeSelectedPending(merged, subjectId, ids, grade), nowMs, ids).logs
+      .map(log => (log.autoReviewCut ? { ...log, autoReviewCut: undefined } : log));
+  };
+
+  // 자동 복습 넣기(3일, 4일 바꿈): 저장한 기록을 모으다가 정한 공부 시간이 차면 한 묶음으로 복습에 넣는다(노트 합치기는 넣을 때 복습에 넣기와 같다).
+  // 1시간 안에 이어 한 공부는 앞 기록에 합친다. 측정 도중 "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다(자동이 꺼진 과목은 추천 난도로)
   useEffect(() => {
-    const queued = logs.filter(log => log.unitReviewPending && log.autoReviewQueued).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const queued = logs.filter(log => log.unitReviewPending && (log.autoReviewQueued || log.autoReviewCut)).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     if (!queued.length) return;
     let next = logs;
-    queued.forEach(log => { next = registerAutoReview(mergePendingNotes(next, log.subjectId, [log.id]), log.id); });
+    queued.forEach(log => {
+      if (!next.some(item => item.id === log.id && item.unitReviewPending)) return;
+      const subject = subjects.find(item => item.id === log.subjectId);
+      if (!log.autoReviewQueued) { next = registerAllPendingNow(next, log.subjectId, Date.parse(log.timestamp)); return; }
+      const finished = subject ? getSubjectRemainingPageCount(subject) <= 0 : false;
+      next = registerAutoReview(next, log.id, autoReviewHoursOf(subject), finished, (current, ids) => mergePendingNotes(current, log.subjectId, ids));
+    });
     setLogs(next);
   }, [logs]);
 
