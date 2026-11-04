@@ -2387,26 +2387,30 @@ test('save-only review times remain pending until full completion and combine ac
   assert.equal(nextRound.reviewSubjectTimeRecords.find(record => record.completed).minutes, 20);
 });
 
-test('review averages use the newest completed page unit and exclude unrelated measurements', () => {
+test('review averages are the whole average from the first measurement to now (4일) and exclude unrelated measurements', () => {
   const math = loadSource('utils/math.ts');
   const logs = [{ subjectId: 'parent', pagesRead: 1, timeSpentMinutes: 1, timestamp: '2020-01-01T00:00:00Z',
     reviewSubjectTimeRecords: [
       { subjectId: 'practice', measurementId: 'old', pages: 100, minutes: 600, completed: true, timestamp: '2026-10-10T04:00:00Z' },
       { subjectId: 'practice', measurementId: 'recent', pages: 150, minutes: 600, completed: true, timestamp: '2026-10-11T04:00:00Z' }
     ] }];
-  assert.equal(math.calculateSubjectReviewAverageTimePerPage(logs, 'parent', 'practice'), 4);
+  // 처음부터 지금까지: 1200분 ÷ 250장
+  assert.equal(math.calculateSubjectReviewAverageTimePerPage(logs, 'parent', 'practice'), 1200 / 250);
   assert.equal(math.calculateSubjectReviewAverageTimePerPage(logs, 'elsewhere', 'practice'), 0);
 });
 
-test('ordinary efficiency uses the newest completed page unit instead of the former time window', () => {
+test('ordinary efficiency is the whole average from the first study to now, not a time window (4일)', () => {
   const math = loadSource('utils/math.ts');
   const samples = [
     { pagesRead: 20, timeSpentMinutes: 200, timestamp: '2026-10-01T03:00:00Z' },
     { pagesRead: 50, timeSpentMinutes: 200, timestamp: '2026-10-12T03:00:00Z' },
     { pagesRead: 5000, timeSpentMinutes: 200, timestamp: '2020-01-01T03:00:00Z' }
   ];
-  assert.equal(math.calculateRecentTimedPageAverage(samples).averageTimePerPage, 4);
-  assert.equal(math.calculateRecentCompletedDayAverage(samples, 0).averageTimePerPage, 4);
+  assert.equal(math.calculateRecentTimedPageAverage(samples).averageTimePerPage, 600 / 5070);
+  assert.equal(math.calculateRecentCompletedDayAverage(samples, 0).averageTimePerPage, 600 / 5070);
+  // 복습에 넣어 단위가 나뉘어도 계산에 쓰는 값은 전체 평균이다(단위는 성장 정도를 보여 줄 때만)
+  const units = [{ ...samples[0], reviewRegisteredAt: '2026-10-01T03:00:00Z' }, samples[1]];
+  assert.equal(math.calculateRecentTimedPageAverage(units).averageTimePerPage, 400 / 70);
 });
 
 test('finished records are merged into the subject status rows and the separate completed list is gone', () => {
@@ -3066,19 +3070,17 @@ test('efficiency is measured in trailing 25-minute windows counted back from the
   assert.deepEqual(buildEfficiencyWindows([...samples].reverse()), windows);
 });
 
-test('the current efficiency is the latest 25 minutes: full time for the overall value, attack time for the attack value, and everything when under 25 minutes', () => {
+test('the efficiency used for calculations is the whole average (4일, not the latest 25 minutes): full time for the overall value, attack time for the attack value', () => {
   const { buildEfficiencyWindows, calculateUnitEfficiency } = loadSource('utils/pageGrowth.ts');
   // 50분짜리 기록 하나: 최근 25분 = 기록의 절반(5P). 타임어택은 10분 중 절반인 5분.
   const long = [source({ pagesRead: 10, timeSpentMinutes: 50, timeAttackMinutes: 10, timestamp: '2026-10-10T04:00:00Z' })];
   const windows = buildEfficiencyWindows(long);
   assert.deepEqual(windows.map(item => [item.pages, item.minutes, item.timeAttackMinutes]), [[5, 25, 5], [5, 25, 5]]);
   const result = calculateUnitEfficiency(long);
-  assert.equal(result.basis.complete, true);
   assert.equal(result.averageTimePerPage, 5);
   assert.equal(result.timeAttackAverageTimePerPage, 1);
-  // 25분이 안 되면 있는 기록 전부가 한 덩어리(complete=false)
+  // 짧은 기록도 그 단위 전부
   const short = calculateUnitEfficiency([source({ pagesRead: 2, timeSpentMinutes: 4, timeAttackMinutes: 2 })]);
-  assert.equal(short.basis.complete, false);
   assert.equal(short.averageTimePerPage, 2);
   assert.equal(short.timeAttackAverageTimePerPage, 1);
   // 타임어택 시간이 없으면 전체 시간이 타임어택 시간이다
@@ -3265,15 +3267,9 @@ test('review growth display switches between completion speed gains and pomodoro
   const unit = render('unit');
   assert.ok(unit.includes('타임어택 효율') && unit.includes('data-testid="unit-compare"'));
   assert.ok(!unit.includes('review-speed-growth'));
-  // 최근 25분(6분/P의 새 측정 25분 = 4.2P)은 6.0분/P. 그 앞 25분(새 측정 나머지 5분 + 옛 측정 20분)은 4.3분/P(25 ÷ 5.83P).
-  // 뽀모도로 1회 전 대비 속도 −4.0P/h(10.0 − 14.0), 공부량 +1.7분/P
-  // 복습과목도 기본은 이전 단위(복습 한 번) 대비이고, 뽀모도로 1회 전 대비는 효율 숫자 옆에 붙는다
-  // 두 번의 복습(복습 한 번 = 한 단위)을 마쳤다: 마지막 복습(6분/P)을 그 전 복습(4분/P)과 견준다 → 속도 −5.0P/h, 공부량 +2.0분/P
-  assert.ok(unit.includes('이전 단위') && unit.includes('속도 −5.0P/h') && unit.includes('공부량 +2.0분/P'), unit.slice(unit.indexOf('efficiency-cell'), unit.indexOf('efficiency-cell') + 1500));
-  assert.ok(unit.includes('>6.0</span>'));
-  // 증감은 전체 효율에만 붙는다(타임어택 효율은 값만)
-  assert.equal((unit.match(/data-growth-kind="speed"/g) || []).length, 1);
-  assert.equal((unit.match(/data-growth-kind="amount"/g) || []).length, 1);
+  // 4일: 두 번의 복습(복습 한 번 = 한 단위)을 다 마쳐 이번 단위에 기록이 없다 → 효율 칸은 전체 평균(50분 ÷ 10장 = 5.0분/P)이고 견주지 않는다
+  assert.ok(unit.includes('>5.0</span>') && unit.includes('지금은 전체 평균이에요'), unit.slice(unit.indexOf('efficiency-cell'), unit.indexOf('efficiency-cell') + 1500));
+  assert.equal((unit.match(/data-growth-kind="speed"/g) || []).length, 0);
   assert.ok(!unit.includes('임시로') && !unit.includes('h 공부'));
 });
 
@@ -3356,81 +3352,79 @@ test('repeated subject measurements update the same owner speed statistics witho
   const repeat = createRepeatedSubjectReview(source({ id: 'repeat', subjectId: 'practice', endPage: 20, pagesRead: 5 }), 'main', 0, now);
   const recorded = recordReviewMeasurement([repeat], [repeat.id], 'practice', 10, true, repeat.timestamp,
     { pagesRead: 5, baselineTimePerPage: 4, timeAttackMinutes: 6, baselineTimeAttackPerPage: 2, lastEndPage: 24, measurementId: 'next' });
-  // 최근 25분 = 새 측정 10분(5P) + 앞 측정 15분(3.75P) → 25분 ÷ 8.75P
-  assert.ok(Math.abs(math.calculateSubjectReviewAverageTimePerPage(recorded, 'main', 'practice') - 25 / 8.75) < 1e-8);
+  // 4일: 처음부터 지금까지의 전체 평균(잰 기록 전체의 시간 합 ÷ 장수 합)
+  const samples = math.getReviewEfficiencySamples(recorded, 'main', 'practice');
+  const total = samples.reduce((sum, item) => sum + item.timeSpentMinutes, 0) / samples.reduce((sum, item) => sum + item.pagesRead, 0);
+  assert.ok(samples.length > 0 && Math.abs(math.calculateSubjectReviewAverageTimePerPage(recorded, 'main', 'practice') - total) < 1e-8);
   assert.equal(math.calculateReviewSpeedChanges(recorded, 'main', 'practice').latest, 100);
   assert.equal(math.calculateReviewTimeChangeAverage(recorded, 'main', 'practice', 2), -50);
   assert.deepEqual(math.calculateBasicReviewEfficiencyByNumber(recorded, 'main'), []);
 });
 
-test('overall and attack efficiency share the latest 25 minutes of study as their timer basis', () => {
+test('overall and attack efficiency are both the whole average from the first study to now (4일)', () => {
   const { calculateUnitEfficiency } = loadSource('utils/pageGrowth.ts');
   const math = loadSource('utils/math.ts');
   const samples = [source({ pagesRead: 12, timeSpentMinutes: 60, timeAttackMinutes: 36, timestamp: '2026-10-10T04:00:00Z' }),
     source({ id: 'second', pagesRead: 8, timeSpentMinutes: 16, timeAttackMinutes: 8, timestamp: '2026-10-11T04:00:00Z' }),
     source({ id: 'tail', pagesRead: 5, timeSpentMinutes: 5, timeAttackMinutes: 2.5, timestamp: '2026-10-12T04:00:00Z' })];
-  // 최근 25분 = tail 5분(5P) + second 16분(8P) + 첫 기록의 4분(5분/P라서 0.8P): 13.8P.
-  // 타임어택 시간은 2.5 + 8 + 4 × 0.6(= 2.4) = 12.9분
+  // 전체: 81분 ÷ 25장, 타임어택 46.5분 ÷ 25장
   const result = calculateUnitEfficiency(samples);
-  assert.equal(result.basis.complete, true);
-  assert.ok(Math.abs(result.averageTimePerPage - 25 / 13.8) < 1e-8);
-  assert.ok(Math.abs(result.timeAttackAverageTimePerPage - 12.9 / 13.8) < 1e-8);
+  assert.ok(Math.abs(result.averageTimePerPage - 81 / 25) < 1e-8);
+  assert.ok(Math.abs(result.timeAttackAverageTimePerPage - 46.5 / 25) < 1e-8);
   assert.equal(math.calculateRecentTimedPageAverage(samples).averageTimePerPage, result.averageTimePerPage);
   assert.equal(math.calculateTimeAttackAverage(samples), result.timeAttackAverageTimePerPage);
-  // 마지막에 45분짜리 한 번을 길게 풀면 그 기록 하나가 최근 25분이 된다: 9분/P, 타임어택 6분/P
+  // 마지막에 한 번 길게 풀어도 그 기록 하나가 아니라 전체에 더해진다: 126분 ÷ 30장, 타임어택 76.5분 ÷ 30장
   const finished = [...samples, source({ id: 'finish', pagesRead: 5, timeSpentMinutes: 45, timeAttackMinutes: 30, timestamp: '2026-10-13T04:00:00Z' })];
-  assert.equal(calculateUnitEfficiency(finished).averageTimePerPage, 9);
-  assert.equal(calculateUnitEfficiency(finished).timeAttackAverageTimePerPage, 6);
+  assert.ok(Math.abs(calculateUnitEfficiency(finished).averageTimePerPage - 4.2) < 1e-9);
+  assert.ok(Math.abs(calculateUnitEfficiency(finished).timeAttackAverageTimePerPage - 2.55) < 1e-9);
 });
 
-test('under 25 minutes of study both efficiency values use everything measured, and estimates follow them', () => {
+test('both efficiency values use everything measured, and estimates follow them (4일)', () => {
   const { calculateUnitEfficiency } = loadSource('utils/pageGrowth.ts');
   const math = loadSource('utils/math.ts');
   const samples = [source({ pagesRead: 2, timeSpentMinutes: 4, timeAttackMinutes: 2, timestamp: '2026-10-12T04:00:00Z' })];
   const result = calculateUnitEfficiency(samples);
-  assert.equal(result.basis.complete, false);
   assert.equal(result.averageTimePerPage, 2);
   assert.equal(result.timeAttackAverageTimePerPage, 1);
   assert.equal(math.calculateStats(samples, 5, 0, 0).estimatedRemainingTime, 10);
   assert.equal(calculateUnitEfficiency([source({ timeAttackMinutes: 0 })]).timeAttackAverageTimePerPage, 0);
-  // 많이 공부한 뒤에는 오래된 기록이 아니라 가장 최근 25분이 기준이다
+  // 많이 공부한 뒤에도 처음부터 지금까지의 전체 평균이다: 525분 ÷ 15장, 타임어택 110분 ÷ 15장
   const later = [source({ id: 'long', pagesRead: 5, timeSpentMinutes: 500, timeAttackMinutes: 100, timestamp: '2026-01-01T04:00:00Z' }),
     source({ id: 'recent', pagesRead: 10, timeSpentMinutes: 25, timeAttackMinutes: 10, timestamp: '2026-10-12T04:00:00Z' })];
-  assert.equal(calculateUnitEfficiency(later).averageTimePerPage, 2.5);
-  assert.equal(calculateUnitEfficiency(later).timeAttackAverageTimePerPage, 1);
+  assert.equal(calculateUnitEfficiency(later).averageTimePerPage, 35);
+  assert.ok(Math.abs(calculateUnitEfficiency(later).timeAttackAverageTimePerPage - 110 / 15) < 1e-9);
 });
 
-test('the page unit does not change predictions: they always follow the latest 25 minutes', () => {
+test('units do not change predictions: they always follow the whole average (4일)', () => {
   const math = loadSource('utils/math.ts');
   const samples = [source({ pagesRead: 10, timeSpentMinutes: 50, timeAttackMinutes: 20, timestamp: '2026-10-10T04:00:00Z' }),
     source({ id: 'new', pagesRead: 5, timeSpentMinutes: 10, timeAttackMinutes: 5, timestamp: '2026-10-12T04:00:00Z' })];
-  // 최근 25분 = 새 기록 10분(5P) + 앞 기록의 15분(3P) → 8P: 25 ÷ 8 = 3.125분/P, 타임어택 (5 + 6) ÷ 8 = 1.375분/P
-  assert.equal(math.calculateRecentCompletedDayAverage(samples, 100).averageTimePerPage, 3.125);
-  assert.equal(math.calculateTimeAttackAverage(samples), 1.375);
-  // 단위는 이제 계산 함수의 입력이 아니다(과목 화면의 초기화에만 쓰인다)
-  assert.equal(math.calculateRecentCompletedDayAverage(samples, 100, 15).averageTimePerPage, 3.125);
-  assert.equal(math.calculateTimeAttackAverage(samples, 15), 1.375);
+  // 전체: 60분 ÷ 15장 = 4분/P, 타임어택 25분 ÷ 15장
+  assert.equal(math.calculateRecentCompletedDayAverage(samples, 100).averageTimePerPage, 4);
+  assert.ok(Math.abs(math.calculateTimeAttackAverage(samples) - 25 / 15) < 1e-9);
+  // 복습에 넣어 단위가 나뉘어도 계산은 전체 평균이다
+  const registered = [{ ...samples[0], reviewRegisteredAt: '2026-10-11T00:00:00Z' }, samples[1]];
+  assert.equal(math.calculateRecentCompletedDayAverage(registered, 100).averageTimePerPage, 4);
 });
 
-test('growth compares the latest 25 minutes with the pomodoro N times earlier (default 1); the page unit does not cut the data', () => {
+test('growth shows the current unit from its first start to now (4일) and compares it with the previous unit', () => {
   const { getEfficiencyScope, getEfficiencyView } = loadSource('utils/pageGrowth.ts');
-  const view = getEfficiencyView(getEfficiencyScope([
+  const logs = [
     source({ id: 'a', pagesRead: 5, startPage: 1, endPage: 5, timeSpentMinutes: 25, timeAttackMinutes: 10, timestamp: '2026-10-12T01:00:00Z' }),
-    source({ id: 'b', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T02:00:00Z' })], 20, 1));
-  // 값은 가장 최근 25분(10P, 2.5분/P · 타임어택 0.5분/P), 기준은 1회 전(5.0분/P · 2.0분/P)
+    source({ id: 'b', pagesRead: 10, startPage: 6, endPage: 15, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T02:00:00Z' })];
+  // a 뒤에 복습에 넣었다: 이번 단위는 b(2.5분/P · 타임어택 0.5분/P), 이전 단위는 a(5.0분/P · 2.0분/P)
+  const view = getEfficiencyView(getEfficiencyScope(logs, [Date.parse('2026-10-12T01:30:00Z')]), { kind: 'unit', n: 1 });
   assert.deepEqual([view.shown.averageTimePerPage, view.shown.timeAttackAverageTimePerPage], [2.5, 0.5]);
-  assert.deepEqual([view.reference.averageTimePerPage, view.reference.timeAttackAverageTimePerPage], [5, 2]);
-  // 전체: 1시간에 24장 vs 12장 → 속도 +12.0P/h, 장당 −2.5분 → 공부량 −2.5분/P. 타임어택: 120장 vs 30장 → +90.0P/h, −1.5분/P
+  assert.deepEqual([view.referenceUnit.averageTimePerPage, view.referenceUnit.timeAttackAverageTimePerPage], [5, 2]);
   assert.deepEqual(view.overall, { speedPages: 12, studyMinutes: -2.5 });
   assert.deepEqual(view.attack, { speedPages: 90, studyMinutes: -1.5 });
-  assert.deepEqual([view.comparison, view.maxComparison], [1, 1]);
   assert.equal('studyHours' in view, false, 'the study-hours text is gone');
-  // 비교할 25분이 하나도 없으면(25분이 안 되는 기록뿐) 값만 보이고 증가는 없다
-  const only = getEfficiencyView(getEfficiencyScope([source({ pagesRead: 3, timeSpentMinutes: 6 })], 10, 1));
-  assert.equal(only.shown.averageTimePerPage, 2);
-  assert.deepEqual([only.reference, only.overall, only.attack, only.comparison, only.maxComparison], [null, null, null, 0, 0]);
+  // 복습에 넣은 적이 없으면 처음부터 지금까지가 이번 단위다: 50분 ÷ 15장
+  const whole = getEfficiencyView(getEfficiencyScope(logs, []), { kind: 'unit', n: 1 });
+  assert.ok(Math.abs(whole.shown.averageTimePerPage - 50 / 15) < 1e-9);
+  assert.deepEqual([whole.referenceUnit, whole.overall], [null, null]);
   // 기록이 없으면 보여줄 값이 없다
-  const none = getEfficiencyView(getEfficiencyScope([], 10, 1));
+  const none = getEfficiencyView(getEfficiencyScope([], []));
   assert.deepEqual([none.shown, none.overall, none.comparison], [null, null, 0]);
 });
 
@@ -3446,13 +3440,12 @@ test('the compare button steps from 1 pomodoro back up to 5 and returns to 1', (
   let comparison = 1;
   for (let step = 0; step < 7; step++) {
     const view = getEfficiencyView(scope, comparison);
-    seen.push([view.comparison, view.reference.averageTimePerPage, view.overall.studyMinutes]);
+    seen.push([view.comparison, view.reference.averageTimePerPage]);
     comparison = nextComparison(view);
   }
   // 1→2→3→4→5 회 전, 한 번 더 누르면 1회 전(기본)으로 돌아온다. 5회보다 더 이전과는 견주지 않는다.
   assert.deepEqual(seen.map(item => item[0]), [1, 2, 3, 4, 5, 1, 2]);
   assert.deepEqual(seen.slice(0, 5).map(item => item[1]), [3, 4, 5, 6, 7]);
-  assert.deepEqual(seen.slice(0, 5).map(item => item[2]), [-1, -2, -3, -4, -5]);
   assert.equal(getEfficiencyView(scope, 9).comparison, 5, 'asking for a farther pomodoro stays at 5');
   assert.equal(getEfficiencyView(scope, 0).comparison, 1);
   // 앞 25분이 둘뿐이면 1 → 2 → 1, 하나뿐이면 늘 1
@@ -3468,7 +3461,7 @@ test('the compare button steps from 1 pomodoro back up to 5 and returns to 1', (
   assert.deepEqual([rested.comparison, rested.reference.averageTimePerPage], [1, 5]);
 });
 
-test('the efficiency cell shows only the change against the previous unit, with one small line for how much that growth rose since the 25 minutes before', () => {
+test('the efficiency cell shows only the change against the previous unit, with one small line for how much the last study moved the unit average (4일)', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { UnitGrowthEfficiency } = loadSource('components/PageGrowth.tsx');
@@ -3499,9 +3492,12 @@ test('the efficiency cell shows only the change against the previous unit, with 
   assert.equal((html.match(/data-testid="growth-chips"/g) || []).length, 1);
   assert.equal((html.match(/data-growth-kind="speed"/g) || []).length, 1);
   assert.ok(!/current-attack-efficiency[\s\S]*growth-(chips|recent)/.test(html.slice(0, html.indexOf('unit-pages-done'))));
-  // 그 아래 작은 줄: 그 성장이 25분 전보다 얼마나 늘었는지(지금 25분 − 직전 25분과 같다)
-  assert.equal((html.match(/data-testid="growth-recent"/g) || []).length, 1);
-  assert.ok(html.includes('이전보다') && !html.includes('25분 전보다') && !html.includes('직전'));
+  // 그 아래 작은 줄(4일): 마지막 공부로 이번 단위 평균이 얼마나 바뀌었는지. 이번 단위에 기록이 하나뿐이면 없다
+  assert.equal((html.match(/data-testid="growth-recent"/g) || []).length, 0);
+  const more = render([...logs, source({ id: 'more', pagesRead: 5, startPage: 16, endPage: 20, timeSpentMinutes: 25, timeAttackMinutes: 5, timestamp: '2026-10-12T10:00:00Z' })], {}, cut);
+  // 이번 단위: 25분 10장(2.5분/P) → 50분 15장(3.33분/P): 1시간에 24장 → 18장, 이전보다 −6.0P/h
+  assert.equal((more.match(/data-testid="growth-recent"/g) || []).length, 1);
+  assert.ok(more.includes('이전보다') && more.includes('−6.0P/h') && !more.includes('25분 전보다') && !more.includes('직전'));
   assert.ok(!/[+−-]\d+(\.\d+)?%/.test(html), 'no percent growth anywhere');
   // "이번 단위 2번째" 배지가 있으니 안내 줄에 "2번째 단위"를 다시 적지 않는다
   assert.ok(html.includes('>2번째</span>') && html.includes('복습에 넣으면 다음 단위가 시작돼요') && !html.includes('2번째 단위'));
@@ -3519,9 +3515,9 @@ test('the efficiency cell shows only the change against the previous unit, with 
   // 다른 글자를 단위 이름으로 쓰면 그 글자가 나온다
   const custom = render(logs, { label: 'n' }, cut);
   assert.ok(custom.includes('속도 +12.0n/h') && custom.includes('공부량 −2.5분/n') && !custom.includes('P/h') && !custom.includes('분/P'));
-  // 단위를 막 마쳤다: 새 단위는 0장, 효율 칸은 이전 단위 평균을 가져오고, 견줄 앞 단위가 없으면 안내 한 줄
+  // 단위를 막 마쳤다(4일): 새 단위는 0장, 효율 칸은 전체 평균이고 견주지 않는다(안내 한 줄)
   const filled = render([source({ pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 50, timestamp: '2026-10-12T05:00:00Z' })], {}, cut);
-  assert.ok(filled.includes('>5.0</span>') && /unit-pages-done[\s\S]*?>0<\/span>/.test(filled) && filled.includes('>2번째</span>') && filled.includes('복습에 넣으면 다음 단위가 시작돼요'));
+  assert.ok(filled.includes('>5.0</span>') && /unit-pages-done[\s\S]*?>0<\/span>/.test(filled) && filled.includes('>2번째</span>') && filled.includes('복습에 넣으면 다음 단위가 시작돼요') && filled.includes('지금은 전체 평균이에요'));
   assert.match(filled, /<button[^>]*data-testid="unit-compare"[^>]*disabled=""/);
   // 기록이 하나도 없으면 넘겨받은 값을 쓰고, 이번 단위는 0장이다
   const empty = render([], { efficiency: 3.2, attackEfficiency: 0 });
@@ -3686,7 +3682,7 @@ test('pomodoro time and its page target are emphasized above the current calcula
   assert.ok(empty.includes('측정 필요') && !empty.includes('0.0') && !empty.includes('풀 장수'));
 });
 
-test('both efficiency values use the latest 25 minutes for ordinary and review subjects, compared with the pomodoro before', () => {
+test('both efficiency values show the current unit (4일: from its first start to now) for ordinary and review subjects', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { TodaySummary } = loadSource('components/TodaySummary.tsx');
@@ -3700,9 +3696,9 @@ test('both efficiency values use the latest 25 minutes for ordinary and review s
       detailSubjectId: entry.id, activeWeekday: 1, activeStudyDate: '2026-10-12', taskSelector: '오늘 할 일',
       onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {}
     }));
-    // 최근 25분 = 새 기록 5분(5P) + 앞 기록 20분(4P) → 9P: 전체 2.8분/P(25 ÷ 9), 타임어택 (2.5 + 8) ÷ 9 = 1.2분/P
-    assert.ok(html.includes('current-overall-efficiency') && html.includes('>2.8</span>') && !html.includes('>5.0</span>'));
-    assert.ok(html.includes('current-attack-efficiency') && html.includes('>1.2</span>') && !html.includes('>2.0</span>'));
+    // 아직 단위가 끝난 적이 없어 처음부터 지금까지가 이번 단위다: 55분 ÷ 15장 = 3.7분/P, 타임어택 22.5분 ÷ 15장 = 1.5분/P
+    assert.ok(html.includes('current-overall-efficiency') && html.includes('>3.7</span>') && !html.includes('>2.8</span>'));
+    assert.ok(html.includes('current-attack-efficiency') && html.includes('>1.5</span>') && !html.includes('>1.2</span>'));
     // 단위를 아직 끝낸 적이 없어 견줄 이전 단위가 없다: 비교 칸 대신 안내 한 줄, 뽀모도로라는 말은 없다
     assert.ok(html.includes('growth-empty') && !html.includes('data-growth-kind') && !html.includes('뽀모도로 1회 전'));
     // 단위가 없는 과목(growthPageUnit 0)에는 다음 단위까지 게이지가 없다
@@ -3712,21 +3708,21 @@ test('both efficiency values use the latest 25 minutes for ordinary and review s
   }
 });
 
-test('review forecasts inherit the parent latest 25 minutes and use their own measured 25 minutes once available', () => {
+test('review forecasts inherit the parent whole average and use their own whole average once measured (4일)', () => {
   const math = loadSource('utils/math.ts');
   const currentSubjects = reviewChainSubjects.map(subject => ({ ...subject, growthPageUnit: 10 }));
   const old = chainLog('old', { pagesRead: 10, timeSpentMinutes: 100, timeAttackMinutes: 50, timestamp: '2026-10-10T04:00:00Z' });
   const fresh = chainLog('fresh', { pagesRead: 3, timeSpentMinutes: 3, timeAttackMinutes: 1.5, timestamp: '2026-10-12T04:00:00Z' });
   const parentHistory = [old, fresh];
-  // 부모의 최근 25분 = fresh 3분(3P) + old의 22분(2.2P) → 25 ÷ 5.2P. 타임어택은 (1.5 + 11) ÷ 5.2
+  // 부모의 전체 평균 = 103분 ÷ 13장, 타임어택 51.5분 ÷ 13장
   const inherited = math.calculateReviewSubjectTiming(parentHistory, 'parent', 'first', currentSubjects, [fresh]);
-  assert.ok(Math.abs(inherited.averageTimePerPage - 25 / 5.2) < 1e-8);
-  assert.ok(Math.abs(math.calculateReviewSubjectTiming(parentHistory, 'parent', 'first', currentSubjects, [fresh], ['first'], true).averageTimePerPage - 12.5 / 5.2) < 1e-8);
-  // 복습 과목 자신의 측정이 생기면 그 측정의 최근 25분을 쓴다: tail 5분(5P) + 앞 측정 20분(5P) → 2.5분/P, 타임어택 (2.5 + 10) ÷ 10
+  assert.ok(Math.abs(inherited.averageTimePerPage - 103 / 13) < 1e-8);
+  assert.ok(Math.abs(math.calculateReviewSubjectTiming(parentHistory, 'parent', 'first', currentSubjects, [fresh], ['first'], true).averageTimePerPage - 51.5 / 13) < 1e-8);
+  // 복습 과목 자신의 측정이 생기면 그 측정 전체의 평균을 쓴다: 85분 ÷ 25장 = 3.4분/P, 타임어택 42.5분 ÷ 25장 = 1.7분/P
   const own = [source({ subjectId: 'first', reviewParentSubjectId: 'parent', pagesRead: 20, timeSpentMinutes: 80, timeAttackMinutes: 40, timestamp: '2026-10-11T04:00:00Z' }),
     source({ id: 'tail', subjectId: 'first', reviewParentSubjectId: 'parent', pagesRead: 5, timeSpentMinutes: 5, timeAttackMinutes: 2.5, timestamp: '2026-10-12T04:00:00Z' })];
-  assert.equal(math.calculateReviewSubjectTiming([...parentHistory, ...own], 'parent', 'first', currentSubjects, [fresh]).averageTimePerPage, 2.5);
-  assert.equal(math.calculateReviewSubjectTiming([...parentHistory, ...own], 'parent', 'first', currentSubjects, [fresh], ['first'], true).averageTimePerPage, 1.25);
+  assert.ok(Math.abs(math.calculateReviewSubjectTiming([...parentHistory, ...own], 'parent', 'first', currentSubjects, [fresh]).averageTimePerPage - 3.4) < 1e-9);
+  assert.ok(Math.abs(math.calculateReviewSubjectTiming([...parentHistory, ...own], 'parent', 'first', currentSubjects, [fresh], ['first'], true).averageTimePerPage - 1.7) < 1e-9);
 });
 
 test('review unit averages do not count parent allocations and own session logs twice', () => {
@@ -5578,9 +5574,10 @@ test('card = current stage + its review subjects: title [+names], combined speed
   near(analysis.own.series.points[4].speed, 24);       // 8쪽 / 20분
   near(analysis.reviews.r.series.points[2].speed, 27); // 9쪽 / 20분
   near(analysis.series.points[7].speed, 27);
-  near(analysis.own.efficiency, 2.5);                  // 20분 / 8쪽
-  near(analysis.reviews.r.efficiency, 20 / 9);
-  near(analysis.efficiency, 20 / 9);                   // 합친 기록의 가장 최근 25분
+  // 4일: 효율은 전체 평균(타임어택 시간 합 ÷ 장수 합)
+  near(analysis.own.efficiency, 100 / 30);             // 타임어택 100분 / 30쪽
+  near(analysis.reviews.r.efficiency, 60 / 24);
+  near(analysis.efficiency, 160 / 54);                 // 합친 기록 전체
   // 예측은 그대로 전체 시간 기준(필요 시간과 같은 눈금)이라 타임어택으로 바뀌지 않는다
   const forecastCurrent = analysis.forecast.find(item => item.kind === 'current');
   near(forecastCurrent.speed, 19.2);
@@ -5611,7 +5608,7 @@ test('card = current stage + its review subjects: title [+names], combined speed
   const capped = buildDueReviewWeekCells(dueLogs, subjects[0], { ...subjects[1], completedPages: 18 }, 3.3, now);
   assert.equal(Object.values(capped).reduce((sum, cell) => sum + cell.pages, 0), 2, 'never more than the pages the review subject has left');
   const measuredDue = buildDueReviewWeekCells([...dueLogs, ...reviewLogs], subjects[0], subjects[1], 3.3, now);
-  near(measuredDue[1].minutes, Math.round(4 * (25 / 9) * 10) / 10);
+  near(measuredDue[1].minutes, Math.round(4 * (75 / 24) * 10) / 10); // 4일: 잰 복습 전체 평균(75분 ÷ 24쪽)
   const merged = mergeWeekCells([due, measuredDue]);
   assert.equal(merged[1].pages, due[1].pages + measuredDue[1].pages);
 
@@ -6349,7 +6346,7 @@ test('one subject alone: 해당 과목 and 기본복습 efficiency side by side,
   const basic = analysis.basicReview;
   assert.equal(basic.series.points.length, 3, 'one speed point per 25 minutes of basic review');
   assert.deepEqual(basic.series.points.map(point => Math.round(point.speed * 10) / 10), [12, 15, 24]);
-  assert.equal(Math.round(basic.efficiency * 100) / 100, 2.5, 'efficiency = latest 25 minutes (min per page)');
+  assert.equal(Math.round(basic.efficiency * 100) / 100, 3.53, 'efficiency = whole average (4일): 75 minutes ÷ 21.25 pages');
   assert.equal(analysis.own.series.points.length >= 2, true);
   assert.ok(analysis.own.efficiency > 0);
   assert.equal(analyzeSubjectSpeed([subject], [logs[1]], subject).basicReview.series.points.length, 0, 'no basic review yet → empty');
@@ -9054,37 +9051,27 @@ test('daily pages shrink by the pages actually solved, not by how far the end pa
   assert.ok(skipped.remainingDayPages > 0, 'skipping ahead does not finish the day');
 });
 
-test('a new unit inherits the previous unit: with no pages in the new unit yet the cell shows the previous unit average', () => {
-  const { getEfficiencyScope, getEfficiencyView, nextEfficiencyComparison } = loadSource('utils/pageGrowth.ts');
+test('4일: with no pages in the new unit yet (just put into review) the cell shows the whole average and compares with nothing; once studied it shows that unit', () => {
+  const { getEfficiencyScope, getEfficiencyView } = loadSource('utils/pageGrowth.ts');
   const unitLogs = [
     source({ id: 'a', pagesRead: 10, timeSpentMinutes: 25, timestamp: '2026-10-12T01:00:00Z' }),
     source({ id: 'b', pagesRead: 10, timeSpentMinutes: 20, timestamp: '2026-10-12T03:00:00Z' }),
     source({ id: 'c', pagesRead: 10, timeSpentMinutes: 25, timestamp: '2026-10-12T05:00:00Z' }),
     source({ id: 'd', pagesRead: 10, timeSpentMinutes: 15, timestamp: '2026-10-12T07:00:00Z' })
   ];
-  // 4시와 8시에 복습에 넣어 단위를 둘 마쳤고 셋째 단위에는 아직 푼 기록이 없다 → 둘째 단위(40분 ÷ 20쪽 = 2분/P)를 가져온다
+  // 4시와 8시에 복습에 넣어 단위를 둘 마쳤고 셋째 단위에는 아직 푼 기록이 없다 → 전체 평균(85분 ÷ 40쪽)
   const cuts = [Date.parse('2026-10-12T04:00:00Z'), Date.parse('2026-10-12T08:00:00Z')];
   const fresh = getEfficiencyView(getEfficiencyScope(unitLogs, cuts));
   assert.equal(fresh.inherited, true);
-  assert.equal(fresh.shown.averageTimePerPage, 2);
-  // 자기 자신과 견주지 않는다: 이전 단위는 첫째 단위(45분 ÷ 20쪽 = 2.25분/P), 뽀모도로로는 견주지 않는다
-  assert.equal(fresh.choice.kind, 'unit');
-  assert.equal(fresh.referenceUnit.index, 1);
-  assert.equal(fresh.maxComparison, 0);
-  assert.ok(fresh.overall, 'compared against the unit before it');
-  assert.deepEqual(fresh.options.map(option => option.kind), ['unit', 'average']);
-  assert.equal(nextEfficiencyComparison(fresh).kind, 'average');
-  // 새 단위에 한 장이라도 풀면 그 단위의 최근 25분으로 돌아온다
+  assert.equal(fresh.shown.averageTimePerPage, 85 / 40);
+  assert.deepEqual([fresh.overall, fresh.maxUnits, fresh.maxComparison, fresh.average, fresh.options], [null, 0, 0, null, []]);
+  // 새 단위에 한 장이라도 풀면 그 단위의 처음부터 지금까지(10분 ÷ 5쪽)로 돌아오고 이전 단위(40분 ÷ 20쪽)와 견준다
   const started = getEfficiencyView(getEfficiencyScope([...unitLogs,
-    source({ id: 'e', pagesRead: 5, timeSpentMinutes: 10, timestamp: '2026-10-12T09:00:00Z' })], cuts));
+    source({ id: 'e', pagesRead: 5, timeSpentMinutes: 10, timestamp: '2026-10-12T09:00:00Z' })], cuts), { kind: 'unit', n: 1 });
   assert.equal(started.inherited, false);
-  assert.ok(Math.abs(started.shown.averageTimePerPage - 25 / 15) < 1e-9);
-  assert.equal(started.choice.kind, 'pomodoro');
-  // 단위가 하나뿐이면 앞 단위가 없어 평균도 없고, 단위가 없는 과목은 늘 최근 25분이다
-  const one = getEfficiencyView(getEfficiencyScope(unitLogs.slice(0, 2), cuts.slice(0, 1)));
-  assert.equal(one.inherited, true);
-  assert.equal(one.shown.averageTimePerPage, 2.25);
-  assert.deepEqual(one.options, []);
+  assert.equal(started.shown.averageTimePerPage, 2);
+  assert.equal(started.referenceUnit.averageTimePerPage, 2);
+  assert.deepEqual(started.options.filter(option => option.kind !== 'pomodoro').map(option => option.kind), ['unit', 'unit', 'average']);
   assert.equal(getEfficiencyView(getEfficiencyScope(unitLogs, [])).inherited, false, 'never put into review: one open unit');
 });
 
@@ -11305,9 +11292,10 @@ test('4일: auto review has no units — auto-registered logs make no unit bound
   const per = getEfficiencyScope(samples, samples.map(log => Date.parse(log.timestamp)));
   assert.ok(getEfficiencyView(per, { kind: 'unit', n: 1 }).inherited, 'with a boundary at every study the cell showed the last single study');
   const none = getEfficiencyScope(samples, [], true);
-  assert.deepEqual([none.units, none.progress], [[], null]);
-  const view = getEfficiencyView(none, { kind: 'average' });
-  assert.ok(!view.inherited && view.shown);
+  assert.deepEqual([none.noUnits, none.progress, none.units.length], [true, null, 1]);
+  const view = getEfficiencyView(none, { kind: 'unit', n: 1 });
+  // 단위가 없으면 처음부터 지금까지가 한 덩어리(90분 ÷ 60장)이고 단위와 견주지 않는다
+  assert.ok(!view.inherited && view.shown && view.maxUnits === 0 && view.shown.averageTimePerPage === 1.5);
   const { autoReviewGradeOf } = loadSource('utils/autoReview.ts');
   // 지난 공부: 1장/60분, 59장/60분 → 한 번씩의 가운데 값이 아니라 총합 평균 30장/h와 비교한다
   const past = [{ id: 'p1', subjectId: 's', pagesRead: 1, timeSpentMinutes: 60, timestamp: '2026-10-01T00:00:00.000Z' }, { id: 'p2', subjectId: 's', pagesRead: 59, timeSpentMinutes: 60, timestamp: '2026-10-02T00:00:00.000Z' }];

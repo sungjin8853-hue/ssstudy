@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { EfficiencyComparison, EfficiencyScope, formatSignedTenth, getEfficiencyView, GrowthChange, nextEfficiencyComparison, sameComparison, SPEED_REFERENCE_LABEL } from '../utils/pageGrowth';
+import { EfficiencyComparison, EfficiencyScope, formatSignedTenth, getEfficiencyView, GrowthChange, nextEfficiencyComparison, sameComparison, SPEED_REFERENCE_LABEL, toGrowthChange } from '../utils/pageGrowth';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { DEFAULT_PAGE_LABEL, pageWord } from '../utils/pageLabel';
 
@@ -186,9 +186,8 @@ export const UnitGrowthEfficiency: React.FC<{
   const [picked, setComparison] = useState<EfficiencyComparison>({ kind: 'unit', n: 1 });
   const comparison: EfficiencyComparison = noUnits ? { kind: 'average' } : picked;
   const view = getEfficiencyView(scope, comparison);
-  // 같은 기준과 견준 성장의 변화 = 지금 25분과 직전 25분의 차이(기준이 같아서 빼면 기준이 지워진다)
-  const recent = getEfficiencyView(scope, { kind: 'pomodoro', n: 1 });
-  const hasRecent = recent.choice.kind === 'pomodoro' && recent.choice.n === 1;
+  // "이전보다"(4일): 마지막 공부로 이번 단위 평균이 얼마나 바뀌었는지(마지막 기록을 빼기 전 평균 → 지금 평균)
+  const recentChange = view.shown && view.before ? toGrowthChange(view.before.averageTimePerPage, view.shown.averageTimePerPage) : null;
   const progress = scope.progress;
   const unitOptions = noUnits ? view.options.filter(option => option.kind === 'average') : efficiencyCycle(view.options);
   const canCompare = unitOptions.length > 1;
@@ -210,8 +209,9 @@ export const UnitGrowthEfficiency: React.FC<{
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
         overall={view.overall} headerAction={compare} label={label} done={done}
-        recentOverall={view.overall && hasRecent ? recent.overall : null}
-        emptyNote={noUnits ? '자동으로 복습에 넣는 과목은 단위가 없어요 · 공부가 쌓이면 과목 평균과 견줘요'
+        recentOverall={view.overall ? recentChange : null}
+        emptyNote={view.inherited ? '지금은 전체 평균이에요 · 이번 단위를 공부하면 이전 단위와 견줘요'
+          : noUnits ? '자동으로 복습에 넣는 과목은 단위가 없어요 · 공부가 쌓이면 과목 평균과 견줘요'
           : unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">

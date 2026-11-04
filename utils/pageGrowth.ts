@@ -164,8 +164,26 @@ export const buildEfficiencyWindows = (logs: PageEfficiencySample[], windowMinut
  * 지금의 효율 = 가장 최근 25분(뽀모도로)의 평균. 예상 시간·뽀모도로 장수를 정하는 기준이다.
  * 25분이 안 되는 기록뿐이면 있는 기록 전부의 평균이다. 페이지 단위로 나누지 않는다(단위는 이전 성장과 견주는 데만 쓴다).
  */
+const unitAsWindow = (unit: PageEfficiencyUnit): EfficiencyWindow => ({
+  pages: unit.pages, minutes: unit.minutes, averageTimePerPage: unit.averageTimePerPage,
+  timeAttackMinutes: unit.timeAttackMinutes, timeAttackAverageTimePerPage: unit.timeAttackAverageTimePerPage,
+  standardDeviation: unit.standardDeviation, complete: unit.complete
+});
+
+/** 기록 전체의 총합 평균(시간 합 ÷ 장수 합) */
+const totalOf = (logs: PageEfficiencySample[]): EfficiencyWindow | null => {
+  const valid = chronological(logs);
+  if (!valid.length) return null;
+  const [unit] = buildBoundaryUnits(valid, []);
+  return unit ? { ...unitAsWindow(unit), complete: true } : null;
+};
+
+/**
+ * 과목의 평균 효율(4일 요청): 전체 평균 = 잰 기록 전체의 시간 합 ÷ 장수 합. 예상 시간 · 계획 · 뽀모도로 장수 · 완료 예측이 모두 이 값을 쓴다.
+ * 성장 정도(효율 칸)만 단위 기준이다: 효율 칸은 getEfficiencyView가 이번 단위의 값을 따로 낸다.
+ */
 export const calculateUnitEfficiency = (logs: PageEfficiencySample[]) => {
-  const basis = buildEfficiencyWindows(logs)[0] || null;
+  const basis = totalOf(logs);
   return { basis, averageTimePerPage: basis?.averageTimePerPage || 0,
     timeAttackAverageTimePerPage: basis?.timeAttackAverageTimePerPage || 0,
     standardDeviation: basis?.standardDeviation || 0 };
@@ -195,6 +213,8 @@ export interface EfficiencyScope {
   /** 푼 장수로 센 단위들(맨 끝은 아직 채우는 중일 수 있다). */
   units: PageEfficiencyUnit[];
   progress: UnitProgress | null;
+  /** 단위가 없는 과목(자동 복습 넣기): 단위와 견주지 않는다 */
+  noUnits?: boolean;
 }
 
 /**
@@ -230,9 +250,9 @@ export const buildBoundaryUnits = (samples: PageEfficiencySample[], boundaries: 
  */
 export const getEfficiencyScope = (samples: PageEfficiencySample[], boundaries: readonly number[] = [], noUnits = false): EfficiencyScope => {
   const logs = chronological(samples);
-  // 자동 복습 넣기를 켠 과목은 단위가 없다(4일): 단위 비교 · "이번 단위" 줄이 없고, 효율은 이어지는 25분 평균, 평균은 과목 전체다
-  if (noUnits) return { current: logs, units: [], progress: null };
   const units = buildBoundaryUnits(logs, boundaries);
+  // 자동 복습 넣기를 켠 과목은 단위가 없다(4일): 단위 비교 · "이번 단위" 줄이 없다. 효율은 계획과 같은 값(직접 넣은 때 이후 전부, 넣은 적이 없으면 처음부터)
+  if (noUnits) return { current: logs, units, progress: null, noUnits: true };
   const finished = units.filter(unit => unit.complete).length;
   const open = units.find(unit => !unit.complete);
   return { current: logs, units, progress: { index: finished + 1, done: open ? open.pages : 0 } };
@@ -281,20 +301,18 @@ export interface EfficiencyView {
   referenceUnit: PageEfficiencyUnit | null;
   /** 평균과 견줄 수 있을 때의 평균 */
   average: EfficiencyAverage | null;
+  /** 보이는 단위 평균에서 마지막 기록을 빼기 전(4일: "이전보다"는 마지막 공부로 단위 평균이 얼마나 바뀌었는지). 기록이 하나뿐이면 null */
+  before: EfficiencyWindow | null;
   overall: GrowthChange | null;
   attack: GrowthChange | null;
 }
 
+/** 효율 칸의 "평균": 전체 평균(기록 전체의 시간 합 ÷ 장수 합) */
 const averageOf = (logs: PageEfficiencySample[], shown: EfficiencyWindow): EfficiencyAverage | null => {
-  let pages = 0, minutes = 0, attack = 0;
-  logs.forEach(log => {
-    pages += log.pagesRead;
-    minutes += log.timeSpentMinutes;
-    attack += Number.isFinite(log.timeAttackMinutes) ? Math.min(log.timeSpentMinutes, Math.max(0, log.timeAttackMinutes!)) : log.timeSpentMinutes;
-  });
-  // 보이는 25분 덩어리뿐이면 견줄 평균이 따로 없다
-  if (pages - shown.pages < 1e-6) return null;
-  return { pages, averageTimePerPage: minutes / pages, timeAttackAverageTimePerPage: attack / pages };
+  const total = totalOf(logs);
+  // 보이는 값이 이미 전체면 견줄 평균이 따로 없다
+  if (!total || total.pages - shown.pages < 1e-6) return null;
+  return { pages: total.pages, averageTimePerPage: total.averageTimePerPage, timeAttackAverageTimePerPage: total.timeAttackAverageTimePerPage };
 };
 
 /**
@@ -309,23 +327,21 @@ export const getEfficiencyView = (scope: EfficiencyScope, comparison: number | E
   const requested: EfficiencyComparison = typeof comparison === 'number' ? { kind: 'pomodoro', n: comparison } : comparison;
   const windows = buildEfficiencyWindows(scope.current);
   const finishedUnits = scope.units.filter(unit => unit.complete);
-  // 새 단위가 시작되면 이전 단위를 가져온다: 막 단위를 마쳐서 새 단위에 푼 기록이 아직 없으면 효율 칸은 이전 단위의 평균이다.
-  const inherited = windows.length > 0 && finishedUnits.length > 0 && Boolean(scope.progress) && scope.progress!.done < 1e-9;
-  const inheritedUnit = inherited ? finishedUnits[finishedUnits.length - 1] : null;
-  const shown: EfficiencyWindow | null = inheritedUnit
-    ? { pages: inheritedUnit.pages, minutes: inheritedUnit.minutes, averageTimePerPage: inheritedUnit.averageTimePerPage,
-        timeAttackMinutes: inheritedUnit.timeAttackMinutes, timeAttackAverageTimePerPage: inheritedUnit.timeAttackAverageTimePerPage,
-        standardDeviation: inheritedUnit.standardDeviation, complete: true }
-    : windows[0] || null;
+  // 4일: 효율 칸(성장 정도)의 값은 이번 단위를 처음 시작한 때부터 지금까지의 총합 평균이다(25분 덩어리 하나가 아니다).
+  // 이번 단위에 아직 푼 기록이 없으면(막 복습에 넣었으면) 전체 평균을 보인다(`inherited`). 이때는 견줄 것이 없다.
+  const openUnit = scope.units.find(unit => !unit.complete) ?? null;
+  const inherited = !openUnit && finishedUnits.length > 0;
+  const shown: EfficiencyWindow | null = openUnit ? unitAsWindow(openUnit) : totalOf(scope.current);
   if (!shown) {
     return { shown, inherited: false, choice: requested.kind === 'average' ? requested : { kind: requested.kind, n: 0 }, comparison: 0, maxComparison: 0, maxUnits: 0, options: [],
-      reference: null, referenceUnit: null, average: null, overall: null, attack: null };
+      reference: null, referenceUnit: null, average: null, before: null, overall: null, attack: null };
   }
   // 이전 단위를 가져와 보이는 중에는 그 단위 자신과 견주지 않는다: 그 앞 단위들과 평균으로 견주고, 뽀모도로로는 견주지 않는다.
   const finished = inherited ? finishedUnits.slice(0, -1) : finishedUnits;
   const maxComparison = inherited ? 0 : Math.min(MAX_COMPARISON_POMODOROS, windows.length - 1);
-  const maxUnits = Math.min(MAX_COMPARISON_UNITS, finished.length);
-  const average = averageOf(scope.current, shown);
+  // 전체 평균을 보이는 중(이번 단위에 기록이 없음)이거나 단위가 없는 과목은 단위와 견주지 않는다
+  const maxUnits = scope.noUnits || inherited ? 0 : Math.min(MAX_COMPARISON_UNITS, finished.length);
+  const average = inherited ? null : averageOf(scope.current, shown);
   const options: EfficiencyComparison[] = [
     ...Array.from({ length: maxComparison }, (_, index): EfficiencyComparison => ({ kind: 'pomodoro', n: index + 1 })),
     ...Array.from({ length: maxUnits }, (_, index): EfficiencyComparison => ({ kind: 'unit', n: index + 1 })),
@@ -353,8 +369,16 @@ export const getEfficiencyView = (scope: EfficiencyScope, comparison: number | E
   } else if (average) {
     against = { overall: average.averageTimePerPage, attack: average.timeAttackAverageTimePerPage };
   }
+  // 마지막 기록을 빼기 전의 단위 평균
+  const latest = scope.current[scope.current.length - 1];
+  const latestAttack = latest ? (Number.isFinite(latest.timeAttackMinutes) ? Math.min(latest.timeSpentMinutes, Math.max(0, latest.timeAttackMinutes!)) : latest.timeSpentMinutes) : 0;
+  const before: EfficiencyWindow | null = latest && shown.pages - latest.pagesRead > 1e-6 && shown.minutes - latest.timeSpentMinutes > 1e-6
+    ? { ...shown, pages: shown.pages - latest.pagesRead, minutes: shown.minutes - latest.timeSpentMinutes,
+        averageTimePerPage: (shown.minutes - latest.timeSpentMinutes) / (shown.pages - latest.pagesRead),
+        timeAttackMinutes: shown.timeAttackMinutes - latestAttack, timeAttackAverageTimePerPage: (shown.timeAttackMinutes - latestAttack) / (shown.pages - latest.pagesRead) }
+    : null;
   return {
-    shown, inherited, choice, comparison: choice.kind === 'pomodoro' ? choice.n : 0, maxComparison, maxUnits, options, reference, referenceUnit, average,
+    shown, inherited, choice, comparison: choice.kind === 'pomodoro' ? choice.n : 0, maxComparison, maxUnits, options, reference, referenceUnit, average, before,
     overall: against ? toGrowthChange(against.overall, shown.averageTimePerPage) : null,
     attack: against ? toGrowthChange(against.attack, shown.timeAttackAverageTimePerPage) : null
   };
