@@ -637,18 +637,23 @@ export const displayedLocations = (index: NoteSetIndex, name: string, covered: R
  */
 export const suggestSetNames = (index: NoteSetIndex, typed: string, following?: string): string[] => {
   const key = normSetName(typed);
-  const linked = following && index.display.has(normSetName(following)) ? ancestorsOf(index, following) : [];
-  // 뒤따르는 셀이 든 집합이 없으면(어느 집합에도 없는 셀 · 아직 없는 셀) 있는 집합을 모두 보인다(1일 요청: `[` 안이면 늘 뜬다)
-  const pool = linked.length ? linked : knownSetNames(index);
+  const linked = (following && index.display.has(normSetName(following)) ? ancestorsOf(index, following) : []).map(bareSetName);
+  // 뒤따르는 셀이 든 집합이 없으면(어느 집합에도 없는 셀 · 아직 없는 셀) 있는 집합을 모두 보인다(1일 요청: `[` 안이면 늘 뜬다).
+  // 5일: `[ ]` 안에 쓴 위치가 세션 노트 · 위쪽 토글의 위치보다 우선이라, 이름을 쓰기 시작하면 뒤 셀이 지금 놓인 집합이 아니어도
+  // 그 이름이 든 다른 집합을 함께 보인다(뒤 셀의 집합이 먼저). 아무것도 안 썼으면 전처럼 뒤 셀의 집합만
+  const pool = !linked.length ? knownSetNames(index) : key ? [...linked, ...knownSetNames(index)] : linked;
   return unique(pool.filter(name => normSetName(name) !== normSetName(following ?? '\u0000') && (!key || normSetName(name).includes(key))));
 };
+
+/** 토글 제목을 `[과일]`처럼 위치 표시로 쓴 집합은 이름만(`과일`): 추천을 `[ ]` 안에 넣으면 `[[과일]]`이 되지 않게 */
+const bareSetName = (name: string): string => /^\[([^\[\]]+)\]$/.exec(name.trim())?.[1].trim() ?? name;
 
 /**
  * 있는 집합 이름들: 토글 제목 · 아래 항목이 있는 셀(쓴 순서) 다음에, 토글로 쓰지 않고 `[과일] 사과`처럼 셀 왼쪽에만 쓴 집합(위치 표시)도 든다
  * (1일 요청: 토글 제목에 쓰든 안 쓰든 집합이다). 쓰는 중인 `[`가 든 이름(빈 토글 제목에 `[`만 쓴 것 등)은 뺀다.
  */
 export const knownSetNames = (index: NoteSetIndex): string[] => unique([
-  ...[...index.sets].map(set => index.display.get(set) ?? set),
+  ...[...index.sets].map(set => bareSetName(index.display.get(set) ?? set)),
   // 위치 사슬(`[A:C]`)·집합식(`[급수.[A:C]]`)은 이름 하나가 아니라서 이름 자리에 넣지 않는다
   ...[...index.placements.values()].map(mark => canonicalMark(mark.display)).filter(name => !/[:;<=.,%()]/.test(name))
 ].filter(name => name.trim() && !/[\[\]]/.test(name)));
@@ -863,7 +868,7 @@ export const bracketSuggestions = (index: NoteSetIndex, detail: BracketDetail): 
   const written = new Set(detail.before.split(/[.,%:;<=()\[\]]/).map(normSetName).filter(Boolean));
   const names = linked(detail.typed).filter(name => !written.has(normSetName(name)));
   // 토글 제목·아래 항목이 있는 셀은 `토글`, 셀 왼쪽에만 쓴 집합은 `집합`
-  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: index.sets.has(normSetName(text)) ? '토글' : '집합' }));
+  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: index.sets.has(normSetName(text)) || index.sets.has(normSetName(`[${text}]`)) ? '토글' : '집합' }));
   // 구조 추천은 `[ ]` 안쪽 내용 전체를 바꾼다: `[A:C] 급수` → `[급수.[A:C]] 급수`. 닫는 `]`와 그 뒤의 글은 그대로 둔다.
   if (detail.close >= 0 && detail.following && !/[\[\]]/.test(detail.inner) && /[:;<=]/.test(detail.inner)) {
     const cell = detail.following;
@@ -894,6 +899,9 @@ const findSetKey = (index: NoteSetIndex, name: string): string | null => {
   const key = normSetName(name);
   if (!key || /[\[\]().,%]/.test(name)) return null;
   if (index.sets.has(key) || index.placements.has(markKeyOf(name))) return key;
+  // 5일: 토글 제목을 `[과일]`로 쓴 집합도 `[과일:`에서 찾는다
+  const bracketed = normSetName(`[${name}]`);
+  if (index.sets.has(bracketed)) return bracketed;
   return null;
 };
 

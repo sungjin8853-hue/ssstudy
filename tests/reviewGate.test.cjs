@@ -11623,3 +11623,35 @@ test('5일: 단원이 있으면 바로 복습 넣기의 끝 페이지는 지금 
   assert.ok(logger.includes('cutChapterEnd !== null ? formatPageNumber(cutChapterEnd) :'));
   assert.ok(logger.includes("' · 끝 페이지는 이 단원의 끝이에요'"));
 });
+
+test('5일: 복습에 넣은 기록의 노트는 측정 노트지에 이어 붙지 않는다(넣으면 새로), 대기 · 모으는 중 · 복습 안 하는 기록은 그날 이어 쓴다', () => {
+  const { isNoteInReview } = loadSource('utils/noteUnits.ts');
+  assert.equal(isNoteInReview({ reviewRegisteredAt: '2026-11-05T01:00:00Z' }), true);
+  assert.equal(isNoteInReview({ nextReviewDate: '2026-11-06T01:00:00Z' }), true);
+  assert.equal(isNoteInReview({ unitReviewPending: true, nextReviewDate: '2026-11-06T01:00:00Z' }), false);
+  assert.equal(isNoteInReview({ autoReviewWaiting: true, reviewRegisteredAt: '2026-11-05T01:00:00Z' }), false);
+  assert.equal(isNoteInReview({ reviewEnabled: false, nextReviewDate: '2026-11-06T01:00:00Z' }), false);
+  assert.equal(isNoteInReview({}), false);
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.equal((logger.match(/&& !isNoteInReview\(log\)\)/g) ?? []).length, 2, 'seeding and refilling the sheet skip notes already in review');
+  // 바로 복습 넣기: 넣은 부분 노트는 빠지고 노트지는 새로, "넣었어요"를 잠깐 띄운다
+  assert.ok(logger.includes('!willWaitForReview(carried!) && !isNoteInReview(carried!)'));
+  assert.ok(logger.includes('data-testid="cut-review-done"') && logger.includes('복습에 넣었어요 · 노트는 새로 시작해요') && logger.includes('setTimeout(() => setCutDone(null), 3500)'));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('@keyframes cutDone') && html.includes('prefers-reduced-motion'));
+});
+
+test('5일: 토글 안에서 > 뒤 엔터로 토글을 만들면 그 토글 안 다른 모든 행이 새 토글 밑으로 들어간다(A > B > D 끼워 넣기)', () => {
+  const editor = fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8');
+  assert.ok(/if \(trailing && nested\) \{[\s\S]*?\.\.\.blocks\.slice\(0, index\)[\s\S]*?\.\.\.blocks\.slice\(index \+ 1\)[\s\S]*?commit\(\[wrapper\]\);/.test(editor));
+});
+
+test('5일: [ ] 안 위치가 세션 노트 · 위쪽 토글 위치보다 우선 — 뒤 셀이 다른 집합에 있어도 쓰는 이름의 집합을 추천, [과일] 제목 토글도 이름으로', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const index = ns.buildNoteSetIndex(['[개념:정의]\n:::toggle [과일]\n사과:빨강\n배:노랑\n:::end\n:::toggle 채소\n당근:주황\n:::end']);
+  const at = text => { const caret = text.indexOf('|'); const value = text.replace('|', ''); return ns.bracketSuggestions(index, ns.bracketDetail(value, caret)).map(item => item.text); };
+  assert.deepEqual(at('[채|] 사과'), ['채소'], 'another set than where 사과 sits');
+  assert.deepEqual(at('[|] 사과'), ['과일'], 'nothing typed: where 사과 sits, written without the toggle brackets');
+  assert.ok(at('[과일:|]').includes('개념'), 'a [과일] toggle is found by its name for the next criterion');
+  assert.deepEqual(ns.followingCellSuggestions(index, '[과일] ', 7).map(item => item.text), ['사과', '배']);
+});
