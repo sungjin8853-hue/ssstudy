@@ -11635,7 +11635,7 @@ test('5일: 복습에 넣은 기록의 노트는 측정 노트지에 이어 붙�
   const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   assert.equal((logger.match(/&& !isNoteInReview\(log\)\)/g) ?? []).length, 2, 'seeding and refilling the sheet skip notes already in review');
   // 바로 복습 넣기: 넣은 부분 노트는 빠지고 노트지는 새로, "넣었어요"를 잠깐 띄운다
-  assert.ok(logger.includes('!willWaitForReview(carried!) && !isNoteInReview(carried!)'));
+  assert.ok(logger.includes('!carried!.unitReviewPending && !isNoteInReview(carried!)'));
   assert.ok(logger.includes('data-testid="cut-review-done"') && logger.includes('복습에 넣었어요 · 노트는 새로 시작해요') && logger.includes('setTimeout(() => setCutDone(null), 3500)'));
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('@keyframes cutDone') && html.includes('prefers-reduced-motion'));
@@ -11654,4 +11654,24 @@ test('5일: [ ] 안 위치가 세션 노트 · 위쪽 토글 위치보다 우선
   assert.deepEqual(at('[|] 사과'), ['과일'], 'nothing typed: where 사과 sits, written without the toggle brackets');
   assert.ok(at('[과일:|]').includes('개념'), 'a [과일] toggle is found by its name for the next criterion');
   assert.deepEqual(ns.followingCellSuggestions(index, '[과일] ', 7).map(item => item.text), ['사과', '배']);
+});
+
+test('5일 여러 날 점검: 바로 복습 넣기 뒤 노트지에서 빠지는 기록은 대기 표시로 고른다(대기 기록은 넣기 전까지 reviewEnabled가 꺼져 있다)', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('return Boolean(carried) && !carried!.unitReviewPending && !isNoteInReview(carried!);'));
+  assert.ok(!logger.includes('!willWaitForReview(carried!)'));
+  const { willWaitForReview } = loadSource('utils/review.ts');
+  // 자동 과목의 모으는 중 기록 모양: 넣기 전엔 reviewEnabled false · isCondensed true라 willWaitForReview로는 가릴 수 없다
+  assert.equal(willWaitForReview({ startPage: 29, endPage: 31, reviewEnabled: false, isCondensed: true, unitReviewPending: true, autoReviewWaiting: true }), false);
+});
+
+test('5일 여러 날 점검: 그 과목 기본 복습 칸에서도 복습에 넣기, 단원 끝냄 추천은 창을 본 뒤(닫기 · 고르기)에야 띄웠음으로 기억', () => {
+  const today = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  assert.ok(today.includes('const canRegisterHere = Boolean(detailData && !detailData.owner);'));
+  assert.ok(today.includes('{canRegisterHere && onRegisterReview && (pendingReviewCount > 0 || autoReview) && ('));
+  assert.ok(today.includes('choosingReview && onRegisterReview && detailData && canRegisterHere && (pendingReviewCount > 0 || autoReview)'));
+  assert.ok(/if \(!idle \|\| !detailData \|\| choosingReview \|\| detailIsReview\) return;/.test(today), 'the automatic recommendation stays on the study card');
+  const effect = today.slice(today.indexOf('const finished = chapterGroups.filter'), today.indexOf('setChoosingReview(true);\n  }, [idle'));
+  assert.ok(!effect.includes('localStorage.setItem'), 'opening the recommendation does not mark it as seen');
+  assert.ok(today.includes('onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}') && today.includes('onChoose={(grade, logIds) => { rememberChapterPrompt();'));
 });
