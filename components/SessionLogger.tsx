@@ -47,7 +47,7 @@ import { formatReviewInterval, ReviewPracticeScreen, ReviewRailItem } from './Re
 import { compareReviewQuestionDifficulty } from '../utils/reviewDifficulty';
 import { REVIEW_QUESTION_KIND_LABELS } from '../utils/reviewQuestions';
 import type { NoteQuestion } from '../utils/reviewQuestions';
-import { carriedNoteLogs } from '../utils/noteUnits';
+import { carriedNoteLogs, isNoteInReview } from '../utils/noteUnits';
 import { mergeSheetParts, SheetPart, SheetUpdate, splitNoteSheet } from '../utils/noteSheet';
 import { mergeNoteIntoEarlier } from '../utils/noteMerge';
 import { recordNoteMerges } from '../utils/noteMergeLog';
@@ -1742,7 +1742,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       ? carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0, subject.startPage ?? 1, activeStudyDate)
       : [];
     const parts = carried
-      .filter(log => (log.reviewMemo ?? '').trim().length > 0)
+      .filter(log => (log.reviewMemo ?? '').trim().length > 0 && !isNoteInReview(log))
       .map(log => ({ logId: log.id, memo: log.reviewMemo ?? '' }));
     sheetPartsRef.current = parts;
     sheetUpdatesRef.current = [];
@@ -2337,6 +2337,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 같은 과목을 그다음 쪽부터 새로 잰다. 정리노트는 그대로 두고, 이미 저장한 부분은 다음 저장 때 다시 담지 않는다
   const [cutEndPage, setCutEndPage] = useState<string | null>(null);
   const [cutError, setCutError] = useState('');
+  // 5일: 바로 복습 넣기를 하면 잠깐 "넣었어요"를 띄운다(넣은 범위, 노트지는 새로)
+  const [cutDone, setCutDone] = useState<{ id: number; text: string } | null>(null);
+  useEffect(() => {
+    if (!cutDone) return;
+    const timer = window.setTimeout(() => setCutDone(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [cutDone]);
   const cutStartPage = selectedSubject ? (activeSubjectStage?.currentPage || selectedSubject.completedPages + 1) : 0;
   // 5일: 단원이 있으면 끝 페이지는 지금 푸는 단원의 끝으로 바로 채운다(남은 양을 넘으면 넣을 수 있는 마지막 페이지). 고쳐 쓸 수 있다
   const cutChapterEnd = (() => {
@@ -2373,7 +2380,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const subject = subjects.find(item => item.id === cutSubjectId);
     const carried = subject ? carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0, subject.startPage ?? 1, activeStudyDate) : [];
     const nextParts = carried
-      .filter(log => (log.reviewMemo ?? '').trim().length > 0)
+      .filter(log => (log.reviewMemo ?? '').trim().length > 0 && !isNoteInReview(log))
       .map(log => ({ logId: log.id, memo: (keep.has(log.id) ? sheet.updates.find(update => update.logId === log.id)?.memo : undefined) ?? log.reviewMemo ?? '' }));
     sheetPartsRef.current = nextParts;
     sheetUpdatesRef.current = [];
@@ -2416,10 +2423,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       reviewEnabled: true,
       autoReviewCut: true
     };
-    const nextParts: SheetPart[] = [
-      ...carriedParts.map(part => ({ logId: part.logId, memo: updates.find(update => update.logId === part.logId)?.memo ?? part.memo })),
-      ...(savedMemo.trim() ? [{ logId: log.id, memo: savedMemo }] : [])
-    ];
+    // 5일: 넣은 부분(이번 기록과 함께 복습에 들어가는 대기 기록)의 노트는 노트지에서 빠지고 노트지는 새로 시작한다.
+    // 복습을 안 하는 기록의 노트만 그대로 이어 둔다
+    const nextParts: SheetPart[] = carriedParts
+      .filter(part => { const carried = logs.find(item => item.id === part.logId); return Boolean(carried) && !willWaitForReview(carried!) && !isNoteInReview(carried!); })
+      .map(part => ({ logId: part.logId, memo: updates.find(update => update.logId === part.logId)?.memo ?? part.memo }));
     sheetUpdatesRef.current = updates;
     applyCarriedSheetEdits();
     setPendingAutoAdvanceLogId(null);
@@ -2427,7 +2435,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     cutReseedRef.current = subjectId;
     sheetPartsRef.current = nextParts;
     sheetUpdatesRef.current = [];
-    if (nextParts.length > 0) { setReviewMemo(mergeSheetParts(nextParts)); setReviewMemoDocument(undefined); }
+    setReviewMemo(mergeSheetParts(nextParts));
+    setReviewMemoDocument(undefined);
+    setCutDone({ id: Date.now(), text: `${pagePos}.${cutStartPage}${end !== cutStartPage ? `~${pagePos}.${formatPageNumber(end)}` : ''}` });
     // 그다음 쪽부터 새로 잰다(뽀모도로 · 타임어택도 처음부터)
     setStudySeconds(0);
     setOrganizationSeconds(0);
@@ -2985,7 +2995,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                       </button>
                     </div>
                     {canCutReview && (
-                      <div data-testid="cut-review" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+                      <div data-testid="cut-review" className={`mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 transition-colors duration-500 ${cutDone ? 'border-emerald-300 bg-emerald-50' : 'border-indigo-100 bg-indigo-50/60'}`}>
                         <label htmlFor="cut-review-end" className="text-sm font-black text-indigo-700">끝 페이지</label>
                         <input id="cut-review-end" type="number" inputMode="numeric" value={cutEndPage ?? cutDefaultEnd}
                           onChange={event => { setCutEndPage(event.target.value); setCutError(''); }}
@@ -2996,6 +3006,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                         </button>
                         <span className="text-[12px] font-bold text-indigo-900/70">{pagePos}.{cutStartPage}부터 지금까지를 복습에 넣고 다음 페이지부터 새로 재요{cutChapterEnd !== null && cutEndPage === null ? ' · 끝 페이지는 이 단원의 끝이에요' : ''}</span>
                         {cutError && <span role="alert" className="w-full text-[12px] font-black text-rose-600">{cutError}</span>}
+                        {cutDone && <span key={cutDone.id} role="status" data-testid="cut-review-done"
+                          className="animate-cut-done flex w-full items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-black text-white shadow-md">
+                          <span aria-hidden="true" className="animate-cut-check flex h-6 w-6 items-center justify-center rounded-full bg-white text-emerald-600">✓</span>
+                          {cutDone.text} 복습에 넣었어요 · 노트는 새로 시작해요
+                        </span>}
                       </div>
                     )}
                     {showNoteTutorial && <NoteTutorial onClose={() => setShowNoteTutorial(false)} />}

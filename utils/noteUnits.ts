@@ -223,6 +223,13 @@ export const paginateNoteSections = (
  *  - 페이지 단위가 없으면 오늘(studyDate) 학습한 기록들이다. 날이 바뀌면 새 노트지가 된다.
  * logs는 이 과목의 기록 전체(노트가 없는 기록 포함)를 넣는다. 반환은 오래된 순서.
  */
+/**
+ * 5일: 이미 복습에 들어간 기록(복습에 넣기 · 자동 · 바로 복습 넣기)은 측정 노트지에 이어 붙이지 않는다 — 복습에 넣으면 노트지는 새로 시작한다.
+ * 아직 기다리는(대기 · 모으는 중) 기록과 복습을 안 하는 기록만 그날 노트지에 이어 쓴다.
+ */
+export const isNoteInReview = (log: StudyLog): boolean => !log.unitReviewPending && !log.autoReviewWaiting && log.reviewEnabled !== false
+  && Boolean(log.reviewRegisteredAt || log.nextReviewDate);
+
 export const carriedNoteLogs = (logs: StudyLog[], unitSize: number, firstPage: number, studyDate: string): StudyLog[] => {
   if (!logs.length) return [];
   const pages = groupLogsByPageUnit(logs, unitSize, firstPage, 'carry');
