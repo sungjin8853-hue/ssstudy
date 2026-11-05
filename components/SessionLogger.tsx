@@ -2424,9 +2424,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       autoReviewCut: true
     };
     // 5일: 넣은 부분(이번 기록과 함께 복습에 들어가는 대기 기록)의 노트는 노트지에서 빠지고 노트지는 새로 시작한다.
-    // 복습을 안 하는 기록의 노트만 그대로 이어 둔다
+    // 복습을 안 하는 기록의 노트만 그대로 이어 둔다. 대기 기록은 넣기 전까지 reviewEnabled가 꺼져 있어 unitReviewPending으로 가린다
+    // (5일 점검: willWaitForReview로 가려 자동 과목의 모으던 기록 노트가 넣은 뒤에도 노트지에 남았다)
     const nextParts: SheetPart[] = carriedParts
-      .filter(part => { const carried = logs.find(item => item.id === part.logId); return Boolean(carried) && !willWaitForReview(carried!) && !isNoteInReview(carried!); })
+      .filter(part => { const carried = logs.find(item => item.id === part.logId); return Boolean(carried) && !carried!.unitReviewPending && !isNoteInReview(carried!); })
       .map(part => ({ logId: part.logId, memo: updates.find(update => update.logId === part.logId)?.memo ?? part.memo }));
     sheetUpdatesRef.current = updates;
     applyCarriedSheetEdits();
