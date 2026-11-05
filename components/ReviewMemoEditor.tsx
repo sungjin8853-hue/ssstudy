@@ -475,6 +475,25 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     // 줄 가운데의 `>` 바로 뒤에서 엔터를 치면(4일 요청: `A: > B:C`) `>` 앞이 제목, `>` 뒤가 토글 안 첫 줄이다
     const inner = trailing ? block.text.slice(caret, end).trim() : '';
     const title = trailing ? block.text.slice(start, caret).replace(/>\s*$/, '').trimEnd() : command ? line.slice(command.length) : line;
+    // 5일: 토글 안에서 `>` 뒤 엔터로 토글을 만들면, 그 토글 안의 다른 모든 행이 새 토글 밑으로 들어간다(`A > B > D`처럼 한 단계씩 끼워 넣기).
+    // 행 순서는 그대로: 앞 행들, `>` 뒤 글, 뒤 행들. 맨 바깥 노트에서는 전처럼 새 토글만 만든다
+    if (trailing && nested) {
+      const beforeText = start > 0 ? block.text.slice(0, start - 1) : '';
+      const afterText = end < block.text.length ? block.text.slice(end + 1) : '';
+      const moved: ReviewMemoBlock[] = [
+        ...blocks.slice(0, index),
+        ...(beforeText ? [{ type: 'text' as const, text: beforeText }] : []),
+        ...(inner ? [{ type: 'text' as const, text: inner }] : []),
+        ...(afterText ? [{ type: 'text' as const, text: afterText }] : []),
+        ...blocks.slice(index + 1)
+      ].filter(item => item.type === 'toggle' || item.text.trim() !== '');
+      const wrapper: Block = { ...makeBlock({ type: 'toggle', title, text: serializeReviewMemoBlocks(moved.map(item => (item.type === 'toggle'
+        ? { type: 'toggle' as const, title: item.title, text: item.text } : { type: 'text' as const, text: item.text }))) }), id: block.id };
+      setClosed(prev => { const next = new Set(prev); next.delete(wrapper.id); return next; });
+      focus(wrapper.id, 'text', 0);
+      commit([wrapper]);
+      return;
+    }
     const toggle = { ...makeBlock({ type: 'toggle', title, text: inner }),
       ...(start === 0 ? { id: block.id } : {}) };
     const replacements: Block[] = [];
