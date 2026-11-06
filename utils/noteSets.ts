@@ -119,6 +119,18 @@ export const splitHeadMarks = (segment: string): { cell: string; marks: string[]
 };
 
 /**
+ * 6일: 맨 앞이 아닌 칸(연결어 뒤)의 셀과 위치. 그 칸이 `[X]` 하나뿐이면(따로 쓴 글 없이) X는 위치이면서 그 칸의 글이다.
+ * 집합 기호(`.` `,` `%`)를 쓴 집합식 · 칸 이름(`[개념:정의]`)처럼 보이는 `[ ]`는 위치로만 읽지 않고 전처럼 둔다.
+ */
+export const laterCellOf = (piece: string): { cell: string; marks: string[] } => {
+  const { cell, marks } = splitHeadMarks(piece);
+  const plain = marks.filter(mark => !/[.,%:;<=()\[\]#{}]/.test(mark) && mark.trim());
+  if (cell) return { cell, marks: plain };
+  if (marks.length === 1 && plain.length === 1) return { cell: plain[0].trim(), marks: plain };
+  return { cell: '', marks: [] };
+};
+
+/**
  * 칸 왼쪽에 쓴 `[A:B;C]`가 분류기준으로 읽히는 글이면 그 안쪽 글(오른쪽에 쓴 값의 `:` `;`에 칸 이름 A, B, C가 적용된다), 아니면 undefined.
  * 칸이 둘 이상이고 `[ ]` `( )` `.` `,` `%`가 없는 글만 기준이다(`[도형.%삼각형]` 같은 집합식은 아니다). 가장 가까운(오른쪽) 것을 쓴다.
  */
@@ -399,8 +411,17 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
           connected.add(key);
           relationCuts.forEach((cut, at) => {
             segment.slice(cut + 1, relationCuts[at + 1] ?? segment.length).split(',').forEach(piece => {
-              const name = normSetName(splitHeadMarks(piece).cell.replace(/^['"]+|['"]+$/g, ''));
+              const later = laterCellOf(piece);
+              const name = normSetName(later.cell.replace(/^['"]+|['"]+$/g, ''));
               if (name) connected.add(name);
+              // 6일: 맨 앞이 아닌 칸의 `[X]`는 위치이자 글이다 — 그 칸 글은 X 자리에 있고, 줄 맨 앞 `[P]`와 교집합(P 안의 X)이다
+              if (!name || !later.marks.length) return;
+              const cellKey = see(later.cell);
+              const leads = located.filter(lead => !/[:;<=]/.test(lead));
+              later.marks.forEach(mark => {
+                if (leads.length) leads.forEach(lead => place(`${lead}.${mark}`, cellKey));
+                else if (normSetName(mark) !== cellKey) place(mark, cellKey);
+              });
             });
           });
         }
@@ -655,7 +676,9 @@ const bareSetName = (name: string): string => /^\[([^\[\]]+)\]$/.exec(name.trim(
 export const knownSetNames = (index: NoteSetIndex): string[] => unique([
   ...[...index.sets].map(set => bareSetName(index.display.get(set) ?? set)),
   // 위치 사슬(`[A:C]`)·집합식(`[급수.[A:C]]`)은 이름 하나가 아니라서 이름 자리에 넣지 않는다
-  ...[...index.placements.values()].map(mark => canonicalMark(mark.display)).filter(name => !/[:;<=.,%()]/.test(name))
+  ...[...index.placements.values()].map(mark => canonicalMark(mark.display)).filter(name => !/[:;<=.,%()]/.test(name)),
+  // 6일: 교집합 위치(`[과일.빨강]`, 맨 앞이 아닌 칸의 `[빨강]`이 만든 것)의 이름들도 위치 이름이다
+  ...[...index.placements.values()].flatMap(mark => (/[\[\]:;<=()]/.test(mark.display) ? [] : mark.display.split(/[.,%]/).map(part => part.trim())))
 ].filter(name => name.trim() && !/[\[\]]/.test(name)));
 
 /** 이름의 바로 위 집합들(토글 제목 · 아래 항목이 있는 셀 · `[집합] 셀`), 쓴 그대로 */
@@ -934,7 +957,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         if (!inside) return;
         const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide;
         const cuts = topLevelCuts(segment, relationMarks());
-        const cells = [cell, ...cuts.map((cut, at) => splitHeadMarks(segment.slice(cut + 1, cuts[at + 1] ?? segment.length)).cell.replace(/\{[^{}\n]*\}/g, '').trim())];
+        const cells = [cell, ...cuts.map((cut, at) => laterCellOf(segment.slice(cut + 1, cuts[at + 1] ?? segment.length)).cell.replace(/\{[^{}\n]*\}/g, '').trim())];
         rows.push({ cells, criteria: parseCriterionLabels(criterion) });
       });
     });
@@ -1033,6 +1056,19 @@ export const followingCellSuggestions = (index: NoteSetIndex, text: string, care
     });
   });
   return result;
+};
+
+/**
+ * 6일: 맨 앞이 아닌 칸의 `[ ]` 안에서 쓰는 글도 그 칸의 글이라, 같은 칸에 쓴 값들을 함께 추천한다(`[` 없이 쓸 때의 칸 값 추천과 같다).
+ * 바꾸는 범위는 `[ ]` 안에서 쓰던 이름이다.
+ */
+export const bracketCellValueSuggestions = (index: NoteSetIndex, text: string, detail: BracketDetail): BracketSuggestion[] => {
+  const lineStart = detail.open === 0 ? 0 : text.lastIndexOf('\n', detail.open - 1) + 1;
+  if (!text.slice(lineStart, detail.open).trim()) return [];
+  const caret = detail.tokenStart + detail.typed.length;
+  const plain = text.slice(0, detail.open) + text.slice(detail.open + 1, caret);
+  return followingCellSuggestions(index, plain, plain.length)
+    .map(item => ({ ...item, text: (item.label ?? item.text).trim(), from: detail.tokenStart, to: detail.tokenEnd }));
 };
 
 /** 정리노트에 "쓰인 것처럼" 보이는 위치: 글의 `line`번째 줄(0부터)의 맨 앞 셀이 가진 위치 `[..B]`들 */

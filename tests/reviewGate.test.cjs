@@ -11704,3 +11704,22 @@ test('6일: < 로 시작하는 행부터 끝이 > 인 행에서 엔터 → 사�
   assert.ok(/&& markedRangeStart\(index, caret\)\) \{[\s\S]{0,200}wrapMarkedRange\(index, caret, markedRangeStart\(index, caret\)!\);/.test(editor));
   assert.ok(editor.includes("const toggle = makeBlock({ type: 'toggle', title: '', text: serializeReviewMemoBlocks(content) });"));
 });
+
+test('6일: 맨 앞이 아닌 칸의 [X]는 위치(맨 앞 [P]와 교집합)이자 글 — 글로 쓸 때도 [ ] 안에서 쓸 때도 값 추천', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const memo = '[과일] 사과 : [빨강]\n[과일] 바나나 : 노랑\n[과일] 포도 : [보라] 송이\n수박 : [초록]';
+  const index = ns.buildNoteSetIndex([memo]);
+  assert.deepEqual(ns.rowsOfSet(index, '과일').map(row => row.cells.join(':')), ['사과:빨강', '바나나:노랑', '포도:송이']);
+  assert.deepEqual(ns.upperSetsOf(index, '빨강'), ['과일.빨강']);
+  assert.deepEqual(ns.upperSetsOf(index, '송이'), ['과일.보라']);
+  assert.deepEqual(ns.upperSetsOf(index, '초록'), [], 'without a leading [ ] the cell is just its own text');
+  const plain = (text) => { const caret = text.indexOf('|'); return ns.followingCellSuggestions(index, text.replace('|', ''), caret).map(item => item.text); };
+  assert.deepEqual(plain('[과일] 귤 : 빨|'), ['빨강']);
+  const inside = (text) => { const caret = text.indexOf('|'); const value = text.replace('|', ''); const detail = ns.bracketDetail(value, caret);
+    return { named: ns.bracketSuggestions(index, detail).map(item => item.text), values: ns.bracketCellValueSuggestions(index, value, detail).map(item => [item.text, item.from, item.to]) }; };
+  assert.deepEqual(inside('[과일] 감 : [노|]').values, [['노랑', 10, 11]]);
+  assert.ok(inside('[과일] 감 : [빨|]').named.includes('빨강'), 'the [X] names are position names too');
+  // 질문은 전과 같다: [빨강]은 답 글
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  assert.ok(buildReviewQuestions(memo).questions.some(q => q.kind === 'direct' && q.prompt === '사과' && q.answer === '빨강'));
+});

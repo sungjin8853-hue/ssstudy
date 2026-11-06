@@ -10,7 +10,7 @@ import { getReviewMemoDoubleSpaceEdit } from '../utils/reviewMemoInput';
 import { getReviewFieldOverrides } from '../utils/reviewFieldOverride';
 import { getToggleChildOffset } from '../utils/reviewQuestions';
 import { NoteSymbolBar } from './NoteSymbolBar';
-import { bracketDetail, bracketSuggestions, buildNoteSetIndex, cellLocationSuggestions, followingCellSuggestions, headCellAtCaret, setContents, setMembersTrigger, toggleName } from '../utils/noteSets';
+import { bracketDetail, bracketSuggestions, bracketCellValueSuggestions, buildNoteSetIndex, cellLocationSuggestions, followingCellSuggestions, headCellAtCaret, setContents, setMembersTrigger, toggleName } from '../utils/noteSets';
 import type { SetMemberRow } from '../utils/noteSets';
 import type { BracketSuggestion } from '../utils/noteSets';
 import { caretPositionIn } from '../utils/caretPosition';
@@ -371,7 +371,10 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     let items: BracketSuggestion[] = [];
     if (detail) {
       const index = buildNoteSetIndex(setSource && setSource.length ? setSource : [read.value]);
-      items = bracketSuggestions(index, detail).slice(0, 40);
+      // 6일: 맨 앞이 아닌 칸의 `[ ]`는 위치이자 글이라 집합 이름과 그 칸에 쓴 값을 함께 추천한다
+      const named = bracketSuggestions(index, detail);
+      const values = bracketCellValueSuggestions(index, read.value, detail).filter(item => !named.some(other => other.text.trim() === item.text));
+      items = [...named, ...values].slice(0, 40);
     } else if (part === 'text' && read.end === caret && read.value.includes(']') && (typing || (suggestion?.blockId === blockId && suggestion.kind === 'follow'))) {
       // `[집합]`을 닫은 뒤에도 이어 쓰는 칸을 추천한다(1일 요청). 쓰는 중에 뜨고, 떠 있으면 커서가 그 칸에 있는 동안 유지된다
       kind = 'follow';
