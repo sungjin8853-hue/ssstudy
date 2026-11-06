@@ -11723,3 +11723,28 @@ test('6일: 맨 앞이 아닌 칸의 [X]는 위치(맨 앞 [P]와 교집합)이�
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   assert.ok(buildReviewQuestions(memo).questions.some(q => q.kind === 'direct' && q.prompt === '사과' && q.answer === '빨강'));
 });
+
+test('6일 20:53: 뒤 칸 [ ]에 예외 없음 — 집합식 · 칸 이름처럼 보여도 위치이자 글', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  assert.deepEqual(ns.laterCellOf(' [과일.빨강]'), { cell: '과일.빨강', marks: ['과일.빨강'] });
+  assert.deepEqual(ns.laterCellOf(' [개념:정의]'), { cell: '개념:정의', marks: ['개념:정의'] });
+  assert.deepEqual(ns.laterCellOf(' [%보라] 송이'), { cell: '송이', marks: ['%보라'] });
+  const index = ns.buildNoteSetIndex(['[과일] 사과 : [빨강.진한]']);
+  assert.deepEqual(ns.rowsOfSet(index, '과일').map(row => row.cells.join(':')), ['사과:빨강.진한']);
+});
+
+test('6일 20:53: 복습과목을 재는 동안 복습하는 기록들의 정리노트를 노트지로 가져오고, 고친 것은 그 기록에 · 새 줄은 마지막 기록에', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  const seed = logger.slice(logger.indexOf('const seedCarriedNoteSheet = () => {'), logger.indexOf('const startMeasurementNow = () => {'));
+  assert.ok(/if \(activeReviewRun\) \{[\s\S]*sortReviewLogsByRange\(activeReviewRunLogs\)[\s\S]*setReviewMemo\(mergeSheetParts\(parts\)\);[\s\S]*return;/.test(seed));
+  assert.ok(logger.includes("(!skipReview || step === 'organize' || Boolean(activeReviewRun))"), 'the note sheet shows during a review subject run');
+  assert.ok(/if \(activeReviewRun && target && savedMemo\.trim\(\)\) \{[\s\S]{0,400}savedMemo = '';/.test(logger), 'new lines go into the last reviewed record, not the review record');
+  assert.ok(!logger.includes('isReviewNotePanelOpen ? \'노트 닫기\' : \'노트 보기\''), 'the separate review note panel is gone');
+  // 고친 노트는 updateReviewGateMemo(고친 부분을 복습에 넣기)로 들어가 바뀐 문제만 새로 복습에 든다
+  const { updateReviewGateMemo } = loadSource('utils/reviewGate.ts');
+  const log = { id: 'a', subjectId: 's', reviewMemo: '운동량 : 질량 × 속도\n충격량 : 힘 × 시간', reviewEnabled: true, nextReviewDate: '2026-11-08T00:00:00.000Z', reviewQuestionSchedules: {} };
+  const edited = updateReviewGateMemo(log, '운동량 : 질량 × 속도\n충격량 : 힘 × 시간 변화\n일 : 힘 × 거리', undefined, { intake: true, nowMs: Date.parse('2026-11-04T10:00:00.000Z') });
+  const due = Object.entries(edited.reviewQuestionSchedules).filter(([, item]) => item.nextReviewDate === '2026-11-04T10:00:00.000Z').length;
+  assert.equal(due, 4, 'the changed line and the new line (two questions each) go into review now');
+  assert.equal(edited.reviewEditIntake.keys.length, 4);
+});

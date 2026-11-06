@@ -1739,6 +1739,18 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 정리노트는 학습을 저장해도 바로 비우지 않는다. 이월 노트는 페이지 단위가 없는 과목과 똑같이 그날 하루(오늘 기록)만 같은 노트지에 이어 쓴다.
   // 그 날 이전 기록 노트를 오래된 순서로 이어 붙여 채우고, 저장할 때는 새로 쓴 부분만 이번 기록에 담는다.
   const seedCarriedNoteSheet = () => {
+    // 6일: 복습과목을 재는 동안에는 복습하는 기록들의 정리노트를 노트지로 가져온다(정리노트 쪽 차례). 고치면 그 기록의 노트를 고친 것이라
+    // 고친 문제만 새로 복습에 들고(고친 부분을 복습에 넣기), 새로 쓴 줄은 마지막 기록에 더해진다
+    if (activeReviewRun) {
+      const parts = sortReviewLogsByRange(activeReviewRunLogs)
+        .filter(log => (log.reviewMemo ?? '').trim().length > 0)
+        .map(log => ({ logId: log.id, memo: log.reviewMemo ?? '' }));
+      sheetPartsRef.current = parts;
+      sheetUpdatesRef.current = [];
+      setReviewMemo(mergeSheetParts(parts));
+      setReviewMemoDocument(undefined);
+      return;
+    }
     const subject = subjects.find(item => item.id === subjectId);
     const carried = subject
       ? carriedNoteLogs(logs.filter(log => log.subjectId === subject.id), 0, subject.startPage ?? 1, activeStudyDate)
@@ -2253,7 +2265,17 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const carriedParts = sheetPartsRef.current;
     const sheet = carriedParts.length > 0 ? splitNoteSheet(carriedParts, reviewMemo) : null;
     sheetUpdatesRef.current = sheet ? sheet.updates : [];
-    const savedMemo = sheet ? sheet.added : reviewMemo;
+    let savedMemo = sheet ? sheet.added : reviewMemo;
+    // 6일: 복습과목에서 가져온 노트지에 새로 쓴 줄은 복습 기록이 아니라 복습하던 마지막 기록의 정리노트에 더한다(그래야 문제로 나온다)
+    // (복습하는 기록에 노트가 하나도 없었으면 범위가 가장 뒤인 기록에 쓴다)
+    const lastReviewed = activeReviewRun ? sortReviewLogsByRange(activeReviewRunLogs).at(-1) : undefined;
+    const target = carriedParts.length > 0 ? carriedParts[carriedParts.length - 1] : lastReviewed ? { logId: lastReviewed.id, memo: lastReviewed.reviewMemo ?? '' } : null;
+    if (activeReviewRun && target && savedMemo.trim()) {
+      const base = sheetUpdatesRef.current.find(update => update.logId === target.logId)?.memo ?? target.memo;
+      const merged = base.trim() ? `${base.replace(/\s+$/, '')}\n${savedMemo.replace(/^\n+/, '')}` : savedMemo.replace(/^\n+/, '');
+      sheetUpdatesRef.current = [...sheetUpdatesRef.current.filter(update => update.logId !== target.logId), { logId: target.logId, memo: merged }];
+      savedMemo = '';
+    }
 
     return {
       id: Math.random().toString(36).substr(2, 9),
@@ -2979,7 +3001,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                     />
                   )}
                 </div>
-                {(!skipReview || step === 'organize') && (
+                {/* 6일: 복습과목을 잴 때는 복습하는 기록들의 정리노트를 가져와 보여 준다(복습 기록 자체는 복습하지 않아도) */}
+                {(!skipReview || step === 'organize' || Boolean(activeReviewRun)) && (
                   <div className="rounded-2xl border border-rose-200 bg-white p-5 shadow-sm">
                     <div className="mb-4 flex items-center gap-2">
                       <label className="text-base font-black text-rose-700">정리노트</label>
@@ -3064,31 +3087,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                     </div>
                   </div>
                 )}
-                {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewNotePanelOpen && timerMode !== 'sessionMemo' && (
-                  <div className="rounded-2xl border border-rose-200 bg-white p-4 shadow-sm">
-                    <label className="text-xs font-black uppercase tracking-widest text-rose-700">복습 노트</label>
-                    <div className="mt-3 max-h-72 overflow-y-auto rounded-xl border border-rose-100 bg-rose-50/40 p-3 pr-2">
-                      <div className="space-y-3">
-                        {activeReviewRunMemoItems.map(item => (
-                          <div key={item.id}>
-                            <div className="mb-1 inline-flex rounded-lg bg-rose-100 px-2 py-1 text-xs font-black text-rose-700">
-                              {item.range}
-                            </div>
-                            <ReviewMemoEditor
-                              value={item.memo}
-                              document={item.document}
-                              colorColons={colorMemoColons}
-                              onChange={(memo, document) => onUpdateReviewMemo(item.id, memo, document)}
-                              minHeight={64}
-                              maxHeight={220}
-                              theme="light"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* 6일: 복습 노트는 위 노트지로 가져와 고친다(같은 기록을 두 곳에서 고치면 서로 덮어써서 따로 보이지 않는다) */}
               </div>
             </main>
             <aside className="order-1 w-full" aria-label="학습 시간 측정">
@@ -3114,19 +3113,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               )}
                 {activeReviewRun && (
                   <div className="ml-auto flex gap-2">
-                    {activeReviewRunMemoItems.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setIsReviewNotePanelOpen(prev => !prev)}
-                        className={`rounded-xl px-4 py-2 text-sm font-black transition-all ${
-                          isReviewNotePanelOpen
-                            ? 'bg-rose-500 text-white'
-                            : 'border border-rose-200 bg-white text-rose-700 hover:bg-rose-500 hover:text-white'
-                        }`}
-                      >
-                        {isReviewNotePanelOpen ? '노트 닫기' : '노트 보기'}
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => setIsReviewCondensePanelOpen(prev => !prev)}
