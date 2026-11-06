@@ -11,6 +11,8 @@ import { hasQuoteMark } from '../utils/reviewQuote';
 import type { LogicNode, DiagramLogicOperator as ReviewLogicalOperator } from '../utils/noteDiagram';
 import { groupLogsByReviewUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS, paginateNoteSections } from '../utils/noteUnits';
 import type { NoteSheetPage, NoteSheetSection } from '../utils/noteUnits';
+import { copyText } from '../utils/copyText';
+import { getReviewMemoOutlineText } from '../utils/reviewMemo';
 import { registrationBoundaries } from '../utils/reviewUnits';
 import type { DiagramArrow, DiagramItem, DiagramOperator } from '../utils/noteDiagram';
 import { createSessionMemoRecord, readSessionMemos } from '../utils/sessionMemo';
@@ -553,6 +555,24 @@ const dayLabel = (day?: string) => {
  * 구역 제목 한 행. 페이지 단위가 있으면 "3번째 단위"를 조금 큰 글씨로(옆에 p.21~30), 단위가 없으면 날짜를 조금 크고 간단하게.
  * 한 쪽보다 긴 구역이 다음 쪽으로 이어지면 "이어서"가 붙는다. 노트와 관계도가 같은 제목을 쓴다.
  */
+/** 6일: 쪽들을 글로(단위 · 날 제목, 기록마다 쪽 범위, 노트는 토글을 `> 제목`으로 들여 쓴 꼴). 쪽을 넘겨 이어진 구역은 제목을 다시 쓰지 않는다 */
+const notePagesAsText = (pages: NoteSheetPage[]): string => {
+  const out: string[] = [];
+  pages.forEach(page => page.sections.forEach(section => {
+    if (!section.continued) {
+      out.push(section.kind === 'unit'
+        ? `■ ${(section.index ?? 0) + 1}번째 단위${section.start !== undefined && section.end !== undefined ? ` p.${section.start}~${section.end}` : ''}`
+        : `■ ${dayLabel(section.day)}`);
+    }
+    section.entries.forEach(({ log }) => {
+      const memo = (log.reviewMemo ?? '').trim();
+      if (!memo) return;
+      out.push(`[p.${log.startPage}~${log.endPage} · ${log.studyDate ?? ''}]`.replace(' · ]', ']'), getReviewMemoOutlineText(log.reviewMemo ?? ''), '');
+    });
+  }));
+  return out.join('\n').trim();
+};
+
 const SectionHeading: React.FC<{ section: NoteSheetSection; onDelete?: () => void; confirming?: boolean; onCancel?: () => void }> = ({ section, onDelete, confirming, onCancel }) => (
   <div data-note-heading={section.kind} className="flex h-7 items-center gap-2 whitespace-nowrap">
     {section.kind === 'unit' ? (
@@ -687,6 +707,12 @@ export const NoteTab: React.FC<{
   const [subjectId, setSubjectId] = useState(initialSubjectId);
   const [view, setView] = useState<NoteView>('note');
   const [showTutorial, setShowTutorial] = useState(false);
+  const [copied, setCopied] = useState<'done' | 'fail' | null>(null);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   const [showPractice, setShowPractice] = useState(false);
   // 편집하다가 노트를 모두 지워도 그 칸이 사라지지 않게, 이 화면에서 고친 기록은 비어 있어도 둔다.
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
@@ -890,7 +916,13 @@ export const NoteTab: React.FC<{
             </NoteSetEditContext.Provider>
            </NoteSetSourceContext.Provider>
           </SymbolTargetContext.Provider>
-          <div>
+          <div className="flex flex-wrap gap-2">
+            {/* 6일: 이 과목 정리노트 전체를 글로 복사(쪽 순서대로, 단위 · 날 제목과 기록 범위를 붙여서) */}
+            <button type="button" data-testid="note-copy-all" disabled={!pages.some(item => item.sections.length)}
+              onClick={async () => setCopied(await copyText(notePagesAsText(pages)) ? 'done' : 'fail')}
+              className="inline-flex h-12 items-center gap-2 rounded-xl border-2 border-indigo-200 bg-white px-4 text-[15px] font-black text-indigo-800 hover:bg-indigo-50 disabled:opacity-40">
+              {copied === 'done' ? '복사했어요' : copied === 'fail' ? '복사 못 함' : '노트 글로 복사'}
+            </button>
             <button type="button" onClick={() => setShowTutorial(true)}
               className="inline-flex h-12 items-center gap-2 rounded-xl border-2 border-indigo-200 bg-white px-4 text-[15px] font-black text-indigo-800 hover:bg-indigo-50">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7" /><path d="M12 17h.01" /></svg>

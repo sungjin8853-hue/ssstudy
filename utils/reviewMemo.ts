@@ -107,3 +107,16 @@ export const moveReviewMemoToggle = (memo: string, sourcePath: number[], targetP
   target.node.children.push(source.node);
   return write(nodes);
 };
+
+/**
+ * 6일: 노트를 글로 복사할 때 쓰는 꼴. 토글은 `> 제목`, 그 안의 줄은 두 칸씩 들여 쓴다(화면의 펼친 모양 그대로).
+ */
+export const getReviewMemoOutlineText = (memo: string, depth = 0): string => {
+  const indent = '  '.repeat(depth);
+  return parseReviewMemoBlocks(memo)
+    .map(block => (block.type === 'text'
+      ? block.text.split('\n').map(line => (line ? `${indent}${line}` : line)).join('\n')
+      : [`${indent}> ${block.title}`, getReviewMemoOutlineText(block.text, depth + 1)].filter(Boolean).join('\n')))
+    .filter(Boolean)
+    .join('\n');
+};

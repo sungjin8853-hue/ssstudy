@@ -28,6 +28,8 @@ import { basicReviewFeedbackOf, formatSpeed, gradeSubjectCard, mostCommonFirstGr
 import type { FeedbackKind, SubjectGrade } from '../utils/subjectFeedback';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
+import { copyText } from '../utils/copyText';
+import { getReviewMemoOutlineText } from '../utils/reviewMemo';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
 import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
@@ -2337,6 +2339,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 같은 과목을 그다음 쪽부터 새로 잰다. 정리노트는 그대로 두고, 이미 저장한 부분은 다음 저장 때 다시 담지 않는다
   const [cutEndPage, setCutEndPage] = useState<string | null>(null);
   const [cutError, setCutError] = useState('');
+  const [noteCopied, setNoteCopied] = useState<'done' | 'fail' | null>(null);
+  useEffect(() => {
+    if (!noteCopied) return;
+    const timer = window.setTimeout(() => setNoteCopied(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [noteCopied]);
   // 5일: 바로 복습 넣기를 하면 잠깐 "넣었어요"를 띄운다(넣은 범위, 노트지는 새로)
   const [cutDone, setCutDone] = useState<{ id: number; text: string } | null>(null);
   useEffect(() => {
@@ -2990,8 +2998,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                         className={`rounded-md border px-2 py-1 text-xs font-bold transition-colors ${noteShorthand ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-200 text-slate-500 hover:text-slate-800'}`}>
                         = - {noteShorthand ? 'ON' : 'OFF'}
                       </button>
+                      {/* 6일: 지금 노트지를 글로 복사(토글은 `> 제목`, 안쪽 줄은 들여 씀) */}
+                      <button type="button" data-testid="note-copy" disabled={!reviewMemo.trim()}
+                        onClick={async () => setNoteCopied(await copyText(getReviewMemoOutlineText(reviewMemo)) ? 'done' : 'fail')}
+                        className="ml-auto h-11 rounded-xl border-2 border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition-colors hover:bg-rose-50 disabled:opacity-40">
+                        {noteCopied === 'done' ? '복사했어요' : noteCopied === 'fail' ? '복사 못 함' : '복사'}
+                      </button>
                       <button type="button" onClick={() => setShowNoteTutorial(true)}
-                        className="ml-auto h-11 rounded-xl border-2 border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition-colors hover:bg-rose-50">
+                        className="h-11 rounded-xl border-2 border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition-colors hover:bg-rose-50">
                         쓰는 법
                       </button>
                     </div>
