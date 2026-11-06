@@ -119,15 +119,14 @@ export const splitHeadMarks = (segment: string): { cell: string; marks: string[]
 };
 
 /**
- * 6일: 맨 앞이 아닌 칸(연결어 뒤)의 셀과 위치. 그 칸이 `[X]` 하나뿐이면(따로 쓴 글 없이) X는 위치이면서 그 칸의 글이다.
- * 집합 기호(`.` `,` `%`)를 쓴 집합식 · 칸 이름(`[개념:정의]`)처럼 보이는 `[ ]`는 위치로만 읽지 않고 전처럼 둔다.
+ * 6일: 맨 앞이 아닌 칸(연결어 뒤)의 셀과 위치. 그 칸의 `[ ]`는 언제나 위치이고, 칸에 따로 쓴 글이 없으면 그 `[ ]` 안이 글이기도 하다
+ * (20:53 "예외 같은 거 없애": 집합식 · 칸 이름처럼 보이는 것도 똑같이 읽는다). `[ ]`가 여럿이고 글이 없으면 마지막 것이 글이다.
  */
 export const laterCellOf = (piece: string): { cell: string; marks: string[] } => {
   const { cell, marks } = splitHeadMarks(piece);
-  const plain = marks.filter(mark => !/[.,%:;<=()\[\]#{}]/.test(mark) && mark.trim());
-  if (cell) return { cell, marks: plain };
-  if (marks.length === 1 && plain.length === 1) return { cell: plain[0].trim(), marks: plain };
-  return { cell: '', marks: [] };
+  const used = marks.map(mark => mark.trim()).filter(Boolean);
+  if (cell) return { cell, marks: used };
+  return used.length ? { cell: used[used.length - 1], marks: used } : { cell: '', marks: [] };
 };
 
 /**
