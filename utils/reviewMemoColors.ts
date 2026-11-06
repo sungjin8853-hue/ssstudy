@@ -31,7 +31,9 @@ export const splitReviewMemoColonColors = (text: string, inherited: ReadonlyMap<
   let lineBase = base;
   let lineStart = 0;
   for (let index = 0; index < text.length; index += 1) {
-    if (isReviewGroupOpen(text[index])) { scopes.push({ colonIndex, fieldIndex }); colonIndex = 0; fieldIndex = 0; }
+    // 6일: `( )` 안은 놓인 자리의 칸을 이어받는다(문제 만들기와 같은 31일 규칙: 안쪽 첫 값은 그 칸, 안쪽 `:` `;` `<` 뒤는 그다음 칸들).
+    // 그래서 안쪽 색도 처음 색부터 다시 세지 않고 바깥에서 센 다음 색부터 잇는다. 닫으면 바깥 번호로 돌아간다
+    if (isReviewGroupOpen(text[index])) scopes.push({ colonIndex, fieldIndex });
     if (isReviewGroupClose(text[index])) {
       const parent = scopes.pop();
       if (parent) { colonIndex = parent.colonIndex; fieldIndex = parent.fieldIndex; }
