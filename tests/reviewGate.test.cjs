@@ -1100,7 +1100,8 @@ test('exception colons and their label punctuation remain uncolored and do not a
   const text = 'a:{원인} b:c // x:[y:{구체:원인/조건,[추가]}z:q]:r';
   const parts = memoColors.splitReviewMemoColonColors(text);
   assert.equal(parts.map(part => part.text).join(''), text);
-  assert.deepEqual(parts.filter(part => part.colonIndex !== undefined).map(part => part.colonIndex), [0, 0, 0, 1]);
+  // 6일: `[ ]`·`( )` 안 색은 놓인 칸 다음 색부터 잇는다(안쪽 z:q는 x: 다음 색)
+  assert.deepEqual(parts.filter(part => part.colonIndex !== undefined).map(part => part.colonIndex), [0, 0, 1, 1]);
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { MemoColorTextarea } = loadSource('components/MemoColorTextarea.tsx');
@@ -1481,11 +1482,12 @@ test('nested relation columns restart their labels, keep the outer importance, a
   // 31일: "A의 B" 해석은 없앴다. 안쪽 관계는 첫 칸이 자리(조건)다
   assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a 이후']], ['b', 'd', 2, []], ['d', 'c', 3, ['a → b 이후']]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
-  assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 1, 0, 2, 0]);
+  // 6일: 괄호 안 색은 처음부터 다시 세지 않고 놓인 칸 다음 색부터(문제의 칸 번호와 같다)
+  assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 1, 1, 2, 2, 0]);
   // `=`는 칸을 나누지 않는다: `(b:c)=(d:c)`는 한 칸 안에서 같다고 놓인 두 묶음이라 콜론 번호를 올리지 않는다
   assert.deepEqual(direct('a:(b:c)=(d:c)'), [['b', 'd', 1, ['a 이후']], ['a', 'b = d', 1, []], ['b', 'c', 2, ['a 이후']], ['d', 'c', 2, ['a 이후']]]);
   const equalColored = memoColors.splitReviewMemoColonColors('a:(b:c)=(d:c):e // f:g');
-  assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 0, 0, 1, 0]);
+  assert.deepEqual(equalColored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 1, 1, 1, 0]);
 });
 
 test('flat and nested chains put the important pairs first: leftmost with its neighbour, then the next pairs', () => {
@@ -7085,7 +7087,7 @@ test('grouping brackets are ( ): they make the same questions as the old [ ] gro
   assert.deepEqual(parseReviewMemoLogicalOperators(unfinished), [{ index: unfinished.lastIndexOf(','), operator: 'and' }]);
   // 콜론 색은 괄호 안에서 다시 센다
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):d').filter(part => part.colonIndex !== undefined).map(part => part.colonIndex);
-  assert.deepEqual(colored, [0, 0, 1]);
+  assert.deepEqual(colored, [0, 1, 1]);
   // 관계도도 같다
   const { parseNoteDiagram, splitTitleCriteria } = loadSource('utils/noteDiagram.ts');
   assert.deepEqual(parseNoteDiagram('A:(B:C),D')[0].fields, ['A', '(B:C),D']);
@@ -11674,4 +11676,31 @@ test('5일 여러 날 점검: 그 과목 기본 복습 칸에서도 복습에 �
   const effect = today.slice(today.indexOf('const finished = chapterGroups.filter'), today.indexOf('setChoosingReview(true);\n  }, [idle'));
   assert.ok(!effect.includes('localStorage.setItem'), 'opening the recommendation does not mark it as seen');
   assert.ok(today.includes('onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}') && today.includes('onChoose={(grade, logIds) => { rememberChapterPrompt();'));
+});
+
+test('6일: ( ) 안 : ; < 색은 놓인 칸 다음 색부터 잇는다(문제의 칸 번호와 같음) — 색만 달랐다', () => {
+  const colors = loadSource('utils/reviewMemoColors.ts');
+  const indices = text => colors.splitReviewMemoColonColors(text).filter(part => part.colonIndex !== undefined).map(part => part.colonIndex);
+  assert.deepEqual(indices('[합리성]; (필수적 변동;일정 조건;표준어 발음 인정), (수의적 변동;일정;인정않함)'), [0, 1, 2, 1, 2]);
+  const { buildReviewQuestions, getReviewQuestionClassification } = loadSource('utils/reviewQuestions.ts');
+  const columns = buildReviewQuestions('A;(B;C;D)').questions.filter(q => q.kind === 'direct').map(q => getReviewQuestionClassification('개념;정의;예시;추가', q).answer[0]);
+  assert.deepEqual(columns, ['정의', '예시', '추가'], 'questions already continued the columns inside ( )');
+  assert.deepEqual(indices('A;(B;C;D)'), [0, 1, 2]);
+});
+
+test('6일: 정리노트를 글로 복사 — 토글은 > 제목, 안쪽은 두 칸 들여 씀; 측정 노트지와 정리노트 탭에 복사 단추', () => {
+  const { getReviewMemoOutlineText } = loadSource('utils/reviewMemo.ts');
+  assert.equal(getReviewMemoOutlineText(':::toggle [한국어]\n:::toggle [받침];;뒤\n음끝규;;;받침\n:::end\n연음;x\n:::end\n끝'),
+    '> [한국어]\n  > [받침];;뒤\n    음끝규;;;받침\n  연음;x\n끝');
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  const noteTab = fs.readFileSync(path.join(__dirname, '..', 'components/NoteTab.tsx'), 'utf8');
+  assert.ok(logger.includes('data-testid="note-copy"') && logger.includes('copyText(getReviewMemoOutlineText(reviewMemo))'));
+  assert.ok(noteTab.includes('data-testid="note-copy-all"') && noteTab.includes('copyText(notePagesAsText(pages))'));
+});
+
+test('6일: < 로 시작하는 행부터 끝이 > 인 행에서 엔터 → 사이 행이 모두 든 토글(제목은 비워 바로 씀), 연결어 < 는 왼쪽에 글이 있어 구별', () => {
+  const editor = fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8');
+  assert.ok(editor.includes("if (/^\\s*<(?!\\s*>\\s*$)/.test(line)) return { blockIndex: at, lineStart };"));
+  assert.ok(/&& markedRangeStart\(index, caret\)\) \{[\s\S]{0,200}wrapMarkedRange\(index, caret, markedRangeStart\(index, caret\)!\);/.test(editor));
+  assert.ok(editor.includes("const toggle = makeBlock({ type: 'toggle', title: '', text: serializeReviewMemoBlocks(content) });"));
 });

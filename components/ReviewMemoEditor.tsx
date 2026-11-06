@@ -504,6 +504,59 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     else focus(toggle.id, 'title', command ? 0 : undefined);
     commit([...blocks.slice(0, index), ...replacements, ...blocks.slice(index + 1)]);
   };
+  /**
+   * 6일: `<`로 시작하는 행(왼쪽에 글이 없는 `<` — 연결어 `<`는 왼쪽에 값이 있다)부터 끝이 `>`인 행까지를 한 토글에 넣는다.
+   * 두 표시는 다른 행에 있어도 되고, 사이의 토글도 함께 들어간다. 이 편집기(같은 단계)의 행만 본다. `<`가 없으면 null
+   */
+  const markedRangeStart = (index: number, lineEnd: number): { blockIndex: number; lineStart: number } | null => {
+    for (let at = index; at >= 0; at -= 1) {
+      const item = blocks[at];
+      if (item.type !== 'text') continue;
+      const text = at === index ? item.text.slice(0, lineEnd) : item.text;
+      let cursor = text.length;
+      while (cursor >= 0) {
+        const lineStart = cursor === 0 ? 0 : text.lastIndexOf('\n', cursor - 1) + 1;
+        const line = text.slice(lineStart, cursor);
+        if (/^\s*<(?!\s*>\s*$)/.test(line)) return { blockIndex: at, lineStart };
+        if (lineStart === 0) break;
+        cursor = lineStart - 1;
+      }
+    }
+    return null;
+  };
+  const wrapMarkedRange = (index: number, caret: number, from: { blockIndex: number; lineStart: number }) => {
+    const block = blocks[index];
+    if (block.type !== 'text') return;
+    const nextBreak = block.text.indexOf('\n', caret);
+    const lineEnd = nextBreak < 0 ? block.text.length : nextBreak;
+    const startBlock = blocks[from.blockIndex] as Block & { type: 'text' };
+    const stripStart = (text: string) => text.replace(/^(\s*)<\s?/, '$1');
+    const stripEnd = (text: string) => text.replace(/\s*>\s*$/, '');
+    const content: ReviewMemoBlock[] = [];
+    const pushText = (text: string) => { if (text.trim()) content.push({ type: 'text', text }); };
+    if (from.blockIndex === index) {
+      pushText(stripEnd(stripStart(block.text.slice(from.lineStart, caret))));
+    } else {
+      pushText(stripStart(startBlock.text.slice(from.lineStart)));
+      blocks.slice(from.blockIndex + 1, index).forEach(item => (item.type === 'toggle'
+        ? content.push({ type: 'toggle', title: item.title, text: item.text }) : pushText(item.text)));
+      pushText(stripEnd(block.text.slice(0, caret)));
+    }
+    const toggle = makeBlock({ type: 'toggle', title: '', text: serializeReviewMemoBlocks(content) });
+    const before = startBlock.text.slice(0, Math.max(0, from.lineStart - 1));
+    const after = lineEnd < block.text.length ? block.text.slice(lineEnd + 1) : '';
+    const next: Block[] = [
+      ...blocks.slice(0, from.blockIndex),
+      ...(from.lineStart > 0 ? [{ ...startBlock, text: before }] : []),
+      toggle,
+      ...(after ? [makeBlock({ type: 'text', text: after })] : []),
+      ...blocks.slice(index + 1)
+    ];
+    setClosed(prev => { const open = new Set(prev); open.delete(toggle.id); return open; });
+    // 제목은 비워 두고 바로 쓰게 한다
+    focus(toggle.id, 'title', 0);
+    commit(next);
+  };
   const removeEmptyTextBlock = (index: number) => {
     if (blocks.length <= 1) return;
     const previous = blocks[index - 1];
@@ -736,6 +789,12 @@ export const ReviewMemoEditor: React.FC<Props> = ({
                       } else if ((event.key === ' ' && prefix === '>') || (event.key === 'Enter' && ['/toggle', '/토글'].includes(prefix))) {
                         event.preventDefault();
                         convertLine(index, caret, prefix);
+                      } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing && selectionEnd === caret
+                        && />\s*$/.test(prefix) && !block.text.slice(caret, block.text.indexOf('\n', caret) < 0 ? block.text.length : block.text.indexOf('\n', caret)).trim()
+                        && markedRangeStart(index, caret)) {
+                        // 6일: `<` 행부터 끝이 `>`인 이 행까지를 제목 빈 토글로 묶는다
+                        event.preventDefault();
+                        wrapMarkedRange(index, caret, markedRangeStart(index, caret)!);
                       } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing && selectionEnd === caret
                         && /[^\s>].*>\s*$/.test(prefix) && !/[-=<>:;,]>\s*$/.test(prefix) && !/^[>=]/.test(block.text.slice(caret)) && midLineNestOk(block.text, start, caret)) {
                         // 줄 끝에서 `>`를 쓰고 엔터를 치면 그 줄이 제목인 토글이 되어 열리고, 커서가 토글 안으로 들어간다(여러 줄을 밑에 쓸 때).
