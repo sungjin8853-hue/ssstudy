@@ -390,6 +390,8 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   const connected = new Set<string>();
   const toggles = new Set<string>();
   const nested: [string, string][] = [];
+  /** 키워드 `{X}`로 줄 앞 `[P]` 안의 세부 위치에 놓인 셀: [P, 셀]. P 바로 아래로도 이어졌으면 더 안쪽(P 안의 X)만 남긴다 */
+  const keywordCells: [string, string][] = [];
   const see = (name: string) => { const key = normSetName(name); if (key && !display.has(key)) display.set(key, name.trim()); return key; };
   const link = (parent: string | undefined, child: string) => {
     if (!parent || parent === child) return;
@@ -432,6 +434,17 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         const key = see(cell);
         link(stack[stack.length - 1], key);
         located.forEach(mark => place(mark, key));
+        // 7일: 칸 글 안의 `{X}`(키워드)는 그 칸의 세부 위치다 — 줄 앞 `[P]`가 있으면 P 안의 X, 없으면 X 안
+        const keywordPlaces = (text: string, cellKey: string) => [...text.matchAll(/\{([^{}\n]+)\}/g)].map(match => match[1].trim())
+          .filter(word => isPlainSetName(word) && normSetName(word) !== cellKey).forEach(word => {
+            const leads = located.filter(lead => !/[:;<=]/.test(lead));
+            if (!leads.length) { place(word, cellKey); return; }
+            leads.forEach(lead => {
+              place(`${lead}.${word}`, cellKey);
+              if (isPlainSetName(lead) && normSetName(lead) !== normSetName(word)) { const pair: [string, string] = [see(lead), see(word)]; link(...pair); nested.push(pair); keywordCells.push([pair[0], cellKey]); }
+            });
+          });
+        keywordPlaces(cell, key);
         // 연결어(`:` `;` `<`)를 쓴 줄이면 맨 앞 셀과 연결어 뒤에 이어 쓴 값들이 이어진 셀이다
         const relationCuts = topLevelCuts(segment, relationMarks());
         if (relationCuts.length) {
@@ -441,6 +454,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
               const later = laterCellOf(piece);
               const name = normSetName(later.cell.replace(/^['"]+|['"]+$/g, ''));
               if (name) connected.add(name);
+              if (name && later.cell.includes('{')) keywordPlaces(later.cell, see(later.cell));
               // 6일: 맨 앞이 아닌 칸의 `[X]`는 위치이자 글이다 — 그 칸 글은 X 자리에 있고, 줄 맨 앞 `[P]`와 교집합(P 안의 X)이다
               if (!name || !later.marks.length) return;
               const cellKey = see(later.cell);
@@ -481,6 +495,12 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
       const innermost = named.filter(setKey => !named.some(other => other !== setKey && reaches(other, setKey)));
       innermost.forEach(setKey => { if (!display.has(setKey)) display.set(setKey, parts.find(part => normSetName(part) === setKey) ?? setKey); link(setKey, cell); });
     });
+  });
+  keywordCells.forEach(([lead, cell]) => {
+    const up = parents.get(cell) ?? [];
+    if (!up.includes(lead) || !up.some(parent => parent !== lead && reaches(parent, lead))) return;
+    parents.set(cell, up.filter(parent => parent !== lead));
+    children.set(lead, (children.get(lead) ?? []).filter(child => child !== cell));
   });
   // 뒤 칸에서 생긴 집합(`[보라]`)은 그 집합의 셀들 뒤에 둔다(맨 앞 셀 추천이 줄에 쓴 셀부터 나오게)
   nested.forEach(([parent, child]) => { const down = children.get(parent); if (down) children.set(parent, [...down.filter(item => item !== child), child]); });

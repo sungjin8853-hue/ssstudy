@@ -236,16 +236,16 @@ const NOTE_STEPS: TutorialStep[] = [
     </>
   },
   {
-    label: '집합을 글에 넣어요', accent: 'teal', symbol: '{ }', title: '집합을 글에 넣어요',
-    lead: '글 속의 {집합 이름}은 그 집합의 원소가 들어갈 자리예요. 사람 집합에 철수와 영희가 있으면, {사람}아 반가워는 원소마다 한 줄씩 있는 것처럼 문제가 나와요.',
+    label: '키워드를 글에 넣어요', accent: 'teal', symbol: '{ }', title: '키워드를 글에 넣어요',
+    lead: '글 속의 {이름}은 키워드예요. 이름 그 자체가 값이면서 부가조건이고, 줄 앞 [ ] 집합 안의 세부 위치예요. 문제에서는 중괄호 없이 강조돼 보여요.',
     body: <>
       <NoteSample lines={[
-        <><span className="text-indigo-800">▾ </span><span className="font-semibold">사람</span><span className="text-slate-500">  철수 · 영희</span></>,
-        <><span>인사</span><Mono tone="colon">:</Mono><Logic>{'{사람}'}</Logic><span>아 반가워</span></>
-      ]} note="{사람} 자리에 철수와 영희가 차례로 들어가요. 글에 쉼표가 있으면 '{사람}아, 반가워'처럼 따옴표로 묶어요." />
+        <><span className="font-semibold text-indigo-800">[산]</span><span> </span><Logic>{'{염기}'}</Logic><span>와 </span><Logic>{'{물}'}</Logic><Mono tone="colon">:</Mono><span>중화</span></>,
+        <><span className="font-semibold text-indigo-800">[원소]</span><span> A,B</span><Mono tone="semi">;</Mono><Logic>{'{원소}'}</Logic><span>-</span><Logic>{'{원소}'}</Logic><Mono tone="semi">;</Mono><span>회전 운동,병진 운동</span></>
+      ]} note="염기 · 물은 산 안의 세부 위치예요. = · - · ,로 키워드끼리 이어 써도 돼요. 연결어 바로 뒤 {이름} 다음에 글이 오면(:{기능} 보호) 전처럼 그 칸의 이름이에요." />
       <QuestionSamples items={[
-        { kind: '기본 관계', q: '‘인사’ 다음 값은?', a: '철수아 반가워 (영희아 반가워도 따로 나와요)' },
-        { kind: '역방향', q: '‘영희아 반가워’ 앞의 값은?', a: '인사' }
+        { kind: '기본 관계', q: '‘산’에서 ‘염기와 물’ 다음 값은?', a: '중화' },
+        { kind: '역방향', q: '‘산’에서 ‘중화’ 앞의 값은?', a: '염기와 물' }
       ]} />
     </>
   },

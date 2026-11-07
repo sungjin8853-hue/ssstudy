@@ -587,20 +587,13 @@ const chainOf = (expression: Expression, base = 0): { columns: Expression[]; sep
   const separators: string[] = [];
   const classifications: QuestionColumn[] = [];
   const scores: number[] = [];
+  // 7일: 끝 칸의 안쪽 관계(`D;(A;B)`)로는 이어 들어가지 않는다. 안쪽의 `:` `;` `<`는 바깥 조건(D 다음 자리)을 이어받은 채 A에 붙는 관계라서
+  // D에서 B로 바로 건너뛰면(‘D’부터 두 걸음 뒤) 그 조건(A)이 빠진다. 안쪽 관계는 "‘D’ 다음 자리의 ‘A’ 다음 값"으로 따로 묻는다.
   expression.fields.forEach((field, index) => {
-    if (index > 0 && index === expression.fields.length - 1 && field.type === 'relation') {
-      const inner = chainOf(field, own[index]);
-      separators.push(expression.separators[index - 1] === '<' ? '<' : '>');
-      columns.push(...inner.columns);
-      separators.push(...inner.separators);
-      classifications.push(...inner.classifications);
-      scores.push(...inner.scores);
-    } else {
-      if (index > 0) separators.push(expression.separators[index - 1]);
-      columns.push(head(field));
-      classifications.push(expression.classifications[index]);
-      scores.push(own[index]);
-    }
+    if (index > 0) separators.push(expression.separators[index - 1]);
+    columns.push(head(field));
+    classifications.push(expression.classifications[index]);
+    scores.push(own[index]);
   });
   return { columns, separators, classifications, scores };
 };
@@ -769,10 +762,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   /** `[A] #-#: #+#`처럼 `#`로 셀을 만드는 틀 줄: 모든 줄을 읽은 뒤(집합의 셀을 알 수 있을 때) 줄들로 펼친다 */
   const templates: Array<{ id: string; start: number; end: number; text: string; template: NoteTemplate; inherited: ReadonlyMap<number, string>; offset: number; previous: AtReference | null }> = [];
   /**
-   * 줄 안의 `{A}`: A가 노트에 있는 집합이면 "그 집합의 원소가 들어갈 자리"다(`안녕: {A}아, 그래 안녕` → 원소마다 한 줄).
-   * 집합이 아닌 이름은 슬롯이 아니라서 지금처럼 `:{이름}` 칸 이름표로 읽는다. 모든 줄을 읽은 뒤(집합의 원소를 알 수 있을 때) 줄들로 펼친다.
+   * 7일: 줄 안의 `{A}`는 원소를 넣어 줄을 펼치는 자리가 아니다("A집합 밑에 있는 것만 넣어 연결되는 것 말고"). 뒤 칸 `[ ]`와 합쳐
+   * `{A}`는 A 자체가 그 칸의 값(키워드)이면서 부가조건 · 능력적 집합 안의 세부 위치다(`{원소}-{원소}`처럼 `=` `-` `,`로 이어 써도 된다).
+   * 그래서 줄의 `{A}`는 펼치지 않고 글 그대로 읽는다(문제에서는 중괄호를 빼고 키워드로 보인다). `#` 틀 안의 `{A}`는 전처럼 원소 자리다.
    */
-  const slotIndex = memo.includes('{') ? buildNoteSetIndex([memo]) : null;
+  const slotIndex = null as ReturnType<typeof buildNoteSetIndex> | null;
   const slotLines: Array<{ id: string; start: number; end: number; text: string; slots: NoteSlot[]; inherited: ReadonlyMap<number, string>; offset: number; previous: AtReference | null }> = [];
   /** 제목에 형식 `#`을 쓴 토글: 제목은 문제도 자리(조건)도 아니고, 아래 줄을 그 형식으로 펼친다 */
   const frameNodes = new Set<string>();
@@ -1341,7 +1335,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         answerSpans: spans(expression.fields[1]), promptSpans: spans(columns[0]) });
     }
     // 연결 추론: 두 걸음 이상 떨어진 칸 하나를 묻는다. 조건은 처음 칸 하나뿐이고 중간 값은 풀이 과정으로 정답과 함께 보여 준다.
-    // 걸음이 많을수록 어렵고 문제 수는 줄어든다. 앞으로는 `:`·`=`로, 거꾸로는 `:`·`;`·`=`로 이어진 구간만 묻는다(괄호 안으로는 앞으로만).
+    // 걸음이 많을수록 어렵고 문제 수는 줄어든다. 앞으로는 `:`·`=`로, 거꾸로는 `:`·`;`·`=`로 이어진 구간만 묻는다(7일: 괄호 안 관계로는 건너가지 않는다).
     // 안쪽 관계에서 시작하는 문제는 그 관계가 따로 낸다.
     const chain = chainOf(expression, baseScore);
     for (let from = 0; from <= (convertible ? -1 : expression.fields.length - 2); from += 1) {

@@ -20,7 +20,15 @@ export const readReviewFieldOverride = (text: string, from: number, to = text.le
     if (text[index] === '{') depth += 1;
     if (text[index] === '}') {
       depth -= 1;
-      if (depth === 0) return { label: text.slice(start + 1, index).trim(), start, end: index + 1 };
+      if (depth === 0) {
+        // 7일: 뒤 칸 `[ ]`와 `{ }`를 합쳤다 — `{X}` 바로 뒤가 논리어(`-` `=` `,`)나 다음 연결어면 칸 이름표가 아니라 칸의 값(키워드)이다:
+        // `; {원소}-{원소};` · `: {A},{B}`. 뒤에 글이 오거나(`:{기능} 보호`) 줄이 끝나면(토글 제목 `> A :{이름}`) 전처럼 이름표다.
+        let next = index + 1;
+        // 칸 끝(to)에 걸린 다음 연결어도 본다(`: {빨강} : 달다`에서 칸은 `{빨강}`까지다)
+        while (next < text.length && /[^\S\r\n]/.test(text[next])) next += 1;
+        if (next < text.length && /[-=,:;<]/.test(text[next])) return undefined;
+        return { label: text.slice(start + 1, index).trim(), start, end: index + 1 };
+      }
     }
   }
   return undefined;

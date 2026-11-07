@@ -3884,7 +3884,7 @@ test('tutorials walk through every step and open from a help button', () => {
   const note = renderToStaticMarkup(React.createElement(NoteTutorial, { onClose() {} }));
   assert.ok(note.includes('정리노트 쓰는 법') && note.includes('1 / 15'));
   for (const label of ['두 가지를 이어요', '거꾸로만 물어요', '그리고 · 등호', '묶어서 써요', '접어서 정리해요',
-    '이름을 붙여요', '겹치는 곳을 찾아요', '빼고 찾아요', '집합을 글에 넣어요', '한 칸으로 묶어요', '앞 칸을 다시 써요', '아무 글이나 대신해요', '이어 붙여요', '이어 쓸 것을 찾아요', '문제에서 빼요']) assert.ok(note.includes(label));
+    '이름을 붙여요', '겹치는 곳을 찾아요', '빼고 찾아요', '키워드를 글에 넣어요', '한 칸으로 묶어요', '앞 칸을 다시 써요', '아무 글이나 대신해요', '이어 붙여요', '이어 쓸 것을 찾아요', '문제에서 빼요']) assert.ok(note.includes(label));
   // 새 단계의 예시는 실제 출제 결과다: 노트를 그대로 넣었을 때 문장과 정답이 같다
   const { buildReviewQuestions, getReviewQuestionSentence } = loadSource('utils/reviewQuestions.ts');
   const asked = (memo, criterion) => buildReviewQuestions(memo).questions.map(q => [getReviewQuestionSentence(criterion ?? null, q)?.statement, q.answer]);
@@ -3915,12 +3915,8 @@ test('tutorials walk through every step and open from a help button', () => {
   assert.deepEqual(setContents(shapes, '도형.%삼각형').map(row => row.name), ['정사각형']);
   has(asked('[도형.%삼각형] 정사각형:네 변이 같다'), '‘도형.%삼각형’에서 ‘정사각형’ 다음 값은?', '네 변이 같다');
   has(asked('[도형.%삼각형] 정사각형:네 변이 같다'), '‘도형.%삼각형’에서 ‘네 변이 같다’ 앞의 값은?', '정사각형');
-  // `{A}`는 집합 A의 원소가 들어갈 자리: 원소마다 한 줄씩 있는 것처럼 문제가 나온다
-  const slotMemo = ':::toggle 사람\n철수\n영희\n:::end\n인사: {사람}아 반가워';
-  has(asked(slotMemo), '‘인사’ 다음 값은?', '철수아 반가워');
-  has(asked(slotMemo), '‘인사’ 다음 값은?', '영희아 반가워');
-  has(asked(slotMemo), '‘영희아 반가워’ 앞의 값은?', '인사');
-  has(asked(':::toggle 사람\n철수\n영희\n:::end\n인사: \'{사람}아, 반가워\''), '‘철수아, 반가워’ 앞의 값은?', '인사');
+  // 7일: `{A}`는 원소를 넣어 펼치지 않는다 — A 자체가 값(키워드)이다
+  has(asked('[산] {염기}와 {물} : 중화'), '‘산’에서 ‘{염기}와 {물}’ 다음 값은?', '중화');
   // 집합이 아닌 이름은 자리가 아니라서 지금처럼 칸 이름표다
   has(asked('a:{원인}b'), '‘a’의 원인은?', 'b');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 개념 ‘산업혁명’의 원인은?', '증기기관');
@@ -6883,10 +6879,12 @@ test('far questions: one answer several steps away, the process is shown with th
   const withParent = far(':::toggle 조건\nA:B:C\n:::end');
   assert.ok(withParent.length > 0 && withParent.every(q => q.conditions.includes('조건')), 'parent toggle titles are still conditions');
   const nested = far('A:[B:[C:D]]');
-  assert.ok(nested.some(q => q.prompt === 'A' && q.answer === 'D' && q.process === 'A → B → C → D'), 'a chain continues through a last-cell relation');
-  assert.ok(!nested.some(q => q.prompt === 'D' && q.direction === 'reverse' && (q.answer === 'A' || q.answer === 'B')), 'a grouped relation can be entered but not walked back out of');
+  // 7일: 끝 칸의 안쪽 관계로는 건너가지 않는다(D;(A;B)에서 D → B 없음): 안쪽 `:` `;` `<`는 바깥 조건을 이어받아 그 칸에 붙은 관계다
+  assert.ok(!nested.some(q => q.prompt === 'A' && (q.answer === 'C' || q.answer === 'D')), 'no jump from the outside into a grouped relation');
+  assert.ok(!nested.some(q => q.prompt === 'D' && q.direction === 'reverse' && (q.answer === 'A' || q.answer === 'B')), 'a grouped relation can not be walked back out of');
   assert.ok(nested.some(q => q.prompt === 'C' && q.answer === 'D') === false, 'a pair has nothing far away');
-  assert.ok(nested.filter(q => q.prompt === 'B' && q.answer === 'D').every(q => q.conditions.includes('A 이후')), 'a chain inside carries the outer cell as a condition (31일: "A의" 해석 없음)');
+  assert.deepEqual(far('D;(A;B)').concat(far('D:(A:B)'), far('D<(A<B)')), [], 'the user example: D never jumps to B');
+  assert.ok(far('D:(A;B):C').some(q => q.prompt === 'D' && q.answer === 'C'), 'the outer chain still walks over a grouped cell');
   const sequence = far('A-B-C-D', 2).filter(q => q.direction === 'forward');
   assert.deepEqual(sequence.map(q => q.process), ['A → B → C', 'B → C → D']);
   const group = far('A:(B,(K,F)):H');
@@ -8284,7 +8282,7 @@ test('( ) is an application scope: its inner relation makes its own questions, a
   // 관계가 없는 괄호 글은 문제를 더하지 않는다
   assert.deepEqual(shape('밑변 (cm) : 길이'), ['direct|밑변 (cm)|길이|', 'reverse|길이|밑변 (cm)|']);
   // 칸 전체가 `( )`인 것은 지금처럼 풀어 읽고 문제를 겹쳐 내지 않는다
-  assert.equal(shape('X : (A:B)').length, 6);
+  assert.equal(shape('X : (A:B)').length, 5, '7일: no far X → B into the group');
   // 안쪽 문제는 다른 줄의 같은 문제와 한 번만 나온다
   const keys = questionsFor('(A:B) 안녕 : C\nA:B').map(q => q.key);
   assert.equal(new Set(keys).size, keys.length);
@@ -10167,20 +10165,33 @@ test('a # template can use {A} (one element of the set A) next to #, and # may b
   assert.deepEqual(lines("[A] #'-'#: #+#\n[A] 'B-C'", 'A'), ["B-C → B+C [A]"]);
 });
 
-test('{A} means the set A wherever its cells were written: a plain {A} line takes the cells of `[A] B=N=M` too, and = splits them', () => {
-  const greet = memo => questionsFor(memo).filter(q => q.kind === 'direct' && q.prompt === '인사').map(q => q.answer);
-  // 토글 집합, `[A] 셀`로 쓴 집합, 깊이 들어간 `[A]`가 모두 같다
-  assert.deepEqual(greet(':::toggle A\nB\nN\n:::end\n인사: {A}아'), ['B아', 'N아']);
-  assert.deepEqual(greet('[A] B\n[A] N\n인사: {A}아'), ['B아', 'N아']);
-  assert.deepEqual(greet('[A] B=N=M\n인사: {A}아'), ['B아', 'N아', 'M아']);
-  assert.deepEqual(greet(':::toggle A\nB=N=M\n:::end\n인사: {A}아'), ['B아', 'N아', 'M아']);
-  assert.deepEqual(greet(':::toggle 어디\n:::toggle 더 안\n[A] B=N=M\n:::end\n:::end\n인사: {A}아'), ['B아', 'N아', 'M아']);
-  // 원소가 없는 이름의 `{원인}`은 예전처럼 칸 이름표다
-  assert.deepEqual(greet('인사: {원인}반가워'), ['반가워']);
-  // 쉼표는 원소를 나누지 않는다
-  assert.deepEqual(greet('[A] B,N\n인사: {A}아'), ['B AND N아']);
-  // 따옴표로 묶은 `=`는 한 원소
-  assert.deepEqual(greet("[A] 'B=N'\n인사: {A}아"), ["'B = N'아"]);
+test('7일: 뒤 칸 [ ]와 { }를 합침 — {A}는 원소로 펼치지 않고 A 자체가 값(키워드) · 부가조건 · 세부 위치, = - ,로 이어 써도 됨', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const kinds = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]);
+  // 집합이어도 펼치지 않는다
+  assert.deepEqual(kinds(':::toggle A\nB\nN\n:::end\n인사: 잘 가 {A}아').find(([prompt]) => prompt === '인사'), ['인사', '잘 가 {A}아']);
+  // 사용자 예: `{원소}-{원소}`는 원소 자체를 이은 값
+  const user = '[원소] A,B ; {원소}-{원소}; 회전 운동,병진운동';
+  assert.ok(questionsFor(user).some(q => q.kind === 'direct' && q.answer === '{원소} → {원소}'));
+  assert.ok(!questionsFor(user).some(q => /A → B|B → A/.test(q.answer)), 'no element pairs');
+  // 연결어 바로 뒤 `{이름}` 다음에 글이 오면 칸 이름표, 논리어나 다음 연결어가 오면 값
+  assert.deepEqual(kinds('막 :{기능} 보호'), [['막', '보호']]);
+  assert.deepEqual(kinds('사과 : {빨강} : 달다')[0], ['사과', '{빨강}']);
+  assert.deepEqual(kinds(':::toggle 자동차 :{부품}\n엔진\n:::end'), [['자동차', '엔진']], 'a toggle title ending in :{이름} is still the column name');
+  // 세부 위치: 줄 앞 [P] 안의 X
+  const index = ns.buildNoteSetIndex(['[산] {염기}와 {물} : 중화']);
+  assert.deepEqual(ns.upperSetsOf(index, '{염기}와 {물}'), ['염기', '물']);
+  assert.deepEqual(ns.upperSetsOf(index, '염기'), ['산']);
+  // 문제에서는 중괄호 없이 강조
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { KeywordText, keywordPlain } = loadSource('components/KeywordText.tsx');
+  const html = renderToStaticMarkup(React.createElement(KeywordText, { text: '‘{염기}와 {물}’ 다음 값은?' }));
+  assert.ok(!html.includes('{') && (html.match(/data-keyword="true"/g) || []).length === 2);
+  assert.equal(keywordPlain('{염기}와 {물}'), '염기와 물');
+  // 조사는 중괄호를 건너뛴 글자로 고른다
+  const { topic } = loadSource('utils/questionProse.ts');
+  assert.equal(topic('{물}'), '{물}은');
 });
 
 test('layers: a text-less title `[수]:[성질]` is the criterion 수:성질 (no title question), like `[수:성질]` and `[[수]:[성질]]`', () => {

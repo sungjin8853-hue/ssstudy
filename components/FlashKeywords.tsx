@@ -1,5 +1,6 @@
 import React from 'react';
 import type { FlashCard, FlashChip, FlashPiece } from '../utils/questionFlash';
+import { KeywordText } from './KeywordText';
 
 /**
  * 플래시 카드의 키워드 줄: 줄글 문장에서 키워드만 따서 가로로 늘어놓는다(위 줄글과 같은 순서).
@@ -21,7 +22,7 @@ const Slot: React.FC<{ revealed: boolean; answer: string | null; mark?: string; 
   revealed && answer !== null
     ? <span data-flash-answer="true" className="flex flex-col items-center gap-0.5 rounded-2xl bg-indigo-100 px-5 py-3 text-center">
       {mark && <span className="text-sm font-black text-indigo-700">{mark}</span>}
-      <span className={`break-words font-serif font-semibold leading-snug text-indigo-950 ${answerSize(answer)}`}>{answer}</span>
+      <span className={`break-words font-serif font-semibold leading-snug text-indigo-950 ${answerSize(answer)}`}><KeywordText text={answer} /></span>
     </span>
     : <span data-flash-slot="true" data-flash-blank={blank ? 'true' : undefined} aria-label={mark ? `가려진 정답 ${mark}` : '가려진 정답'}
       className="flex min-w-[6rem] flex-col items-center gap-0.5 rounded-2xl border-2 border-dashed border-amber-400 bg-amber-50 px-6 py-3 text-center text-amber-600">
@@ -35,12 +36,12 @@ const PlaceChip: React.FC<{ chip: FlashChip & { role: 'place' | 'owner' | 'after
   ? <li data-flash-condition="true" data-flash-role={chip.role} data-flash-related="true"
     className="flex max-w-full flex-col items-center justify-center gap-0.5 rounded-xl border-2 border-dashed border-slate-300 bg-white px-3 py-1.5 text-center">
     <span className="text-[11px] font-black tracking-wide text-slate-400">연관 집합</span>
-    <span className="break-words font-serif text-base font-bold leading-snug text-slate-500 md:text-lg">{chip.value}</span>
+    <span className="break-words font-serif text-base font-bold leading-snug text-slate-500 md:text-lg"><KeywordText text={chip.value} /></span>
   </li>
   : <li data-flash-condition="true" data-flash-role={chip.role}
     className="flex min-w-[6rem] max-w-full flex-col items-center justify-center gap-1 rounded-2xl border-2 border-slate-300 bg-slate-100 px-4 py-2.5 text-center">
     {chip.label.length > 0 && <span data-field-label="true" className="text-sm font-black text-slate-600">{chip.label.join(' · ')}</span>}
-    <span className="break-words font-serif text-xl font-bold leading-snug text-slate-900 md:text-2xl">{chip.value}</span>
+    <span className="break-words font-serif text-xl font-bold leading-snug text-slate-900 md:text-2xl"><KeywordText text={chip.value} /></span>
     {chip.role === 'after' && <span data-flash-after="true" className="text-xs font-black text-slate-500">다음 자리</span>}
     {chip.role === 'owner' && <span data-flash-owner="true" className="text-xs font-black text-slate-500">의</span>}
   </li>
@@ -54,7 +55,7 @@ const Pieces: React.FC<{ pieces: FlashPiece[]; revealed: boolean }> = ({ pieces,
       if (piece.type === 'text') {
         return piece.value.trim() === '…'
           ? <span key={index} className="select-none text-2xl font-black text-slate-400">…</span>
-          : <span key={index} data-flash-piece="true" className="break-words rounded-2xl border-2 border-indigo-700 bg-white px-4 py-2.5 font-serif text-2xl font-bold leading-snug text-slate-900 md:text-3xl">{piece.value}</span>;
+          : <span key={index} data-flash-piece="true" className="break-words rounded-2xl border-2 border-indigo-700 bg-white px-4 py-2.5 font-serif text-2xl font-bold leading-snug text-slate-900 md:text-3xl"><KeywordText text={piece.value} /></span>;
       }
       return <div key={index} data-question-field="answer" data-revealed={revealed ? 'true' : undefined}>
         <Slot revealed={revealed} answer={piece.answer} mark={blanks > 1 ? piece.mark : undefined} blank />
@@ -74,11 +75,11 @@ export const FlashKeywords: React.FC<{ card: FlashCard; revealed: boolean; answe
       </React.Fragment>)}
       {given && <li data-question-field="prompt" className="flex min-w-[8rem] max-w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-indigo-700 bg-white px-5 py-3 text-center">
         {given.label.length > 0 && <p data-field-label="true" className="rounded-lg bg-slate-200 px-4 py-1.5 text-lg font-black text-slate-800">{given.label.join(' · ')}</p>}
-        <p className="break-words font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-4xl">{given.value}</p>
+        <p className="break-words font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-4xl"><KeywordText text={given.value} /></p>
       </li>}
       {done && <li data-flash-done="true" className="flex min-w-[6rem] max-w-full flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-2.5 text-center">
         <span data-field-label="true" className="text-sm font-black text-slate-600">✓ 이미 충족{done.label.length > 0 ? ` · ${done.label.join(' · ')}` : ''}</span>
-        <span className="break-words font-serif text-xl font-bold leading-snug text-slate-700 md:text-2xl">{done.value}</span>
+        <span className="break-words font-serif text-xl font-bold leading-snug text-slate-700 md:text-2xl"><KeywordText text={done.value} /></span>
       </li>}
       {relation && <li data-flash-relation={relation.arrow} className="flex min-w-[4.5rem] flex-col items-center justify-center gap-0.5 px-1 text-indigo-700">
         <span className="text-center text-sm font-black leading-tight md:text-base">{relation.word}</span>
@@ -88,7 +89,7 @@ export const FlashKeywords: React.FC<{ card: FlashCard; revealed: boolean; answe
         {chain ? <>
           {ask.label.length > 0 && <p data-field-label="true" data-flash-ask="true" className="rounded-xl bg-amber-500 px-5 py-2 text-xl font-black text-white md:text-2xl">맞힐 것 · {ask.label.join(' · ')}</p>}
           <Pieces pieces={chain} revealed={revealed} />
-          {loose && <p data-flash-answer="true" className="rounded-2xl bg-indigo-100 px-5 py-3 text-center font-serif text-2xl font-semibold leading-snug text-indigo-950 md:text-4xl">{answerText}</p>}
+          {loose && <p data-flash-answer="true" className="rounded-2xl bg-indigo-100 px-5 py-3 text-center font-serif text-2xl font-semibold leading-snug text-indigo-950 md:text-4xl"><KeywordText text={answerText} /></p>}
         </> : <div data-question-field="answer" data-revealed={revealed ? 'true' : undefined} className="flex flex-col items-center gap-2">
           {ask.label.length > 0 && <p data-field-label="true" data-flash-ask="true" className="rounded-xl bg-amber-500 px-5 py-2 text-xl font-black text-white md:text-2xl">맞힐 것 · {ask.label.join(' · ')}</p>}
           <Slot revealed={revealed} answer={answerText} />

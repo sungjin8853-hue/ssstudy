@@ -8,6 +8,7 @@ import { ProcessToggle } from './ProcessToggle';
 import { FlashKeywords } from './FlashKeywords';
 import { flashOf } from '../utils/questionFlash';
 import { useReviewStyle } from './ReviewStyleSelector';
+import { KeywordText } from './KeywordText';
 
 /**
  * 복습 문제 한 장. 고른 모양(줄글 · 플래시 카드)이 모든 복습 문제에 적용된다.
@@ -70,7 +71,7 @@ export const ReviewQuestionContent: React.FC<{
   </section>;
   const kindTag = <span className="rounded-md bg-indigo-100 px-3 py-1 text-[13px] font-black text-indigo-900">{REVIEW_QUESTION_KIND_LABELS[question.kind]}</span>;
   const answerText = (text: string) => question.kind === 'recall' ? <ReviewNoteSummary memo={memo} />
-    : <p className="rounded-2xl bg-indigo-100 px-5 py-3 font-serif text-2xl font-semibold leading-snug text-indigo-950 md:text-4xl">{text}</p>;
+    : <p className="rounded-2xl bg-indigo-100 px-5 py-3 font-serif text-2xl font-semibold leading-snug text-indigo-950 md:text-4xl"><KeywordText text={text} /></p>;
 
   if (prose) {
     const text = sentence?.statement ?? question.statement;
@@ -80,8 +81,8 @@ export const ReviewQuestionContent: React.FC<{
       {kindTag}
       <div data-question-field="prompt" className="space-y-2">
         {text
-          ? <p data-question-statement="true" className="max-w-3xl break-keep font-serif text-2xl font-bold leading-relaxed tracking-tight text-slate-900 md:text-4xl">{text}</p>
-          : <p className="font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-5xl">{question.prompt}</p>}
+          ? <p data-question-statement="true" className="max-w-3xl break-keep font-serif text-2xl font-bold leading-relaxed tracking-tight text-slate-900 md:text-4xl"><KeywordText text={text} /></p>
+          : <p className="font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-5xl"><KeywordText text={question.prompt} /></p>}
       </div>
       {revealed && <div data-question-field="answer" className="space-y-2">
         {answerText(solved ?? question.answer)}
@@ -110,13 +111,13 @@ export const ReviewQuestionContent: React.FC<{
         {question.conditions.map((condition, index) => <span key={index} data-flash-condition="true"
           className="flex min-w-[8rem] flex-col items-center rounded-2xl border-2 border-slate-300 bg-slate-100 px-5 py-3 text-center">
           {labels.conditions[index].length > 0 && <span data-field-label="true" className="mb-1 text-base font-black text-slate-600">{labels.conditions[index].join(' · ')}</span>}
-          <span className="font-serif text-2xl font-bold leading-snug text-slate-900 md:text-3xl">{condition}</span>
+          <span className="font-serif text-2xl font-bold leading-snug text-slate-900 md:text-3xl"><KeywordText text={condition} /></span>
         </span>)}
       </div>
     </section>}
     <div data-question-field="prompt" className="flex flex-col items-center gap-2">
       {labels.prompt.length > 0 && <p data-field-label="true" className="rounded-lg bg-slate-200 px-4 py-1.5 text-lg font-black text-slate-800">{labels.prompt.join(' · ')}</p>}
-      <p className="font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-5xl">{question.prompt}</p>
+      <p className="font-serif text-3xl font-bold leading-snug tracking-tight text-slate-900 md:text-5xl"><KeywordText text={question.prompt} /></p>
     </div>
     {(labels.answer.length > 0 || revealed) && <div data-question-field="answer" className="flex flex-col items-center gap-2">
       {labels.answer.length > 0 && <p data-field-label="true" data-flash-ask="true" className="rounded-xl bg-amber-500 px-5 py-2 text-xl font-black text-white md:text-2xl">맞힐 것 · {labels.answer.join(' · ')}</p>}

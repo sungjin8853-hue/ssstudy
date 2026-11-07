@@ -73,7 +73,7 @@ export const OWNER = / 의$/;
 
 /** 받침이 있으면 앞, 없으면 뒤 조사(한글이 아닌 글자로 끝나면 둘 다 적는다) */
 /** 조사를 고를 글자: 따옴표 · 괄호 · 빈칸은 건너뛴 마지막 글자 */
-const lastLetter = (word: string) => word.replace(/[\s‘’'"()\[\]]+$/g, '').slice(-1);
+const lastLetter = (word: string) => word.replace(/[\s‘’'"(){}\[\]]+$/g, '').slice(-1);
 const josa = (word: string, withFinal: string, withoutFinal: string) => {
   const last = lastLetter(word);
   const code = last.charCodeAt(0) - 0xac00;
