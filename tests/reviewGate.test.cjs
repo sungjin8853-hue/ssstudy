@@ -1188,7 +1188,8 @@ test('empty, unfinished, misplaced and multiline braces do not corrupt ordinary 
   assert.deepEqual([reversed.prompt, reversed.answer, reversed.direction], ['b', 'a', 'reverse'], '`<` reads the override too, and asks only the reverse');
   const forward = questionsFor('a;{원인} b')[0];
   assert.deepEqual([forward.prompt, forward.answer, forward.direction], ['a', 'b', 'forward'], '`;` reads the override too, and asks only forward');
-  assert.equal(questionsFor('a:b {원인}').find(q => q.kind === 'direct').answer, 'b {원인}');
+  // 7일: 칸 글 안의 `{X}`는 글과 똑같다
+  assert.equal(questionsFor('a:b {원인}').find(q => q.kind === 'direct').answer, 'b 원인');
 });
 
 test('annotated notes persist without rewriting raw text or changing semantic question keys on label edits', () => {
@@ -3916,7 +3917,7 @@ test('tutorials walk through every step and open from a help button', () => {
   has(asked('[도형.%삼각형] 정사각형:네 변이 같다'), '‘도형.%삼각형’에서 ‘정사각형’ 다음 값은?', '네 변이 같다');
   has(asked('[도형.%삼각형] 정사각형:네 변이 같다'), '‘도형.%삼각형’에서 ‘네 변이 같다’ 앞의 값은?', '정사각형');
   // 7일: `{A}`는 원소를 넣어 펼치지 않는다 — A 자체가 값(키워드)이다
-  has(asked('[산] {염기}와 {물} : 중화'), '‘산’에서 ‘{염기}와 {물}’ 다음 값은?', '중화');
+  has(asked('[산] {염기}와 {물} : 중화'), '‘산’에서 ‘염기와 물’ 다음 값은?', '중화');
   // 집합이 아닌 이름은 자리가 아니라서 지금처럼 칸 이름표다
   has(asked('a:{원인}b'), '‘a’의 원인은?', 'b');
   has(asked('[개념:정의] 산업혁명:{원인}증기기관'), '‘개념:정의’에서 개념 ‘산업혁명’의 원인은?', '증기기관');
@@ -10169,19 +10170,23 @@ test('7일: 뒤 칸 [ ]와 { }를 합침 — {A}는 원소로 펼치지 않고 A
   const ns = loadSource('utils/noteSets.ts');
   const kinds = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]);
   // 집합이어도 펼치지 않는다
-  assert.deepEqual(kinds(':::toggle A\nB\nN\n:::end\n인사: 잘 가 {A}아').find(([prompt]) => prompt === '인사'), ['인사', '잘 가 {A}아']);
+  // 23:46: `{ }` 안은 위치를 정한 뒤 글과 똑같다
+  assert.deepEqual(kinds(':::toggle A\nB\nN\n:::end\n인사: 잘 가 {A}아').find(([prompt]) => prompt === '인사'), ['인사', '잘 가 A아']);
   // 사용자 예: `{원소}-{원소}`는 원소 자체를 이은 값
   const user = '[원소] A,B ; {원소}-{원소}; 회전 운동,병진운동';
-  assert.ok(questionsFor(user).some(q => q.kind === 'direct' && q.answer === '{원소} → {원소}'));
+  assert.ok(questionsFor(user).some(q => q.kind === 'direct' && q.answer === '원소 → 원소'));
   assert.ok(!questionsFor(user).some(q => /A → B|B → A/.test(q.answer)), 'no element pairs');
-  // 연결어 바로 뒤 `{이름}` 다음에 글이 오면 칸 이름표, 논리어나 다음 연결어가 오면 값
+  // 연결어 바로 뒤 `{이름}` 다음에 글이 오거나 줄이 끝나면(덜 끝난 줄 `A :{이름}`) 칸 이름표(그 칸의 세부 위치), 논리어 · 다음 연결어가 오면 값
   assert.deepEqual(kinds('막 :{기능} 보호'), [['막', '보호']]);
-  assert.deepEqual(kinds('사과 : {빨강} : 달다')[0], ['사과', '{빨강}']);
+  assert.deepEqual(kinds('사과 : {빨강} : 달다')[0], ['사과', '빨강']);
   assert.deepEqual(kinds(':::toggle 자동차 :{부품}\n엔진\n:::end'), [['자동차', '엔진']], 'a toggle title ending in :{이름} is still the column name');
   // 세부 위치: 줄 앞 [P] 안의 X
   const index = ns.buildNoteSetIndex(['[산] {염기}와 {물} : 중화']);
-  assert.deepEqual(ns.upperSetsOf(index, '{염기}와 {물}'), ['염기', '물']);
+  assert.deepEqual(ns.upperSetsOf(index, '염기와 물'), ['염기', '물']);
   assert.deepEqual(ns.upperSetsOf(index, '염기'), ['산']);
+  // `{ }`는 그 행 글과 교집합, `[ ]`는 아니다
+  const rows = ns.buildNoteSetIndex(['[과일] 사과 : {빨강} : 달다\n[과일] 포도 : {보라} 송이\n[과일] 귤 : [주황] : 시다\n[과일] 감 : [주홍] 단감']);
+  assert.deepEqual(['빨강', '송이', '보라', '주황', '단감', '주홍'].map(cell => ns.upperSetsOf(rows, cell)), [['과일'], ['보라'], ['과일'], [], ['주홍'], []]);
   // 문제에서는 중괄호 없이 강조
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
@@ -11729,10 +11734,10 @@ test('6일: 맨 앞이 아닌 칸의 [X]는 위치(맨 앞 [P]와 교집합)이�
   const memo = '[과일] 사과 : [빨강]\n[과일] 바나나 : 노랑\n[과일] 포도 : [보라] 송이\n수박 : [초록]';
   const index = ns.buildNoteSetIndex([memo]);
   assert.deepEqual(ns.rowsOfSet(index, '과일').map(row => row.cells.join(':')), ['사과:빨강', '바나나:노랑', '포도:송이']);
-  // 7일: 뒤 칸 [X]는 줄 앞 [P] 안 — 셀이 X 자체면 P 아래, 따로 쓴 셀이면 P 아래 집합 X의 아래
-  assert.deepEqual(ns.upperSetsOf(index, '빨강'), ['과일']);
+  // 7일 23:46: 뒤 칸 [X]는 그 행 글과 교집합이 되지 않는다(교집합은 { }) — X에만 놓인다
+  assert.deepEqual(ns.upperSetsOf(index, '빨강'), []);
   assert.deepEqual(ns.upperSetsOf(index, '송이'), ['보라']);
-  assert.deepEqual(ns.upperSetsOf(index, '보라'), ['과일']);
+  assert.deepEqual(ns.upperSetsOf(index, '보라'), []);
   assert.deepEqual(ns.upperSetsOf(index, '초록'), [], 'without a leading [ ] the cell is just its own text');
   const plain = (text) => { const caret = text.indexOf('|'); return ns.followingCellSuggestions(index, text.replace('|', ''), caret).map(item => item.text); };
   assert.deepEqual(plain('[과일] 귤 : 빨|'), ['빨강']);
@@ -11780,7 +11785,9 @@ test('7일: 토글 제목 [과일]은 과일과 같은 이름, 노트에 없던 
   assert.deepEqual(parents([':::toggle [과일]\n:::end\n[과일] 사과 : 빨강'], '사과'), ['과일']);
   assert.deepEqual(parents([':::toggle [과일]\n사과 : 빨강\n:::end'], '사과'), ['과일']);
   assert.deepEqual(parents(['[포유류] 고래 : 바다'], '고래'), ['포유류']);
-  assert.deepEqual(parents(['[과일] 사과 : [빨강]'], '빨강'), ['과일']);
+  // 7일 23:46: 뒤 칸 `[X]`는 그 행 글과 교집합이 되지 않고, `{X}`는 된다
+  assert.deepEqual(parents(['[과일] 사과 : [빨강]'], '빨강'), []);
+  assert.deepEqual(parents(['[과일] 사과 : {빨강} : 달다'], '빨강'), ['과일']);
   assert.deepEqual(parents(['[A:C] V : W'], 'V'), [], 'a criterion / position mark stays a position');
   assert.deepEqual(parents(['[도형%삼각형] 원'], '원'), [], 'a difference is not a new set');
   assert.deepEqual(parents(['[?] 셀'], '셀'), [], '[?] is the special set');

@@ -265,7 +265,8 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   }
   // 칸 가운데에 낀 따옴표 글자(`[a] 'p ; q'`의 `'`)도 글이 아니라서 보이는 글에서만 뺀다(글자 범위는 그대로).
   const shown = edges.size ? Array.from({ length: Math.max(0, to - from) }, (_, offset) => from + offset).filter(at => !edges.has(at)).map(at => text[at]).join('') : text.slice(from, to);
-  const value = withGroupHeads(shown);
+  // 7일: 칸 글 안의 `{X}`는 위치 표시가 끝나면 글과 똑같다(중괄호를 뺀 X). 칸 이름표 `:{이름}`은 위에서 이미 떼었다
+  const value = withGroupHeads(shown).replace(/\{([^{}\n]+)\}/g, (_, word: string) => word.trim());
   return value === shown ? { type: 'text', text: shown, span: { nodeId, start: from, end: to } }
     : { type: 'text', text: value, raw: shown, span: { nodeId, start: from, end: to } };
 }
@@ -1051,14 +1052,16 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 형식 `#` 토글의 제목은 아래 줄에 이미 들어가 있어서 자리(조건)로 다시 주지 않는다
       if (frameNodes.has(parent.id)) { parentId = parent.parentId; continue; }
       const rawTitle = titleSource(parent).replace(trailingRelation(), '');
-      const title = stripReviewFieldOverrides(rawTitle).trim().replace(trailingRelation(), '');
+      const keyTitle = stripReviewFieldOverrides(rawTitle).trim().replace(trailingRelation(), '');
+      // 제목 글 안의 `{X}`도 글과 같다(조건에는 X로 보인다). 문제 키는 예전 글로 만들어 복습 기록이 이어진다
+      const title = keyTitle.replace(/\{([^{}\n]+)\}/g, (_, word: string) => word.trim());
       const parsed = parseExpression(rawTitle, parent.id, 0, rawTitle.length, inheritedByNode.get(parent.id), offsetByNode.get(parent.id) ?? 0);
       // 칸 이름은 칸의 위치에서만 온다: 관계 제목(`> A:B`)과 끝이 열린 제목(`> A:`)의 머리는 관계의 칸이라 이름이 붙고,
       // 글자만 있는 제목(`> ② 세 가지 표기`)은 아래 줄들의 위치일 뿐 분류기준 안의 칸이 아니라서 이름을 붙이지 않는다.
       const headsRelation = parsed.type === 'relation' || trailingRelation().test(titleSource(parent));
       // 5일: 끝이 연결어로 열린 제목(`> A:` · `> A;`) 아래 줄은 그 연결어 뒤에 놓인 것이라 "‘A’ 다음 자리의"로 묻는다(`A:(B:C)`와 같음)
       const open = Boolean(title) && trailingRelation().test(titleSource(parent));
-      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: title } : {}), place: 'toggle' as const, spans: spans(parsed), columns: parsed.type === 'relation'
+      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: keyTitle } : title !== keyTitle ? { key: keyTitle } : {}), place: 'toggle' as const, spans: spans(parsed), columns: parsed.type === 'relation'
         ? parsed.fields.flatMap((field, index) => nonempty(field) ? [parsed.classifications[index]] : []) : headsRelation ? [offsetByNode.get(parent.id) ?? 0] : [] });
       parentId = parent.parentId;
     }

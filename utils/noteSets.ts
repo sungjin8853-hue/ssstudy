@@ -11,6 +11,7 @@ import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorth
 import { expandOpenLines } from './noteOpenTail';
 import { expandNestLines } from './noteNest';
 import { isQuoteMark, reviewQuotes } from './reviewQuote';
+import { readReviewFieldOverride } from './reviewFieldOverride';
 
 /**
  * 집합과 능력 집합.
@@ -85,6 +86,9 @@ const isUnconnectedName = (text: string) => normSetName(text) === UNCONNECTED_NA
 export const markKeyOf = (inner: string) => normSetName(canonicalMark(inner));
 
 const isBracketGroup = (part: string) => { const end = matchingBracket(part, 0); return end > 0 && end === part.length - 1; };
+
+/** 7일: 칸 글 안의 `{X}`는 위치를 정한 뒤에는 글과 같다 — 중괄호를 뺀 글 */
+export const plainKeywordText = (text: string) => text.replace(/\{([^{}\n]+)\}/g, (_, word: string) => word.trim());
 
 /** 집합식 · 기준 · 위치가 아닌 이름 하나(`과일`, `받침의 발음`): 괄호와 논리어(`: ; < = . , %`)가 없다 */
 const isPlainSetName = (text: string) => Boolean(text.trim()) && text.trim() !== '?' && !/[\[\](){}:;<=.,%#'"]/.test(text);
@@ -431,17 +435,18 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         if (readNoteTemplate(segment)) return;
         const { cell, marks: located } = splitHeadMarks(segment);
         if (!cell) return;
-        const key = see(cell);
+        const key = see(plainKeywordText(cell));
         link(stack[stack.length - 1], key);
         located.forEach(mark => place(mark, key));
-        // 7일: 칸 글 안의 `{X}`(키워드)는 그 칸의 세부 위치다 — 줄 앞 `[P]`가 있으면 P 안의 X, 없으면 X 안
+        // 7일: 칸 글 안의 `{X}`는 그 칸의 세부 위치이고 그 행의 글과 교집합이 된다 — 줄 앞 `[P]`가 있으면 P 안의 X, 없으면 X 안.
+        // (`[X]`는 교집합이 되지 않는 위치다.) 위치를 정한 뒤 `{X}`는 글과 같아서 셀 이름은 중괄호를 뺀 글이다
         const keywordPlaces = (text: string, cellKey: string) => [...text.matchAll(/\{([^{}\n]+)\}/g)].map(match => match[1].trim())
-          .filter(word => isPlainSetName(word) && normSetName(word) !== cellKey).forEach(word => {
+          .filter(word => isPlainSetName(word)).forEach(word => {
             const leads = located.filter(lead => !/[:;<=]/.test(lead));
-            if (!leads.length) { place(word, cellKey); return; }
+            if (!leads.length) { if (normSetName(word) !== cellKey) place(word, cellKey); return; }
             leads.forEach(lead => {
               place(`${lead}.${word}`, cellKey);
-              if (isPlainSetName(lead) && normSetName(lead) !== normSetName(word)) { const pair: [string, string] = [see(lead), see(word)]; link(...pair); nested.push(pair); keywordCells.push([pair[0], cellKey]); }
+              if (isPlainSetName(lead) && normSetName(lead) !== normSetName(word) && normSetName(word) !== cellKey) { const pair: [string, string] = [see(lead), see(word)]; link(...pair); nested.push(pair); keywordCells.push([pair[0], cellKey]); }
             });
           });
         keywordPlaces(cell, key);
@@ -450,23 +455,22 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
         if (relationCuts.length) {
           connected.add(key);
           relationCuts.forEach((cut, at) => {
-            segment.slice(cut + 1, relationCuts[at + 1] ?? segment.length).split(',').forEach(piece => {
+            const pieceEnd = relationCuts[at + 1] ?? segment.length;
+            // 칸 이름표 `:{이름}`은 칸 글이 아니다
+            const label = readReviewFieldOverride(segment, cut + 1, pieceEnd);
+            segment.slice(label ? label.end : cut + 1, pieceEnd).split(',').forEach(piece => {
               const later = laterCellOf(piece);
               const name = normSetName(later.cell.replace(/^['"]+|['"]+$/g, ''));
               if (name) connected.add(name);
-              if (name && later.cell.includes('{')) keywordPlaces(later.cell, see(later.cell));
-              // 6일: 맨 앞이 아닌 칸의 `[X]`는 위치이자 글이다 — 그 칸 글은 X 자리에 있고, 줄 맨 앞 `[P]`와 교집합(P 안의 X)이다
+              if (name && later.cell.includes('{')) keywordPlaces(later.cell, see(plainKeywordText(later.cell)));
+              // 칸 이름표 `:{보라} 송이`도 `{ }`라서 그 칸 글의 세부 위치다(줄 앞 `[P]` 안의 보라)
+              if (name && label?.label && !/[{}]/.test(label.label) && !/[()]/.test(later.cell)) keywordPlaces(`{${label.label}}`, see(plainKeywordText(later.cell)));
+              // 맨 앞이 아닌 칸의 `[X]`는 위치이자 글이다(그 칸 글은 X 자리에 있다).
+              // 7일 23:46: `[ ]`는 그 행의 글과 교집합이 되지 않는다(교집합은 `{ }`가 한다) — 줄 맨 앞 `[P]`와 겹치지 않고 X에만 놓는다
               if (!name || !later.marks.length) return;
-              const cellKey = see(later.cell);
-              const leads = located.filter(lead => !/[:;<=]/.test(lead));
-              later.marks.forEach(mark => {
-                if (leads.length) leads.forEach(lead => {
-                  place(`${lead}.${mark}`, cellKey);
-                  // 7일: 뒤 칸 `[X]`는 줄 앞 `[P]` 안의 X다 — X가 셀 글과 다르면(`[과일] 포도 : [보라] 송이`) X는 P 아래 집합, 셀은 X 아래
-                  if (isPlainSetName(lead) && isPlainSetName(mark) && normSetName(mark) !== cellKey) { const pair: [string, string] = [see(lead), see(mark)]; link(...pair); nested.push(pair); }
-                });
-                else if (normSetName(mark) !== cellKey) place(mark, cellKey);
-              });
+              const cellKey = see(plainKeywordText(later.cell));
+              // 셀이 X 자체(`: [빨강]`)여도 X는 위치 이름이다(추천에 뜬다)
+              later.marks.forEach(mark => place(mark, cellKey));
             });
           });
         }
@@ -754,7 +758,7 @@ export const upperSetsOf = (index: NoteSetIndex, name: string): string[] => {
   if (found.length) return found;
   // 셀 왼쪽에만 쓴 집합(`[과일] 사과 - 빨강`): 그 위치 표시가 상위 집합이다
   const loneHead = (cell: string) => { const shown = index.display.get(cell) ?? cell; const cut = topLevelCuts(shown, '=-')[0]; return normSetName(cut === undefined ? shown : shown.slice(0, cut)); };
-  return [...index.placements.values()].filter(mark => mark.cells.some(cell => cell === key || loneHead(cell) === key)).map(mark => canonicalMark(mark.display));
+  return [...index.placements.values()].filter(mark => markKeyOf(mark.display) !== key && mark.cells.some(cell => cell === key || loneHead(cell) === key)).map(mark => canonicalMark(mark.display));
 };
 
 /**
@@ -1014,11 +1018,12 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         const { cell, marks } = splitHeadMarks(segment);
         if (!cell) return;
         const inside = stack.some(item => item.key === key) || marks.some(item => markKeyOf(item) === mark)
-          || (index.parents.get(normSetName(cell)) ?? []).includes(key);
+          || (index.parents.get(normSetName(plainKeywordText(cell))) ?? []).includes(key);
         if (!inside) return;
         const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide ?? index.sessionCriterion;
         const cuts = topLevelCuts(segment, relationMarks());
-        const cells = [cell, ...cuts.map((cut, at) => laterCellOf(segment.slice(cut + 1, cuts[at + 1] ?? segment.length)).cell.replace(/\{[^{}\n]*\}/g, '').trim())];
+        const laterText = (cut: number, end: number) => { const label = readReviewFieldOverride(segment, cut + 1, end); return segment.slice(label ? label.end : cut + 1, end); };
+        const cells = [plainKeywordText(cell), ...cuts.map((cut, at) => plainKeywordText(laterCellOf(laterText(cut, cuts[at + 1] ?? segment.length)).cell).trim())];
         rows.push({ cells, criteria: parseCriterionLabels(criterion) });
       });
     });
@@ -1147,8 +1152,8 @@ export const ghostLocationsOf = (index: NoteSetIndex, text: string, enclosing: r
     const segment = segmentsOf(line)[0];
     if (!segment || readNoteSetLine(segment)) return;
     const { cell, marks } = splitHeadMarks(segment);
-    if (marks.length || !cell || !index.display.has(normSetName(cell))) return;
-    const locations = displayedLocations(index, cell, covered);
+    if (marks.length || !cell || !index.display.has(normSetName(plainKeywordText(cell)))) return;
+    const locations = displayedLocations(index, plainKeywordText(cell), covered);
     if (locations.length) result.push({ line: at, label: locations.map(item => `[${item}]`).join(' '), full: displayedLocations(index, cell, covered, true).map(item => `[${item}]`).join(' ') });
   });
   return result;
