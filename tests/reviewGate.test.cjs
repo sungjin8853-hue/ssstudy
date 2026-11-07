@@ -4457,33 +4457,41 @@ test('the study settings screen keeps its frame with larger text and a compact p
   assert.ok(!analyticsSource.includes('＋ 새 분석 그룹 추가'), 'the top button is gone; the strips between items do the job');
 });
 
-test('the basic review chart draws speed (pages per hour); its chips show speed only, to one decimal, with no study amount and no percent', () => {
+test('7일: 기본 복습 칸은 문제의 복습 횟수별 정답률과 가장 많은 난도 — 문제마다 처음 고른 난도를 쌓는다', () => {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
+  const gate = loadSource('utils/reviewGate.ts');
+  const stats = loadSource('utils/basicReviewStats.ts');
   const { TodaySummary } = loadSource('components/TodaySummary.tsx');
-  const source = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
-  const chart = source.slice(source.indexOf('const BasicReviewEfficiencyTrend'), source.indexOf('\n};\n', source.indexOf('const BasicReviewEfficiencyTrend')));
-  assert.ok(chart.includes('pagesPerReferenceTime(point.efficiency)') && chart.includes('<SpeedGraph series={series}'), 'the line plots pages per fixed time');
-  assert.ok(chart.includes('describeSpeed(point.change, label)') && !chart.includes('describeStudyAmount') && !chart.includes('describeGrowthChange'), 'speed only');
-  assert.ok(!chart.includes('data-growth-kind="amount"') && !chart.includes('}%'));
-  const growth = loadSource('utils/pageGrowth.ts');
-  // 예: 1회 2.45분/P, 2회 2.1분/P, 3회 3분/P, 4회 4.2분/P → 1시간에 24.5 / 28.6 / 20.0 / 14.3장
-  assert.deepEqual([2.45, 2.1, 3, 4.2].map(tpp => Number(growth.pagesPerReferenceTime(tpp).toFixed(1))), [24.5, 28.6, 20, 14.3]);
-  // 1회 대비 속도(소수 첫째 자리): 2회 +4.1P/h, 3회 −4.5P/h, 4회 −10.2P/h
-  assert.deepEqual([2.1, 3, 4.2].map(tpp => growth.toGrowthChange(2.45, tpp).speedPages), [4.1, -4.5, -10.2]);
-  // 화면: 세 칩 모두 "속도 …P/h"만 나오고 공부량·퍼센트는 없다
-  const logs = [[1, 2.45], [2, 2.1], [3, 3], [4, 4.2]].map(([number, tpp]) => ({ id: `basic-${number}`, subjectId: 'main', timestamp: `2026-10-0${number}T04:00:00Z`,
-    pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 20, reviewStep: number - 1,
-    basicReviewTimeRecords: [{ reviewNumber: number, pages: 10, minutes: tpp * 10 }] }));
+  const memo = '가 : 1\n나 : 2';
+  const keys = gate.getReviewGateQuestionKeys(memo);
+  let logs = [{ id: 'l1', subjectId: 'main', timestamp: '2026-10-01T04:00:00Z', pagesRead: 10, startPage: 1, endPage: 10, timeSpentMinutes: 20,
+    reviewMemo: memo, reviewQuestionFormat: 2, reviewRegisteredAt: '2026-10-01T05:00:00Z', nextReviewDate: '2026-10-02T00:00:00Z' }];
+  const round = (gradesByIndex, nowMs) => {
+    const results = Object.fromEntries(keys.map((key, index) => [key, { wrongCount: gradesByIndex[index] === 'again' ? 1 : 0, attempts: 1, grades: [gradesByIndex[index]] }]));
+    logs = gate.applyReviewGateOutcomes(logs, [{ logId: 'l1', passed: true, wrongQuestionKeys: [], completedQuestionKeys: keys, questionResults: results }], false, nowMs);
+    logs = logs.map(log => ({ ...log, ...gate.completeRegularReviewSchedule(log, nowMs) }));
+  };
+  // 1회: 모두 오답(첫 답) 2회: 하나는 맞음 하나는 쉽게 맞음, 3회: 하나만(나머지는 아직 때가 아님)
+  round(keys.map(() => 'again'), Date.parse('2026-10-02T09:00:00Z'));
+  round(keys.map((_, index) => (index === 0 ? 'good' : 'easy')), Date.parse('2026-10-03T09:00:00Z'));
+  logs = gate.applyReviewGateOutcomes(logs, [{ logId: 'l1', passed: true, wrongQuestionKeys: [], completedQuestionKeys: [keys[0]],
+    questionResults: { [keys[0]]: { wrongCount: 0, attempts: 1, grades: ['hard', 'good'] } } }], false, Date.parse('2026-10-05T09:00:00Z'));
+  logs = logs.map(log => ({ ...log, ...gate.completeRegularReviewSchedule(log, Date.parse('2026-10-05T09:00:00Z')) }));
+  assert.deepEqual(logs[0].reviewQuestionSchedules[keys[0]].history.map(item => item.grade), ['again', 'good', 'hard'], 'the first grade of each review is kept');
+  const rows = stats.basicReviewCountRows(logs, 'main');
+  // 2회: 첫 문제만 맞음, 나머지는 쉽게 맞음 → 문제가 셋 이상이면 쉽게 맞음, 둘이면 같은 수라 더 어려운 맞음
+  assert.ok(keys.length >= 2);
+  assert.deepEqual(rows.map(row => [row.count, row.questions, Math.round(row.correctRate * 100), row.top.grade]),
+    [[1, keys.length, 0, 'again'], [2, keys.length, 100, keys.length > 2 ? 'easy' : 'good'], [3, 1, 100, 'hard']]);
   const html = renderToStaticMarkup(React.createElement(TodaySummary, { logs, subjects, detailSubjectId: 'basic-review:main',
     activeWeekday: 1, activeStudyDate: '2026-10-12', taskSelector: '오늘 할 일', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {} }));
-  assert.ok(html.includes('basic-review-trend'));
-  assert.ok(html.includes('속도 +4.1P/h') && html.includes('속도 −4.5P/h') && html.includes('속도 −10.2P/h'));
-  const trend = html.slice(html.indexOf('basic-review-trend'));
-  assert.ok(!trend.includes('공부량') || trend.indexOf('공부량') < 0);
-  assert.ok(!/[+−-]\d+(\.\d+)?%/.test(trend), 'no percent growth');
-  assert.equal((trend.match(/data-growth-kind="speed"/g) || []).length, 3);
-  assert.ok(!trend.includes('data-growth-kind="amount"'));
+  assert.ok(html.includes('data-testid="basic-review-counts"') && !html.includes('basic-review-trend'), 'the per-round efficiency chart is gone');
+  assert.ok(html.includes('data-review-count="1"') && html.includes('정답률 0%') && html.includes('오답 100%'));
+  assert.ok(html.includes('data-review-count="3"') && html.includes('어렵게 맞음 100%'));
+  const empty = renderToStaticMarkup(React.createElement(TodaySummary, { logs: logs.map(log => ({ ...log, reviewQuestionSchedules: {} })), subjects, detailSubjectId: 'basic-review:main',
+    activeWeekday: 1, activeStudyDate: '2026-10-12', taskSelector: '오늘 할 일', onDetailSubjectChange() {}, onAddLog() {}, onReplaceLogs() {}, onDeleteLogs() {} }));
+  assert.ok(empty.includes('아직 기록 없음'));
 });
 
 test('study amount is added for the subject being viewed, and finished data reaches only fully done subjects', () => {
@@ -5759,7 +5767,7 @@ test('basic review shows the pages to review now and a pomodoro (25 min · pages
   const logger = fs.readFileSync(path.resolve(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   const tasks = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodayTasks.tsx'), 'utf8');
   // 칸: 복습할 페이지 · 뽀모도로(한 번에 25분, 복습 장수, 필요 횟수). 범위(시작~끝 페이지)는 제목 옆으로 옮겼다(21:55)
-  const block = summary.slice(summary.indexOf('export const BasicReviewPlan'), summary.indexOf('const BasicReviewEfficiencyTrend'));
+  const block = summary.slice(summary.indexOf('export const BasicReviewPlan'), summary.indexOf('const BasicReviewCountTable'));
   assert.ok(!block.includes('review-plan-range'), 'the range is not repeated under the page count');
   assert.ok(summary.includes('data-testid="basic-review-range"') && summary.includes('{pagePos}.{basicReviewPlan.rangeLabel}'), 'the range sits next to the title');
   assert.ok(summary.includes('!detailData.isBasicReviewDetail && <LaterMembersStrip'), 'no later-members line on a basic review');
@@ -5768,7 +5776,7 @@ test('basic review shows the pages to review now and a pomodoro (25 min · pages
   assert.ok(block.includes('if (!(plan.pages > 0)) return null'), 'nothing to review → no block');
   // 기본 복습 화면에서만, 그래프 위에 놓인다
   const basicBranch = summary.slice(summary.indexOf(') : detailData.isBasicReviewDetail ? ('), summary.indexOf('<PomodoroSummary label={pageLabel}'));
-  assert.ok(basicBranch.indexOf('<BasicReviewPlan') > 0 && basicBranch.indexOf('<BasicReviewPlan') < basicBranch.indexOf('<BasicReviewEfficiencyTrend'));
+  assert.ok(basicBranch.indexOf('<BasicReviewPlan') > 0 && basicBranch.indexOf('<BasicReviewPlan') < basicBranch.indexOf('<BasicReviewCountTable'));
   // 지금 선택한 복습 계획, 또는 끝낸 칸을 다시 연 뒤 앞당겨 할 복습의 계획
   assert.ok(summary.includes('idle.reviewPlan?.detailKey === detailSubjectId ? idle.reviewPlan : reopened ? idle.extraReviewPlans?.[detailSubjectId]'));
   assert.ok(logger.includes("reviewPlan: selectedReviewGroup?.reviewType === 'basic' ? toReviewPlan(selectedReviewGroup) : null"));

@@ -188,7 +188,8 @@ export const completeRegularReviewSchedule = inLogSubject((log: StudyLog, nowMs:
     if (!validKeys.has(key)) continue;
     schedules[key] = {
       reviewStep,
-      nextReviewDate: new Date(nowMs + getCurrentReviewIntervalMs(reviewStep)).toISOString()
+      nextReviewDate: new Date(nowMs + getCurrentReviewIntervalMs(reviewStep)).toISOString(),
+      ...(schedules[key]?.history ? { history: schedules[key].history } : {})
     };
   }
   for (const [key, pending] of Object.entries(log.reviewGatePendingSchedules || {})) {
@@ -419,7 +420,10 @@ export const applyReviewGateOutcomes = (
         const performance = calculateQuestionPerformance(previous[key], result.wrongCount, result.attempts, {
           grades: result.grades, nowMs, unit: isConvertUnitKey(key), responseMs: result.responseMs
         });
-        pending[key] = { ...performance, nextReviewDate: new Date(nowMs + performance.intervalMs).toISOString() };
+        // 7일: 문제마다 몇 번째 복습에서 어떤 난도였는지 쌓는다(그 복습의 첫 답. 등급이 없던 예전 방식은 틀렸으면 오답, 아니면 맞음)
+        const grade: ReviewGrade = result.grades?.[0] ?? (result.wrongCount > 0 ? 'again' : 'good');
+        const history = [...(previous[key]?.history ?? []), { grade, at: new Date(nowMs).toISOString() }];
+        pending[key] = { ...performance, nextReviewDate: new Date(nowMs + performance.intervalMs).toISOString(), history };
       }
       if (isRetry) return { ...log, reviewGateRetry: undefined };
       return { ...log, reviewQuestionFormat: 2, reviewQuestionSchedules: previous,

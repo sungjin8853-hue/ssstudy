@@ -2,7 +2,7 @@ import { formatDoneMinutes } from '../utils/studyReport';
 import { registrationBoundaries, reviewCompletionBoundaries } from '../utils/reviewUnits';
 import React, { useEffect, useMemo, useState } from 'react';
 import { StudyLog, Subject, ReviewMemoDocument } from '../types';
-import { calculateBasicReviewEfficiencyByNumber, calculateRecentTimedPageAverage, calculateReviewChangeAmounts, calculateStats, getReviewSpeedSeries, calculateSubjectReviewAverageTimePerPage, calculateTimeAttackAverage, getReviewEfficiencySamples } from '../utils/math';
+import { calculateRecentTimedPageAverage, calculateReviewChangeAmounts, calculateStats, getReviewSpeedSeries, calculateSubjectReviewAverageTimePerPage, calculateTimeAttackAverage, getReviewEfficiencySamples } from '../utils/math';
 import { BASIC_REVIEW_DETAIL_PREFIX, carriedReviewState, getRepeatedReviewRange, getReviewStartPage } from '../utils/review';
 import { getMeasurementRemainingPages, getPomodoroPageTarget, getRemainingPomodoroSessions, getReviewPomodoro, PomodoroPlan } from '../utils/measurement';
 import { PomodoroMinutesStepper } from './PomodoroMinutesStepper';
@@ -25,6 +25,8 @@ import { readSessionMemos, writeSessionMemo } from '../utils/sessionMemo';
 import { ReviewMemoEditor } from './ReviewMemoEditor';
 import { ReviewSpeedGrowthCell, SpeedGraph, UnitGrowthEfficiency } from './PageGrowth';
 import { calculateCurrentUnitEfficiency, describeGrowthChange, describeSpeed, getEfficiencyScope, getEfficiencyView, pagesPerReferenceTime, toGrowthChange } from '../utils/pageGrowth';
+import { basicReviewCountRows, QUESTION_GRADE_LABELS } from '../utils/basicReviewStats';
+import type { BasicReviewCountRow, QuestionGrade } from '../utils/basicReviewStats';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel, pageWord } from '../utils/pageLabel';
 import { getSubjectChain, getSubjectFamily, hasSubjectChain, isFamilyStudyLog, SubjectFamily } from '../utils/subjectChain';
 import { estimateSubjectEndDate, formatShortEndDate } from '../utils/completionEstimate';
@@ -595,9 +597,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ? calculateSubjectReviewAverageTimePerPage(logs, owner.id, subject.id)
       : calculateStats(subjectLogs, remainingPages, 0, subject.initialAverageTimePerPage).averageTimePerPage;
 
-    const basicReviewTrend = isBasicReviewDetail
-      ? calculateBasicReviewEfficiencyByNumber(logs, subject.id)
-      : [];
+    // 7일: 기본 복습은 회차별 평균 효율 대신 문제의 복습 횟수별 정답률과 가장 많은 난도
+    const basicReviewCounts = isBasicReviewDetail ? basicReviewCountRows(logs, subject.id) : [];
 
 
     return {
@@ -616,7 +617,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       efficiencyScope: getEfficiencyScope(growthLogs, owner ? reviewCompletionBoundaries(logs, owner.id, subject.id) : registrationBoundaries(subjectLogs), !owner && Boolean(subject.autoReviewRegister)),
       reviewSpeedChanges: owner ? calculateReviewChangeAmounts(logs, owner.id, subject.id, activeStudyDate) : null,
       reviewSpeedSeries: owner ? getReviewSpeedSeries(logs, owner.id, subject.id) : null,
-      basicReviewTrend,
+      basicReviewCounts,
     };
   }, [activeStudyDate, isBasicReviewDetail, logs, resolvedDetailSubjectId, reviewSubjectOwnerMap, subjects]);
 
@@ -1158,7 +1159,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         <GrowthCell efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency}
           growthTop={detailData.isBasicReviewDetail ? undefined : progressBlock}
           efficiencySlot={efficiencyNode} growth={growthNode}
-          main={detailData.isBasicReviewDetail ? <BasicReviewEfficiencyTrend points={detailData.basicReviewTrend} bare label={pageLabel} /> : undefined}
+          main={detailData.isBasicReviewDetail ? <BasicReviewCountTable rows={detailData.basicReviewCounts} bare /> : undefined}
           done={<DoneSummary row={doneRow}
             onOpenSettings={onOpenSettings ? () => onOpenSettings(detailData.owner?.id ?? detailData.subject.id) : undefined}
             onExtraStudy={canExtraStudy ? () => setReopenedId(detailSubjectId) : undefined}
@@ -1166,7 +1167,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ) : detailData.isBasicReviewDetail ? (
         <>
           {basicReviewPlan && <BasicReviewPlan plan={basicReviewPlan} label={pageLabel} />}
-          <BasicReviewEfficiencyTrend points={detailData.basicReviewTrend} label={pageLabel} />
+          <BasicReviewCountTable rows={detailData.basicReviewCounts} />
           {startRow}
         </>
       ) : (
@@ -1343,58 +1344,44 @@ export const BasicReviewPlan: React.FC<{ plan: ReviewPlanContext; label?: string
   );
 };
 
-const BasicReviewEfficiencyTrend = ({ points, bare = false, label = DEFAULT_PAGE_LABEL }: {
+const GRADE_TONE: Record<QuestionGrade, string> = {
+  again: 'bg-rose-100 text-rose-900', hard: 'bg-amber-100 text-amber-950', good: 'bg-green-100 text-green-900', easy: 'bg-sky-100 text-sky-950'
+};
+const percent = (value: number) => `${Math.round(value * 100)}%`;
+
+/**
+ * 7일: 기본 복습 문제를 그 문제의 복습 횟수(1회 · 2회 …)로 모아, 횟수마다 정답률(오답이 아닌 비율)과 가장 많이 고른 난도를 보인다.
+ * 기본 복습을 할 때마다 회차가 늘던 회차별 평균 효율 대신이다. 문제마다 난도를 쌓기 시작한 뒤의 복습부터 센다.
+ */
+const BasicReviewCountTable = ({ rows, bare = false }: {
+  rows: BasicReviewCountRow[];
   /** 완료 화면의 성장 칸 안에 놓을 때: 따로 상자를 두르지 않는다 */
   bare?: boolean;
-  /** 과목이 "페이지"를 부르는 글자(기본 P) */
-  label?: string;
-  points: Array<{
-    reviewNumber: number;
-    averageTimePerPage: number;
-    totalMinutes: number;
-    totalPages: number;
-    sampleCount: number;
-  }>;
-}) => {
-  const baselineEfficiency = points.find(point => point.averageTimePerPage > 0)?.averageTimePerPage || 0;
-  const chartData = points.map(point => ({
-    review: `${point.reviewNumber}회`,
-    efficiency: Number(point.averageTimePerPage.toFixed(2)),
-    // 1회 대비 속도 변화(1시간에 푸는 장수의 차이). 기본 복습은 공부량 없이 속도만, 소수 첫째 자리까지 보여준다.
-    change: toGrowthChange(baselineEfficiency, point.averageTimePerPage),
-    pages: point.totalPages,
-    samples: point.sampleCount
-  }));
-  // 그래프는 1시간에 푸는 장수. 1회 속도가 세로축의 가운데다.
-  const series = chartData.map(point => ({ pagesPerReference: pagesPerReferenceTime(point.efficiency) }));
-
-  return (
-    <div data-testid="basic-review-trend" className={bare ? 'flex flex-col gap-3' : 'flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4'}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p className={`text-[15px] font-black ${bare ? 'text-slate-800' : 'text-amber-900'}`}>기본 복습 회차별 평균 효율</p>
-        <span className="text-xs font-semibold text-slate-700">1회 대비</span>
-      </div>
-      {chartData.length === 0 ? (
-        <div className="flex h-32 items-center justify-center rounded-xl bg-white text-sm font-bold text-slate-600">복습 기록 없음</div>
-      ) : (
-        <>
-          <div className="grid auto-cols-[minmax(120px,1fr)] grid-flow-col gap-2 overflow-x-auto pb-1">
-            {chartData.map((point, index) => {
-              const described = index > 0 && point.change ? describeSpeed(point.change, label) : null;
-              return (
-                <div key={point.review} className={`min-w-0 rounded-xl border bg-white px-4 py-2.5 ${bare ? 'border-slate-300' : 'border-amber-200'}`}>
-                  <p className="text-xs font-black text-slate-700">{point.review} 복습</p>
-                  <p className={`mt-0.5 font-mono text-lg font-black tabular-nums lg:text-2xl ${bare ? 'text-slate-900' : 'text-amber-900'}`}>{formatNumber(point.efficiency)}<span className="ml-0.5 text-xs">분/{label}</span></p>
-                  {described && <p data-growth-kind="speed" className={`mt-0.5 text-xs font-black ${point.change!.speedPages > 0 ? 'text-green-800' : 'text-slate-700'}`}>
-                    {described}
-                  </p>}
-                </div>
-              );
-            })}
-          </div>
-          <SpeedGraph series={series} plain height={192} label={label} />
-        </>
-      )}
+}) => (
+  <div data-testid="basic-review-counts" className={bare ? 'flex flex-col gap-3' : 'flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4'}>
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <p className={`text-[15px] font-black ${bare ? 'text-slate-800' : 'text-amber-900'}`}>문제 복습 횟수별 정답률</p>
+      <span className="text-xs font-semibold text-slate-700">문제마다 몇 번째 복습인지로 모아요</span>
     </div>
-  );
-};
+    {rows.length === 0 ? (
+      <div className="flex h-24 items-center justify-center rounded-xl bg-white px-4 text-center text-sm font-bold text-slate-600">아직 기록 없음 · 기본 복습 문제를 풀면 쌓여요</div>
+    ) : (
+      <ol className="m-0 flex list-none flex-col gap-2 p-0">
+        {rows.map(row => (
+          <li key={row.count} data-review-count={row.count}
+            className={`grid grid-cols-[3.5rem_1fr_auto] items-center gap-x-3 gap-y-1 rounded-xl border bg-white px-4 py-2.5 ${bare ? 'border-slate-300' : 'border-amber-200'}`}>
+            <span className="text-base font-black text-slate-800">{row.count}회</span>
+            <span className="flex flex-col">
+              <span className="font-mono text-xl font-black tabular-nums text-slate-900" data-review-count-rate="true">정답률 {percent(row.correctRate)}</span>
+              <span className="text-xs font-semibold text-slate-600">문제 {row.questions}개</span>
+            </span>
+            <span data-review-count-top={row.top.grade} className={`flex flex-col items-center rounded-lg px-3 py-1.5 text-center ${GRADE_TONE[row.top.grade]}`}>
+              <span className="text-xs font-black opacity-80">가장 많은 난도</span>
+              <span className="text-sm font-black">{QUESTION_GRADE_LABELS[row.top.grade]} {percent(row.top.share)}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    )}
+  </div>
+);

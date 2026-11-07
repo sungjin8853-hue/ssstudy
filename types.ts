@@ -277,6 +277,8 @@ export interface ReviewQuestionSchedule {
   freedom?: number;
   /** 첫 시도에서 정답 확인까지 걸린 시간(ms), 최근 몇 번. 걸린 시간으로 난도를 추천할 때의 기준이 된다. */
   responseMs?: number[];
+  /** 7일: 기본 복습에서 이 문제를 풀 때마다 처음 고른 난도(오답 · 어렵게 맞음 · 맞음 · 쉽게 맞음). n번째가 그 문제의 n회 복습이다 */
+  history?: Array<{ grade: 'again' | 'hard' | 'good' | 'easy'; at: string }>;
 }
 
 export interface ReviewMeasurement {
