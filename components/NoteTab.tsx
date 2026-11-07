@@ -20,7 +20,7 @@ import { NotePracticeDialog } from './NotePractice';
 import { generatedLinesOf } from '../utils/reviewQuestions';
 import { NoteMergeHistory } from './NoteMergeHistory';
 import { EditIntakeBar, ReviewRemovedList } from './ReviewRemovedList';
-import { abilitiesFor, buildNoteSetIndex, evaluateSetExpression, headCellOf, toggleName } from '../utils/noteSets';
+import { abilitiesFor, buildNoteSetIndex, evaluateSetExpression, headCellOf, toggleName, withSessionCriterion } from '../utils/noteSets';
 import type { NoteSetIndex } from '../utils/noteSets';
 import type { NoteSetLine } from '../utils/noteDiagram';
 
@@ -730,7 +730,7 @@ export const NoteTab: React.FC<{
   }, [current?.id]);
   // 구역(과목의 페이지 단위마다, 단위가 없으면 하루마다)을 쪽당 행 수에 맞춰 쪽에 담는다. 노트와 관계도가 같은 쪽을 본다.
   // 편집하는 동안 글이 늘어도 쪽이 바뀌지 않게, 기록의 행 수는 이 화면에서 처음 본 값을 계속 쓴다(보기를 바꾸면 다시 센다).
-  const subjectMemos = useMemo(() => (current ? [...current.logs].reverse().map(log => log.reviewMemo ?? '').filter(Boolean) : []), [current]);
+  const subjectMemos = useMemo(() => withSessionCriterion(current ? [...current.logs].reverse().map(log => log.reviewMemo ?? '').filter(Boolean) : [], criterion), [current, criterion]);
   // `[집합]()` 창에서 값을 고치면: 이 과목의 모든 노트 글에 같은 고침을 적용한다. 바뀐 노트가 있으면 되돌리는 함수를 돌려준다.
   const rewriteSubjectNotes = useMemo<NoteSetRewriter | null>(() => {
     if (!current) return null;

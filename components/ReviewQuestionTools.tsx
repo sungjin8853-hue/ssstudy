@@ -4,6 +4,7 @@ import { collectRelatedData, questionDefinitions } from '../utils/reviewRemoval'
 import type { QuestionDefinitionLine, RemovalCover, RemovalMemo } from '../utils/reviewRemoval';
 import { stripLogicMarks } from '../utils/noteLogicMarks';
 import { NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
+import { withSessionCriterion } from '../utils/noteSets';
 
 export interface QuestionLineEdit {
   logId: string;
@@ -24,6 +25,8 @@ interface Props {
   onRemove: (reason: ReviewRemovedReason) => void;
   /** 고친 줄을 노트에 저장한다. 못 고쳤으면 이유 글을 돌려준다. */
   onEdit: (edits: QuestionLineEdit[]) => string | null;
+  /** 세션 노트의 분류기준(노트 전체를 감싼 토글의 기준처럼 집합 추천에 쓴다) */
+  sessionCriterion?: string | null;
 }
 
 const REASONS: { reason: ReviewRemovedReason; title: string; hint: string }[] = [
@@ -39,7 +42,7 @@ const lineKey = (line: QuestionDefinitionLine) => `${line.logId}:${line.lineInde
  *  - 이 문제가 어떤 능력 정의(`[집합식]:[기준]`)와 노트 줄에서 나왔는지 보여 주고, 그 자리에서 바로 고칠 수 있다(정리노트처럼 집합 추천이 뜬다).
  *  - 같은 값이 나온 다른 줄과 고치기 전의 이전 값을 함께 보여 준다.
  */
-export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, oldLines, onRemove, onEdit }) => {
+export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, oldLines, onRemove, onEdit, sessionCriterion }) => {
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -55,7 +58,7 @@ export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, 
   );
   const rows = [...definitions.abilities, ...definitions.lines];
   const changed = rows.filter(row => (drafts[lineKey(row)] ?? row.text) !== row.text);
-  const sources = useMemo(() => setMemos.map(item => item.memo), [setMemos]);
+  const sources = useMemo(() => withSessionCriterion(setMemos.map(item => item.memo), sessionCriterion), [setMemos, sessionCriterion]);
 
   const apply = () => {
     const message = onEdit(changed.map(row => ({ logId: row.logId, lineIndex: row.lineIndex, expected: row.text, text: drafts[lineKey(row)] ?? row.text, isToggle: row.isToggle })));

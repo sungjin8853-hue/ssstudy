@@ -37,6 +37,7 @@ import { formatPageSpans, unsolvedPagesAfter } from '../utils/unsolvedPages';
 import { hasLogicMark, memoLineText } from '../utils/noteLogicMarks';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
 import type { NoteSetRewriter } from './ReviewMemoEditor';
+import { withSessionCriterion } from '../utils/noteSets';
 import { NoteTutorial } from './Tutorials';
 import { MemoColorTextarea } from './MemoColorTextarea';
 import { createSessionMemoRecord, readSessionMemos, writeSessionMemo } from '../utils/sessionMemo';
@@ -1713,8 +1714,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
 
   // `[ ]` 안 추천에 쓸 같은 과목의 노트 글들(이어 쓰는 글 포함)
   const noteSetMemos = useMemo(
-    () => [...logs.filter(log => log.subjectId === subjectId && (log.reviewMemo ?? '').trim()).map(log => log.reviewMemo ?? ''), reviewMemo],
-    [logs, subjectId, reviewMemo]
+    () => withSessionCriterion(
+      [...logs.filter(log => log.subjectId === subjectId && (log.reviewMemo ?? '').trim()).map(log => log.reviewMemo ?? ''), reviewMemo],
+      createSessionMemoRecord(sessionMemo ?? '').classificationCriterion
+    ),
+    [logs, subjectId, reviewMemo, sessionMemo]
   );
 
   // `[집합]()` 창에서 값을 고치면: 지금 쓰는 노트지와, 이 과목의 다른 기록 노트에 같은 고침을 적용한다.
@@ -2631,7 +2635,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         question={renderCurrentGatePrompt()}
         questionTools={currentGateQuestion && currentGateMemoItem && onRemoveReviewQuestions ? (
           <ReviewQuestionTools key={currentGateQuestion.id} covers={gateCoverOf(currentGateQuestion)} memos={gateRemovalMemos} setMemos={gateSubjectMemos}
-            oldLines={gateOldLines} onRemove={handleRemoveGateQuestion} onEdit={handleEditGateLines} />
+            oldLines={gateOldLines} onRemove={handleRemoveGateQuestion} onEdit={handleEditGateLines} sessionCriterion={currentGateMemoItem.criterion} />
         ) : undefined}
         removalNotice={gateRemovalNotice ? (
           <div role="status" data-testid="removal-notice" className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-slate-300 bg-white px-4 py-3">

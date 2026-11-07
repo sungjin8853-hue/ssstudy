@@ -10,7 +10,7 @@ import { getReviewMemoDoubleSpaceEdit } from '../utils/reviewMemoInput';
 import { getReviewFieldOverrides } from '../utils/reviewFieldOverride';
 import { getToggleChildOffset } from '../utils/reviewQuestions';
 import { NoteSymbolBar } from './NoteSymbolBar';
-import { bracketDetail, bracketSuggestions, bracketCellValueSuggestions, buildNoteSetIndex, cellLocationSuggestions, followingCellSuggestions, headCellAtCaret, setContents, setMembersTrigger, toggleName } from '../utils/noteSets';
+import { bracketDetail, bracketSuggestions, bracketCellValueSuggestions, buildNoteSetIndex, cellLocationSuggestions, followingCellSuggestions, headCellAtCaret, sessionCriterionOf, setContents, setMembersTrigger, toggleName, withSessionCriterion } from '../utils/noteSets';
 import type { SetMemberRow } from '../utils/noteSets';
 import type { BracketSuggestion } from '../utils/noteSets';
 import { caretPositionIn } from '../utils/caretPosition';
@@ -319,7 +319,7 @@ export const ReviewMemoEditor: React.FC<Props> = ({
     const sources = setSource ?? [];
     const index = buildNoteSetIndex(sources);
     const rewrite = (memo: string) => rewriteSetMember(memo, index, view.inner, from, to);
-    const after = sources.map(rewrite);
+    const after = withSessionCriterion(sources.map(rewrite), sessionCriterionOf(sources));
     if (after.every((memo, at) => memo === sources[at])) return;
     const undo = rewriteNotes(rewrite);
     membersFocus.current = rowIndex;

@@ -46,7 +46,24 @@ export interface NoteSetIndex {
   connected: ReadonlySet<string>;
   /** 색인을 만든 노트 글들(집합 안 줄의 칸과 분류기준을 읽어 추천할 때 쓴다) */
   sources?: readonly string[];
+  /** 7일: 세션 노트의 분류기준. 노트 전체를 감싼 가장 바깥 토글의 기준처럼, 다른 기준이 없는 줄에 쓴다 */
+  sessionCriterion?: string;
+  /** 토글 제목으로 쓴 이름(추천의 '토글' 표시) */
+  toggles?: ReadonlySet<string>;
 }
+
+/**
+ * 7일 "세션 노트의 분류기준은 거대한 토글과 같은 거야": 노트 글 목록에 세션 분류기준을 붙인다.
+ * 이 목록으로 만든 색인은 모든 줄이 그 기준의 토글 안에 있는 것처럼 읽는다(이름 없는 토글이라 위아래 관계는 바꾸지 않는다).
+ */
+const sessionCriteria = new WeakMap<readonly string[], string>();
+export const withSessionCriterion = (memos: readonly string[], criterion: string | null | undefined): readonly string[] => {
+  const out = [...memos];
+  const trimmed = (criterion ?? '').trim();
+  if (trimmed) sessionCriteria.set(out, trimmed);
+  return out;
+};
+export const sessionCriterionOf = (memos: readonly string[] | null | undefined): string | undefined => (memos ? sessionCriteria.get(memos) : undefined);
 
 export interface MarkSet {
   /** 쓴 그대로의 표시 글(`[ ]` 안쪽) */
@@ -69,6 +86,9 @@ export const markKeyOf = (inner: string) => normSetName(canonicalMark(inner));
 
 const isBracketGroup = (part: string) => { const end = matchingBracket(part, 0); return end > 0 && end === part.length - 1; };
 
+/** 집합식 · 기준 · 위치가 아닌 이름 하나(`과일`, `받침의 발음`): 괄호와 논리어(`: ; < = . , %`)가 없다 */
+const isPlainSetName = (text: string) => Boolean(text.trim()) && text.trim() !== '?' && !/[\[\](){}:;<=.,%#'"]/.test(text);
+
 /**
  * 글이 위치 사슬뿐이면 그 표준형(`a:b:c`), 아니면 null: `[a:b:c]` · `[a]:[b]:[c]` · `[[a]:[b]:[c]]`.
  * 토글 제목이 이것이면 그 아래 줄들은 그 위치에 있다(`[a:b:c] 셀`을 쓴 것과 같다).
@@ -88,7 +108,12 @@ export const positionChainOf = (text: string): string | null => {
 export const toggleName = (title: string) => {
   const cleaned = (text: string) => text.replace(/\{[^{}\n]*\}/g, '').replace(trailingRelation(), '').trim();
   // 제목이 위치 사슬뿐(`[a:b:c]`)이면 그 위치가 이름이다: 그 아래 줄은 그 위치의 집합 요소다
-  return positionChainOf(cleaned(title)) ?? cleaned(splitTitleCriteria(title).head);
+  const chain = positionChainOf(cleaned(title));
+  if (chain) return chain;
+  const head = cleaned(splitTitleCriteria(title).head);
+  // 7일: 제목을 `[과일]`처럼 이름 하나만 괄호로 쓴 것은 `과일`과 같은 이름이다(`[과일] 사과`가 그 토글 아래로 간다)
+  if (isBracketGroup(head) && isPlainSetName(head.slice(1, -1))) return head.slice(1, -1).trim();
+  return head;
 };
 
 /** 줄을 `//`로 나눈 칸들 */
@@ -363,6 +388,8 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   const marks = new Map<string, { display: string; cells: string[] }>();
   const pending: { expression: string; criterion: string; scope: string[] }[] = [];
   const connected = new Set<string>();
+  const toggles = new Set<string>();
+  const nested: [string, string][] = [];
   const see = (name: string) => { const key = normSetName(name); if (key && !display.has(key)) display.set(key, name.trim()); return key; };
   const link = (parent: string | undefined, child: string) => {
     if (!parent || parent === child) return;
@@ -384,6 +411,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const key = see(toggleName(line.slice(REVIEW_MEMO_TOGGLE_START.length)));
         sets.add(key);
+        if (key) toggles.add(key);
         link(stack[stack.length - 1], key);
         stack.push(key);
         return;
@@ -418,7 +446,11 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
               const cellKey = see(later.cell);
               const leads = located.filter(lead => !/[:;<=]/.test(lead));
               later.marks.forEach(mark => {
-                if (leads.length) leads.forEach(lead => place(`${lead}.${mark}`, cellKey));
+                if (leads.length) leads.forEach(lead => {
+                  place(`${lead}.${mark}`, cellKey);
+                  // 7일: 뒤 칸 `[X]`는 줄 앞 `[P]` 안의 X다 — X가 셀 글과 다르면(`[과일] 포도 : [보라] 송이`) X는 P 아래 집합, 셀은 X 아래
+                  if (isPlainSetName(lead) && isPlainSetName(mark) && normSetName(mark) !== cellKey) { const pair: [string, string] = [see(lead), see(mark)]; link(...pair); nested.push(pair); }
+                });
                 else if (normSetName(mark) !== cellKey) place(mark, cellKey);
               });
             });
@@ -438,10 +470,20 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
     return (parents.get(from) ?? []).some(parent => reaches(parent, target, seen));
   };
   marks.forEach((mark, key) => {
-    const named = known(key) ? [key] : mark.display.split(/[.,%()]+/).map(normSetName).filter(known);
-    const innermost = named.filter(setKey => !named.some(other => other !== setKey && reaches(other, setKey)));
-    innermost.forEach(setKey => mark.cells.forEach(cell => link(setKey, cell)));
+    // 7일: 아직 노트에 없는 이름도 `[포유류] 고래`처럼 쓰면 그 이름의 집합이 생기고 셀이 그 아래로 간다.
+    // 이름 하나이거나 이름들의 교집합(`과일.빨강`: 뒤 칸 `[빨강]`과 줄 앞 `[과일]`)일 때만이다. 기준 · 위치(`[A:C]`) · 차집합 · 합집합은 위치로만 둔다.
+    const parts = mark.display.split('.').map(part => part.trim());
+    const creatable = parts.every(isPlainSetName);
+    mark.cells.forEach(cell => {
+      const named = known(key) && key !== cell ? [key]
+        : creatable ? unique(parts.map(normSetName)).filter(name => name !== cell)
+          : mark.display.split(/[.,%()]+/).map(normSetName).filter(name => known(name) && name !== cell);
+      const innermost = named.filter(setKey => !named.some(other => other !== setKey && reaches(other, setKey)));
+      innermost.forEach(setKey => { if (!display.has(setKey)) display.set(setKey, parts.find(part => normSetName(part) === setKey) ?? setKey); link(setKey, cell); });
+    });
   });
+  // 뒤 칸에서 생긴 집합(`[보라]`)은 그 집합의 셀들 뒤에 둔다(맨 앞 셀 추천이 줄에 쓴 셀부터 나오게)
+  nested.forEach(([parent, child]) => { const down = children.get(parent); if (down) children.set(parent, [...down.filter(item => item !== child), child]); });
   // `[급수.[A:C]]`처럼 위치 표시가 교집합식이면, 그 셀은 식 안의 위치 `[A:C]` 안에도 있다
   [...marks.values()].forEach(mark => {
     const node = parseSetExpression(mark.display);
@@ -459,7 +501,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
     ability.members.forEach(cell => { if (!(entry.cells as string[]).includes(cell)) (entry.cells as string[]).push(cell); });
     withAbilities.set(key, entry);
   });
-  return { ...index, marks: withAbilities, placements: marks, abilities, sources: memos };
+  return { ...index, marks: withAbilities, placements: marks, abilities, sources: memos, sessionCriterion: sessionCriterionOf(memos), toggles };
 };
 
 /**
@@ -890,7 +932,7 @@ export const bracketSuggestions = (index: NoteSetIndex, detail: BracketDetail): 
   const written = new Set(detail.before.split(/[.,%:;<=()\[\]]/).map(normSetName).filter(Boolean));
   const names = linked(detail.typed).filter(name => !written.has(normSetName(name)));
   // 토글 제목·아래 항목이 있는 셀은 `토글`, 셀 왼쪽에만 쓴 집합은 `집합`
-  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: index.sets.has(normSetName(text)) || index.sets.has(normSetName(`[${text}]`)) ? '토글' : '집합' }));
+  names.forEach(text => add({ text, from, to: detail.tokenEnd, tag: (index.toggles ?? index.sets).has(normSetName(text)) || (index.toggles ?? index.sets).has(normSetName(`[${text}]`)) ? '토글' : '집합' }));
   // 구조 추천은 `[ ]` 안쪽 내용 전체를 바꾼다: `[A:C] 급수` → `[급수.[A:C]] 급수`. 닫는 `]`와 그 뒤의 글은 그대로 둔다.
   if (detail.close >= 0 && detail.following && !/[\[\]]/.test(detail.inner) && /[:;<=]/.test(detail.inner)) {
     const cell = detail.following;
@@ -954,7 +996,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         const inside = stack.some(item => item.key === key) || marks.some(item => markKeyOf(item) === mark)
           || (index.parents.get(normSetName(cell)) ?? []).includes(key);
         if (!inside) return;
-        const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide;
+        const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide ?? index.sessionCriterion;
         const cuts = topLevelCuts(segment, relationMarks());
         const cells = [cell, ...cuts.map((cut, at) => laterCellOf(segment.slice(cut + 1, cuts[at + 1] ?? segment.length)).cell.replace(/\{[^{}\n]*\}/g, '').trim())];
         rows.push({ cells, criteria: parseCriterionLabels(criterion) });

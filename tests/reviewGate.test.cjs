@@ -11710,8 +11710,10 @@ test('6일: 맨 앞이 아닌 칸의 [X]는 위치(맨 앞 [P]와 교집합)이�
   const memo = '[과일] 사과 : [빨강]\n[과일] 바나나 : 노랑\n[과일] 포도 : [보라] 송이\n수박 : [초록]';
   const index = ns.buildNoteSetIndex([memo]);
   assert.deepEqual(ns.rowsOfSet(index, '과일').map(row => row.cells.join(':')), ['사과:빨강', '바나나:노랑', '포도:송이']);
-  assert.deepEqual(ns.upperSetsOf(index, '빨강'), ['과일.빨강']);
-  assert.deepEqual(ns.upperSetsOf(index, '송이'), ['과일.보라']);
+  // 7일: 뒤 칸 [X]는 줄 앞 [P] 안 — 셀이 X 자체면 P 아래, 따로 쓴 셀이면 P 아래 집합 X의 아래
+  assert.deepEqual(ns.upperSetsOf(index, '빨강'), ['과일']);
+  assert.deepEqual(ns.upperSetsOf(index, '송이'), ['보라']);
+  assert.deepEqual(ns.upperSetsOf(index, '보라'), ['과일']);
   assert.deepEqual(ns.upperSetsOf(index, '초록'), [], 'without a leading [ ] the cell is just its own text');
   const plain = (text) => { const caret = text.indexOf('|'); return ns.followingCellSuggestions(index, text.replace('|', ''), caret).map(item => item.text); };
   assert.deepEqual(plain('[과일] 귤 : 빨|'), ['빨강']);
@@ -11747,4 +11749,31 @@ test('6일 20:53: 복습과목을 재는 동안 복습하는 기록들의 정리
   const due = Object.entries(edited.reviewQuestionSchedules).filter(([, item]) => item.nextReviewDate === '2026-11-04T10:00:00.000Z').length;
   assert.equal(due, 4, 'the changed line and the new line (two questions each) go into review now');
   assert.equal(edited.reviewEditIntake.keys.length, 4);
+});
+
+test('7일: 토글 제목 [과일]은 과일과 같은 이름, 노트에 없던 [Y]도 집합을 만든다, 세션 노트 분류기준은 노트 전체를 감싼 토글', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const parents = (memos, cell) => [...(ns.buildNoteSetIndex(memos).parents.get(cell) ?? [])];
+  assert.equal(ns.toggleName('[과일]'), '과일');
+  assert.equal(ns.toggleName('[받침의 발음] [개념:정의]'), '받침의 발음');
+  assert.equal(ns.toggleName('[a:b:c]'), 'a:b:c', 'a position chain stays a position');
+  assert.equal(ns.toggleName('[과일.빨강]'), '[과일.빨강]', 'a set expression is not a plain name');
+  assert.deepEqual(parents([':::toggle [과일]\n:::end\n[과일] 사과 : 빨강'], '사과'), ['과일']);
+  assert.deepEqual(parents([':::toggle [과일]\n사과 : 빨강\n:::end'], '사과'), ['과일']);
+  assert.deepEqual(parents(['[포유류] 고래 : 바다'], '고래'), ['포유류']);
+  assert.deepEqual(parents(['[과일] 사과 : [빨강]'], '빨강'), ['과일']);
+  assert.deepEqual(parents(['[A:C] V : W'], 'V'), [], 'a criterion / position mark stays a position');
+  assert.deepEqual(parents(['[도형%삼각형] 원'], '원'), [], 'a difference is not a new set');
+  assert.deepEqual(parents(['[?] 셀'], '셀'), [], '[?] is the special set');
+  const index = ns.buildNoteSetIndex(['[과일] 사과 : 빨강\n:::toggle 동물\n:::end']);
+  const tags = ns.bracketSuggestions(index, ns.bracketDetail('[', 1)).map(item => [item.text, item.tag]);
+  assert.deepEqual(tags, [['동물', '토글'], ['과일', '집합']], 'a set made by [과일] is not tagged as a toggle');
+  // 세션 분류기준: 다른 기준이 없는 줄의 기준(가장 바깥 토글)
+  const memo = ':::toggle 과일\n사과 : 빨강\n:::end\n:::toggle 동물 [개념:정의]\n고래 : 포유류\n:::end';
+  const withSession = ns.buildNoteSetIndex(ns.withSessionCriterion([memo], '이름:색'));
+  assert.deepEqual(ns.rowsOfSet(withSession, '과일')[0].criteria, ['이름', '색']);
+  assert.deepEqual(ns.rowsOfSet(withSession, '동물')[0].criteria, ['개념', '정의'], 'an inner toggle criterion wins');
+  assert.deepEqual(ns.rowsOfSet(ns.buildNoteSetIndex([memo]), '과일')[0].criteria, []);
+  assert.deepEqual(ns.followingCellSuggestions(withSession, ':::toggle 과일\n[과일] 귤 : '.split('\n')[1], '[과일] 귤 : '.length).map(item => [item.text, item.tag]), [['빨강', '색']]);
+  assert.deepEqual(ns.buildNoteSetIndex(ns.withSessionCriterion([memo], '이름:색')).parents, ns.buildNoteSetIndex([memo]).parents, 'the session toggle has no name: hierarchy is unchanged');
 });
