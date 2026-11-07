@@ -73,6 +73,14 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   /** 같은 묶음 안에서 먼저 낼 순서: 두 값 중 덜 중요한 쪽의 중요도 값(작을수록 중요). 왼쪽일수록 작다. */
   importance: number;
   conditions: string[];
+  /**
+   * 7일: 조건 앞쪽 몇 개가 문제가 놓인 집합 사슬(바깥 → 안)인가. 보이기만 바꾸고 키에는 쓰지 않는다.
+   */
+  placeCount?: number;
+  /** 7일: 그 사슬 중 앞쪽 몇 개가 위쪽 토글인가(나머지는 줄 앞 `[ ]` 같은 위치 집합) */
+  toggleCount?: number;
+  /** 7일: 조건마다 보이는 방법(사슬 안 조건만, 나머지는 undefined). 문제에서 가까운 집합만 보이고 위치를 가릴 만큼만 위 집합을 더한다 */
+  conditionRoles?: (ConditionRole | undefined)[];
   columns: { prompt: QuestionColumn[]; answer: QuestionColumn[]; conditions: QuestionColumn[][] };
   /** 이 문제가 놓인 토글 제목에 쓴 분류기준 `[개념:정의]`(가장 가까운 것). 있으면 칸 이름은 세션 노트 기준 대신 이것을 따른다. */
   criterion?: string;
@@ -82,7 +90,12 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
 }
 
 /** key: 문제 키에 쓸 조건 글(5일: "다음 자리의"로 바꾼 조건은 바꾸기 전 글로 키를 만들어 복습 기록을 잇는다). 없으면 text */
-interface QuestionCondition { text: string; columns: QuestionColumn[]; spans: AnswerSpan[]; key?: string }
+interface QuestionCondition { text: string; columns: QuestionColumn[]; spans: AnswerSpan[]; key?: string;
+  /** 7일: 문제가 놓인 집합. toggle: 위쪽 토글(능력적 집합), position: 줄 앞 `[ ]` · 괄호가 놓인 자리 집합(위치 집합). 줄 안 자리(`이후`) · 충족 조건은 없음 */
+  place?: 'toggle' | 'position' }
+
+/** 7일: 문제 조건 하나를 어떻게 보이나 — near: 문제에서 가장 가까운 위치 집합, related: 위치를 가리려고 함께 주는 그 위 집합, hidden: 보이지 않음 */
+export type ConditionRole = 'near' | 'related' | 'hidden';
 
 /**
  * 중요도: 맨 왼쪽 칸이 가장 중요하고, 오른쪽으로 한 칸 갈 때마다 덜 중요해진다(`:`·`;`는 1). 점수가 클수록 덜 중요하다.
@@ -653,7 +666,7 @@ export const getReviewQuestionSentence = (criterion: string | null | undefined, 
     return { statement: convertStatement({ ...question.convert, direction: question.direction }, { given: labels.prompt, required: labels.answer }) };
   }
   if (question.cell) {
-    return { statement: cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, labels.conditions), attrs: { prompt: labels.prompt, answer: labels.answer } }) };
+    return { statement: cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, labels.conditions, undefined, question.conditionRoles), attrs: { prompt: labels.prompt, answer: labels.answer } }) };
   }
   const prose = proseOf(question, { prompt: labels.prompt, answer: labels.answer, conditions: labels.conditions });
   if (prose) return prose;
@@ -993,6 +1006,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
    * (노트 전체에 두면 순서 `-`에서 나온 같은 글의 `이후` 조건까지 바뀐다). 문제 키는 바꾸기 전 글로 만들어 복습 기록이 이어진다.
    */
   let activeAlias = new Map<string, string>();
+  let activePlaceCount = 0;
+  let activeToggleCount = 0;
   const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => activeAlias.get(text) ?? text);
   const add = (question: Omit<NoteQuestion, 'key' | 'level' | keyof ReviewQuestionDifficulty>) => {
     if (!question.prompt.trim() || !question.answer.trim() || question.prompt === question.answer) return;
@@ -1026,7 +1041,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       }
       return;
     }
-    const entry: NoteQuestion = { ...question, answerSpans: [...question.answerSpans], promptSpans: [...question.promptSpans],
+    const entry: NoteQuestion = { ...question, ...(activePlaceCount ? { placeCount: Math.min(activePlaceCount, question.conditions.length), toggleCount: Math.min(activeToggleCount, activePlaceCount, question.conditions.length) } : {}), answerSpans: [...question.answerSpans], promptSpans: [...question.promptSpans],
       level: 1, recallUnits: 0, providedUnits: 0, difficulty: 0, key: `${question.convert?.variation ? 'cvv' : question.kind === 'convert' ? 'cv1' : 'q2'}:${signature}:0` };
     bySignature.set(signature, entry);
     questions.push(entry);
@@ -1049,7 +1064,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const headsRelation = parsed.type === 'relation' || trailingRelation().test(titleSource(parent));
       // 5일: 끝이 연결어로 열린 제목(`> A:` · `> A;`) 아래 줄은 그 연결어 뒤에 놓인 것이라 "‘A’ 다음 자리의"로 묻는다(`A:(B:C)`와 같음)
       const open = Boolean(title) && trailingRelation().test(titleSource(parent));
-      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: title } : {}), spans: spans(parsed), columns: parsed.type === 'relation'
+      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: title } : {}), place: 'toggle' as const, spans: spans(parsed), columns: parsed.type === 'relation'
         ? parsed.fields.flatMap((field, index) => nonempty(field) ? [parsed.classifications[index]] : []) : headsRelation ? [offsetByNode.get(parent.id) ?? 0] : [] });
       parentId = parent.parentId;
     }
@@ -1088,8 +1103,14 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   const implicitByExpression = new Map<Expression, string[][]>();
   const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
     const previous = activeAlias;
+    const previousPlaces = activePlaceCount;
+    const previousToggles = activeToggleCount;
     activeAlias = new Map(context.flatMap(item => (item.key === undefined ? [] : [[item.text, item.key] as [string, string]])));
-    try { visitBody(expression, context, inheritedColumn, baseScore); } finally { activeAlias = previous; }
+    const firstLocal = context.findIndex(item => !item.place);
+    activePlaceCount = firstLocal < 0 ? context.length : firstLocal;
+    const firstPosition = context.findIndex(item => item.place !== 'toggle');
+    activeToggleCount = firstPosition < 0 ? context.length : firstPosition;
+    try { visitBody(expression, context, inheritedColumn, baseScore); } finally { activeAlias = previous; activePlaceCount = previousPlaces; activeToggleCount = previousToggles; }
   };
   const visitBody = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
     if (expression.type === 'text') return;
@@ -1414,8 +1435,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         const fields = scoped.type === 'relation' ? convertFieldsOf(scoped.fields.map(head), sets) : [];
         // 모든 안쪽 칸에 집합이 있으면 집합은 칸마다 단위 문제에 들어가고, 아니면 놓인 자리의 집합을 조건으로 준다
         const placed = joinSets(fields.length >= 2 && fields.every(Boolean) ? scope : [...scope, ...(sets[0] ?? [])]);
-        visit(scoped, [...ancestorConditions(node), ...(placed ? [{ text: placed, columns: [], spans: [] }] : []),
-          ...(innerScope ? [{ text: innerScope, columns: [], spans: [] }] : [])]);
+        visit(scoped, [...ancestorConditions(node), ...(placed ? [{ text: placed, columns: [], spans: [], place: 'position' as const }] : []),
+          ...(innerScope ? [{ text: innerScope, columns: [], spans: [], place: 'position' as const }] : [])]);
       }
       visitGroups(inner, node, scope, sets, column);
       index = close;
@@ -1494,7 +1515,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (implicit.length && expression.type === 'relation') implicitByExpression.set(expression, implicit);
       // 줄 앞 `[할로젠]`이 바로 위 토글 이름과 같으면 조건을 한 번만 준다(`‘할로젠’, ‘할로젠’에서` 방지)
       const repeated = scope && context.length > 0 && normSetName(context[context.length - 1].text) === normSetName(scope);
-      visit(expression, scope && !repeated ? [...context, { text: scope, columns: [], spans: [] }] : context, offsetByNode.get(node.id) ?? 0);
+      visit(expression, scope && !repeated ? [...context, { text: scope, columns: [], spans: [], place: 'position' as const }] : context, offsetByNode.get(node.id) ?? 0);
       visitGroups(original, node, scope ? [scope] : [], original.type === 'relation' ? implicit : [readCell(original)?.sets ?? []]);
     });
   });
@@ -1558,8 +1579,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   });
   assignPairBundles(questions, expressions);
   questions.sort((a, b) => a.priority - b.priority || a.importance - b.importance || compareReviewQuestionDifficulty(a, b));
+  assignConditionRoles(questions);
   // 구조로 낸 문제 글은 문제집처럼 문장으로 바꾼다(이미 줄글인 빈칸 · 노트 회상 · 능력 변환 카드는 그대로)
   questions.forEach(question => {
+    if (question.cell && question.conditionRoles) question.statement = cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, undefined, undefined, question.conditionRoles) });
     if (question.statement) return;
     const prose = proseOf(question);
     if (!prose) return;
@@ -1568,6 +1591,50 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   });
   return { questions, nodes };
 }
+
+/**
+ * 7일 "문제 조건은 바로 위 상위 집합만(다만 위치를 구별할 수 있을 만큼), 가장 가까운 위치 집합과 그 외 연관 집합은 구별해서":
+ * 집합 사슬(바깥 → 안)에서 가장 안쪽 것만 보인다(그것이 줄 앞 `[ ]` 위치 집합이면 바로 위 토글도). 같은 노트에 겉보기가 같은 문제(같은 종류 · 주어진 값 · 칸 · 줄 안 자리)가 있고
+ * 보이는 집합까지 같으면, 구별될 때까지 바깥 집합을 안쪽부터 더한다(구별에 도움이 안 되는 사이 집합은 건너뛴다 · 더한 것은 related). 보이기만 바꾸므로 문제 키 · 복습 기록은 그대로다.
+ */
+const placeChainOf = (question: NoteQuestion) => question.conditions.slice(0, question.placeCount ?? 0).map(text => normSetName(text));
+const lookOf = (question: NoteQuestion) => JSON.stringify([question.kind, question.direction, question.form ?? '', normSetName(question.prompt),
+  question.columns.prompt, question.columns.answer, question.conditions.slice(question.placeCount ?? 0).map(text => normSetName(text))]);
+
+/** 문제 하나의 조건 보이는 방법: pool은 함께 보일 수 있는 문제들(같은 노트, 또는 같은 과목의 모든 노트). 자기 자신이 들어 있어도 된다. */
+export const conditionRolesAmong = (question: NoteQuestion, pool: readonly NoteQuestion[]): NoteQuestion['conditionRoles'] => {
+  const count = question.placeCount ?? 0;
+  if (!count) return undefined;
+  const chain = placeChainOf(question);
+  const look = lookOf(question);
+  const others = pool.filter(other => other !== question && other.key !== question.key && lookOf(other) === look).map(placeChainOf)
+    .filter(other => other.join('\u0000') !== chain.join('\u0000'));
+  // 보이는 집합들(바깥 → 안 순서)이 다른 문제의 사슬 안에 같은 순서로 다 있고 가장 안쪽도 같으면 그 문제와 구별되지 않는다
+  const collides = (shown: number[], other: string[]) => {
+    if (other[other.length - 1] !== chain[count - 1]) return false;
+    let at = 0;
+    for (const index of shown.slice(0, -1)) { at = other.indexOf(chain[index], at); if (at < 0 || at >= other.length - 1) return false; at += 1; }
+    return true;
+  };
+  // 줄 앞 `[ ]` 같은 위치 집합이 가장 가까우면, 바로 위 토글(능력적 집합)도 함께 준다
+  const toggles = Math.min(question.toggleCount ?? 0, count);
+  const shown = toggles > 0 && toggles < count ? [toggles - 1, count - 1] : [count - 1];
+  // 가장 안쪽부터 바깥으로: 구별되지 않는 문제를 줄이는 집합만 더한다(사이의 집합이 둘 다에 있으면 건너뛴다)
+  let left = others.filter(other => collides(shown, other));
+  for (let index = count - 2; index >= 0 && left.length; index -= 1) {
+    if (shown.includes(index)) continue;
+    const next = [...shown, index].sort((a, b) => a - b);
+    const remaining = left.filter(other => collides(next, other));
+    if (remaining.length < left.length) { shown.splice(0, shown.length, ...next); left = remaining; }
+  }
+  return question.conditions.map((_, index) => (index >= count ? undefined : index === count - 1 ? 'near' : shown.includes(index) ? 'related' : 'hidden'));
+};
+
+const assignConditionRoles = (questions: NoteQuestion[]) => {
+  const groups = new Map<string, NoteQuestion[]>();
+  questions.forEach(question => { const look = lookOf(question); groups.set(look, [...(groups.get(look) ?? []), question]); });
+  questions.forEach(question => { const roles = conditionRolesAmong(question, groups.get(lookOf(question)) ?? []); if (roles) question.conditionRoles = roles; });
+};
 
 export const REVIEW_QUESTION_KIND_LABELS: Record<NoteQuestion['kind'], string> = {
   direct: '기본 관계', reverse: '역방향', remaining: '남은 조건', reconstruct: '전체 재구성', recall: '노트 회상', blank: '빈칸 채우기', far: '연결 추론',

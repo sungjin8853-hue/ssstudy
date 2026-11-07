@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { buildReviewQuestions, getReviewQuestionClassification, getReviewQuestionSentence, REVIEW_QUESTION_KIND_LABELS } from '../utils/reviewQuestions';
+import { buildReviewQuestions, conditionRolesAmong, getReviewQuestionClassification, getReviewQuestionSentence, REVIEW_QUESTION_KIND_LABELS } from '../utils/reviewQuestions';
 import { buildNoteSetIndex, headCellOf, noteCriterionOf, questionAbilities, upperSetsOf } from '../utils/noteSets';
 import type { NoteQuestion } from '../utils/reviewQuestions';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
@@ -24,13 +24,18 @@ export const ReviewQuestionContent: React.FC<{
   memo: string;
   /** 같은 과목의 모든 노트 글: 다른 쪽에서 정의한 능력 집합까지 찾을 때 쓴다. 없으면 이 노트 글만 본다. */
   setMemos?: readonly string[];
-}> = ({ question, criterion, revealed, memo, setMemos }) => {
+}> = ({ question: given, criterion, revealed, memo, setMemos }) => {
   const style = useReviewStyle();
+  const memoKey = setMemos ? setMemos.join('\u0000') : '';
+  // 7일: 문제 조건은 가장 가까운 집합만(위치를 가릴 만큼만 위 집합을 더함). 같은 과목의 다른 노트 문제와도 구별되게 함께 본다
+  const pool = useMemo(() => (setMemos && setMemos.length > 1 ? setMemos.flatMap(text => buildReviewQuestions(text).questions) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [memoKey]);
+  const question = useMemo(() => (pool ? { ...given, conditionRoles: conditionRolesAmong(given, pool) ?? given.conditionRoles } : given), [given, pool]);
   // 세션 노트 기준이 없으면 노트 맨 위에 `[개념:정의]`로 쓴 노트 전체 기준을 쓴다.
   // 토글 제목에 쓴 `[개념:정의]`가 있으면 그 토글 안의 문제는 그 기준을 따른다(상위 토글 → 세션 노트 → 노트 전체 기준 순).
   const activeCriterion = question.criterion || criterion || noteCriterionOf(memo);
   const labels = getReviewQuestionClassification(activeCriterion, question);
-  const memoKey = setMemos ? setMemos.join('\u0000') : '';
   const abilities = useMemo(
     () => questionAbilities(question, buildReviewQuestions(memo).nodes, setMemos && setMemos.length ? setMemos : [memo]),
     // eslint-disable-next-line react-hooks/exhaustive-deps

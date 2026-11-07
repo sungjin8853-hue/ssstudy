@@ -11777,3 +11777,30 @@ test('7일: 토글 제목 [과일]은 과일과 같은 이름, 노트에 없던 
   assert.deepEqual(ns.followingCellSuggestions(withSession, ':::toggle 과일\n[과일] 귤 : '.split('\n')[1], '[과일] 귤 : '.length).map(item => [item.text, item.tag]), [['빨강', '색']]);
   assert.deepEqual(ns.buildNoteSetIndex(ns.withSessionCriterion([memo], '이름:색')).parents, ns.buildNoteSetIndex([memo]).parents, 'the session toggle has no name: hierarchy is unchanged');
 });
+
+test('7일: 문제 조건은 가장 가까운 집합만, 위치를 구별할 만큼만 위 집합을 더하고(연관 집합) 둘을 구별해 보인다 — 키는 그대로', () => {
+  const qb = loadSource('utils/reviewQuestions.ts');
+  const fl = loadSource('utils/questionFlash.ts');
+  const statements = (memo) => qb.buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => qb.getReviewQuestionSentence(q.criterion ?? null, q).statement);
+  assert.deepEqual(statements(':::toggle 생물 [개념:정의]\n:::toggle 동물\n:::toggle 포유류\n고래 : 바다에 사는 포유류\n:::end\n:::end\n:::toggle 식물\n고래 : 고래풀\n:::end\n:::end'),
+    ['‘포유류’에서 개념 ‘고래’의 정의는?', '‘식물’에서 개념 ‘고래’의 정의는?'], 'only the nearest set when it already tells the places apart');
+  assert.deepEqual(statements(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end\n:::toggle 상어\n:::toggle 특징\n크기 : 중간\n:::end\n:::end'),
+    ['[고래] ‘특징’에서 ‘크기’ 다음 값은?', '[상어] ‘특징’에서 ‘크기’ 다음 값은?'], 'the same nearest set: the upper set that tells them apart is added as [ ]');
+  assert.deepEqual(statements(':::toggle A\n:::toggle B\n:::toggle C\nx : 1\n:::end\n:::end\n:::end\n:::toggle D\n:::toggle B\n:::toggle C\nx : 2\n:::end\n:::end\n:::end'),
+    ['[A] ‘C’에서 ‘x’ 다음 값은?', '[D] ‘C’에서 ‘x’ 다음 값은?'], 'a set both share (B) does not help and is skipped');
+  assert.deepEqual(statements(':::toggle 생물\n:::toggle 동물\n[포유류] 고래 : 바다\n:::end\n:::end'), ['[동물] ‘포유류’에서 ‘고래’ 다음 값은?'],
+    'a line [ ] (position set) is the nearest; the toggle right above (ability set) comes with it, 생물 is not needed');
+  assert.deepEqual(statements(':::toggle 동물\n고래 : (먹이 : 크릴)\n:::end'), ['‘동물’에서 ‘고래’ 다음 값은?', '‘동물’에서 ‘고래’ 다음 자리의 ‘먹이’ 다음 값은?'], 'places inside the line stay');
+  const [q] = qb.buildReviewQuestions(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end\n:::toggle 상어\n:::toggle 특징\n크기 : 중간\n:::end\n:::end').questions.filter(item => item.kind === 'direct');
+  assert.deepEqual(fl.flashOf(q).place.map(chip => [chip.value, Boolean(chip.related)]), [['고래', true], ['특징', false]], 'flash card: the related set is its own kind of chip');
+  // 다른 노트(같은 과목)의 문제와도 구별: 한 노트만 보면 ‘특징’뿐
+  const one = qb.buildReviewQuestions(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end').questions.find(item => item.kind === 'direct');
+  const other = qb.buildReviewQuestions(':::toggle 상어\n:::toggle 특징\n크기 : 중간\n:::end\n:::end').questions;
+  assert.deepEqual(one.conditionRoles, ['hidden', 'near']);
+  assert.deepEqual(qb.conditionRolesAmong(one, [one, ...other]), ['related', 'near']);
+  // 키는 조건 전체로 만든 그대로
+  const full = qb.buildReviewQuestions(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end').questions.find(item => item.kind === 'direct');
+  assert.deepEqual(full.conditions, ['고래', '특징']);
+  const ui = fs.readFileSync(path.resolve(__dirname, '../components/FlashKeywords.tsx'), 'utf8');
+  assert.ok(ui.includes('data-flash-related="true"') && ui.includes('연관 집합'));
+});

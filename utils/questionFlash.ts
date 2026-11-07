@@ -17,7 +17,7 @@ export type FlashPiece = { type: 'text'; value: string } | { type: 'blank'; mark
 
 export interface FlashCard {
   /** 문제가 놓인 자리(위쪽 토글 · 줄 앞 집합): 맨 바깥부터 */
-  place: Array<FlashChip & { role: 'place' | 'owner' | 'after' }>;
+  place: Array<FlashChip & { role: 'place' | 'owner' | 'after'; related?: boolean }>;
   /** 주어진 값. 가린 줄 문제는 없다(줄 전체가 chain) */
   given: FlashChip | null;
   /** 이미 충족한 값(`남은 것` 문제): 문장의 "… 외에" */
@@ -39,11 +39,14 @@ const CELL_RELATION: Record<CellKind, FlashRelation> = {
 const modeOf = (operator: ReturnType<typeof operatorOf>) => (operator === 'and' ? '모두' : operator === 'sequence' ? '순서대로' : operator === 'or' ? '하나만' : null);
 
 /** 문제가 놓인 자리와 충족한 값을 조각으로. `placeOf`(줄글)와 같은 가름이다. */
-const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string) => {
-  const entries = withoutAnswerPlace(conditions, answer);
+const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string, roles?: ProseInput['conditionRoles']) => {
+  const entries = withoutAnswerPlace(conditions, answer, roles);
   const chip = (text: string, index: number): FlashChip => ({ label: [...(labels?.[index] ?? [])], value: readableLabel(text) });
+  const places = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text));
+  // 7일: 가장 가까운 위치 집합과, 위치를 가리려고 함께 주는 그 위 집합(연관 집합)을 다른 칸으로 보인다(가까운 것이 빠졌으면 나눌 것 없음)
+  const hasNear = places.some(item => item.role !== 'related');
   const place = [
-    ...entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text)).map(item => ({ ...chip(item.text, item.index), role: 'place' as const })),
+    ...places.map(item => ({ ...chip(item.text, item.index), role: 'place' as const, ...(hasNear && item.role === 'related' ? { related: true } : {}) })),
     ...entries.filter(item => OWNER.test(item.text)).map(item => ({ ...chip(item.text.replace(OWNER, ''), item.index), role: 'owner' as const })),
     ...entries.filter(item => AFTER.test(item.text)).map(item => ({ ...chip(item.text.replace(AFTER, ''), item.index), role: 'after' as const }))
   ];
@@ -59,7 +62,7 @@ const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly
 export const flashOf = (input: ProseInput & { cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] } }, attrs?: ProseAttrs): FlashCard | null => {
   const { kind, prompt, answer, conditions, direction } = input;
   if (kind === 'recall' || kind === 'convert') return null;
-  const { place, done } = placeAndDone(conditions, attrs?.conditions, answer);
+  const { place, done } = placeAndDone(conditions, attrs?.conditions, answer, input.conditionRoles);
   const askLabel = [...(attrs?.answer ?? [])];
   const givenChip: FlashChip = { label: [...(attrs?.prompt ?? [])], value: readableLabel(prompt) };
   const givenOperator = operatorOf(prompt);

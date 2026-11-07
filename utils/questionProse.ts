@@ -53,6 +53,8 @@ export interface ProseInput {
   form?: 'equal' | 'components' | 'match';
   /** 남은 값의 다음 값을 묻는 남은 조건 문제(2일) */
   beyond?: boolean;
+  /** 7일: 조건마다 보이는 방법(near · related · hidden). 없으면 모든 조건을 같게 보인다 */
+  conditionRoles?: readonly ('near' | 'related' | 'hidden' | undefined)[];
 }
 export interface Prose { statement: string; solution?: string }
 
@@ -100,18 +102,27 @@ export interface ProseAttrs { prompt: string[]; answer: string[]; conditions: st
  * 자리(위쪽 토글 이름)가 정답과 같은 글이면 문제에 정답이 그대로 보이므로 자리에서 뺀다.
  * 예: 토글 `태조` 안의 `태조=이성계` → "‘태조’에서 ‘이성계’에 대응하는 것은?"(정답 태조) 대신 "‘이성계’에 대응하는 것은?"
  */
-export const withoutAnswerPlace = (conditions: readonly string[], answer?: string) => {
+export const withoutAnswerPlace = (conditions: readonly string[], answer?: string, roles?: ProseInput['conditionRoles']) => {
   const hidden = answer === undefined ? '' : readableLabel(answer).trim();
-  return conditions.map((text, index) => ({ text, index }))
+  return conditions.map((text, index) => ({ text, index, role: roles?.[index] }))
+    .filter(item => item.role !== 'hidden')
     .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '').replace(OWNER, '')).trim() !== hidden);
 };
 
+/** 7일: 가장 가까운 위치 집합(따옴표)과 위치를 가리려고 함께 주는 그 위 집합(`[ ]`, 노트에서 `[동물] 포유류`로 쓰는 꼴)을 나눠 쓴다 */
+const splitRelated = <T extends { role?: string }>(items: T[]) => {
+  const near = items.filter(item => item.role !== 'related');
+  // 가까운 집합이 정답과 같아 빠졌으면 위 집합이 곧 자리다
+  return near.length ? { related: items.filter(item => item.role === 'related'), near } : { related: [] as T[], near: items };
+};
+
 /** 문제가 놓인 자리: `개념 ‘A’에서 ` · `‘p’ 다음 자리의 `. 속성 이름(labels)이 있으면 값 앞에 붙는다. "충족"이 붙은 조건은 여기 넣지 않는다. */
-export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string): string => {
-  const entries = withoutAnswerPlace(conditions, answer);
+export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string, roles?: ProseInput['conditionRoles']): string => {
+  const entries = withoutAnswerPlace(conditions, answer, roles);
   const afters = entries.filter(item => AFTER.test(item.text));
-  const place = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text));
-  return `${place.length ? `${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
+  const { related, near: place } = splitRelated(entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text)));
+  const upper = related.map(item => `[${readableLabel(item.text.replace(OWNER, ''))}] `).join('');
+  return `${place.length ? `${upper}${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
     // 5일: 겹친 `이후`(바깥 칸 다음 자리 안의 또 다음 자리)는 순서대로 이어 보인다: ‘A’ → ‘B’ 다음 자리의
     ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(' → ')} 다음 자리의 ` : ''}`;
 };
@@ -123,7 +134,7 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
   const labelsOf = (index: number) => attrs?.conditions[index];
   const entries = conditions.map((text, index) => ({ text, index }));
   const satisfied = entries.filter(item => SATISFIED.test(item.text));
-  const where = placeOf(conditions, attrs?.conditions, answer);
+  const where = placeOf(conditions, attrs?.conditions, answer, input.conditionRoles);
   // 이미 충족한 값들은 한 묶음으로: 속성 이름은 겹치지 않게 모은다
   const doneLabels = [...new Set(satisfied.flatMap(item => labelsOf(item.index) ?? []))];
   const done = satisfied.length ? `${attributeTag(satisfied.map(item => readableLabel(item.text.replace(SATISFIED, ''))).join(', '), doneLabels)} 외에 ` : '';
