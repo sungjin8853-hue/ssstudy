@@ -1546,8 +1546,25 @@ test('sequence separators do not consume negative signs, exponents, or unfinishe
     assert.ok(!questionsFor(text).some(q => q.kind.startsWith('order-')), text);
   }
   // 31일: 다른 연결어 없이 홀로 쓴 `-`는 `;`(앞으로만)이다. 음수 기호는 자르지 않는다
-  const sequence = questionsFor('a--1-b').filter(q => q.kind === 'direct');
+  // 8일: 숫자에 붙여 쓴 `-`(`1-b`)는 글자라서 순서로 쓰려면 띄어 쓴다
+  const sequence = questionsFor('a--1 - b').filter(q => q.kind === 'direct');
   assert.deepEqual(sequence.map(q => [q.prompt, q.answer]), [['a', '-1'], ['-1', 'b']]);
+});
+
+test('plain text with digit-glued hyphens and colons or one-letter English compounds asks only recall', () => {
+  const { parseReviewMemoSyntax } = loadSource('utils/reviewMemoLogic.ts');
+  for (const text of ['2024-11-08', '3-2 반', 'COVID-19 증상', '10:30 출발', '비율 3:2', 'X-ray 촬영', 'e-mail 보내기', 'T-shirt']) {
+    assert.deepEqual(questionsFor(text).map(q => q.kind), ['recall'], text);
+    assert.ok(!parseReviewMemoSyntax(text).logicalOperators.some(item => item.operator === 'sequence'), text);
+  }
+  // 그 값이 칸 안에 있어도 칸을 나누지 않는다
+  assert.deepEqual(questionsFor('시험 : 2024-11-08').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['시험', '2024-11-08']]);
+  assert.deepEqual(questionsFor('출발 : 10:30').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['출발', '10:30']]);
+  // 띄어 쓴 것 · 한글끼리 · 영문자끼리는 그대로 논리어다
+  assert.deepEqual(questionsFor('서울-부산').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['서울', '부산']]);
+  assert.deepEqual(questionsFor('a-b').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['a', 'b']]);
+  assert.deepEqual(questionsFor('3 - 2').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['3', '2']]);
+  assert.deepEqual(questionsFor('DNA-RNA').filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]), [['DNA', 'RNA']]);
 });
 
 test('sequence questions ask the next and previous stage, then reconstruct the ordered remainder', () => {

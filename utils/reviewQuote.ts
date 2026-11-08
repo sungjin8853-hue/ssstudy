@@ -10,7 +10,7 @@
 export type QuoteRole = 'equal' | 'sequence' | 'reverse';
 
 export interface ReviewQuotes {
-  /** 따옴표 안(괄호 안이어도)의 `:` `;` `<` 위치. 4일부터 글자다(칸을 나누지 않고 논리어도 아니다) */
+  /** 따옴표 안(괄호 안이어도)의 `:` `;` `<` 위치. 4일부터 글자다(칸을 나누지 않고 논리어도 아니다). 8일: 숫자에 붙은 `-` `:`(isPlainTextMark)도 여기 담는다 */
   marks: ReadonlyMap<number, QuoteRole>;
   /** 따옴표 글자(여는 것과 닫는 것) 위치 */
   edges: ReadonlySet<number>;
@@ -31,6 +31,25 @@ let cached: ReviewQuotes = { marks: new Map(), edges: new Set(), literal: new Se
 /** 따옴표 글자(곧은 `'`, 둥근 `‘` `’`) */
 export const isQuoteMark = (character: string | undefined) => character === "'" || character === '‘' || character === '’';
 export const hasQuoteMark = (text: string) => /['‘’]/.test(text);
+
+/**
+ * 8일: 띄어 쓰지 않고 숫자에 붙은 `-` `:`는 논리어가 아니라 글자다(따옴표로 감싼 것과 같다).
+ *  - `-`: 양옆이 영문자 · 숫자이고 한쪽이라도 숫자(`2024-11-08`, `3-2`, `COVID-19`)
+ *  - `-`: 영문자 한 글자 + 소문자 세 글자 이상 낱말(`X-ray`, `e-mail`, `T-shirt`, `x-axis`)
+ *  - `:`: 양옆이 모두 숫자(`10:30`, `3:2`)
+ * 띄어 쓴 것(`3 - 2`, `10 : 30`)과 한글 · 영문자끼리(`서울-부산`, `a-b`)는 그대로 논리어다.
+ */
+export const isPlainTextMark = (text: string, index: number): boolean => {
+  const character = text[index];
+  if (character !== '-' && character !== ':') return false;
+  const left = text[index - 1];
+  const right = text[index + 1];
+  if (!left || !right) return false;
+  if (character === ':') return /\d/.test(left) && /\d/.test(right);
+  if (!/[A-Za-z0-9]/.test(left) || !/[A-Za-z0-9]/.test(right)) return false;
+  if (/\d/.test(left) || /\d/.test(right)) return true;
+  return !/[A-Za-z]/.test(text[index - 2] ?? '') && /^[a-z]{3,}/.test(text.slice(index + 1));
+};
 
 export const reviewQuotes = (original: string): ReviewQuotes => {
   if (cachedText === original) return cached;
@@ -76,6 +95,11 @@ export const reviewQuotes = (original: string): ReviewQuotes => {
       edges.add(open);
       edges.add(close);
       open = close;
+    }
+  }
+  if (/\d[-:]|[-:]\d/.test(text)) {
+    for (let at = 1; at < text.length - 1; at += 1) {
+      if (!marks.has(at) && !literal.has(at) && isPlainTextMark(text, at)) marks.set(at, text[at] === ':' ? 'equal' : 'sequence');
     }
   }
   cachedText = original;

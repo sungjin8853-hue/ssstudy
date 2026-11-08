@@ -2,13 +2,13 @@ import type { ReviewMemoChildrenRelation, ReviewMemoLogicalExpression, ReviewMem
 import { readReviewFieldOverride, reviewGroups } from './reviewFieldOverride';
 import { isReviewSlash } from './reviewSlash';
 import { isNoteShorthandOn, isRelationMark } from './noteShorthand';
-import { reviewQuotes } from './reviewQuote';
+import { isPlainTextMark, reviewQuotes } from './reviewQuote';
 import { openTailOf } from './noteOpenTail';
 
 type Operator = ReviewMemoLogicalOperator['operator'];
 
 export const isReviewSequenceSeparator = (text: string, index: number, start = 0, end = text.length): boolean => {
-  if (text[index] !== '-' || !isNoteShorthandOn()) return false;
+  if (text[index] !== '-' || !isNoteShorthandOn() || isPlainTextMark(text, index)) return false;
   let left = index - 1;
   let right = index + 1;
   while (left >= start && /\s/.test(text[left])) left -= 1;
