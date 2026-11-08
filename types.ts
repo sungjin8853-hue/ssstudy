@@ -177,6 +177,10 @@ export interface StudyLog {
   autoReviewQueued?: boolean;
   /** 자동 복습 넣기로 들어간 기록. 한 묶음은 같은 때(reviewRegisteredAt)에 들어갔다 */
   autoReviewRegistered?: boolean;
+  /** 8일: 자동으로 넣은 묶음의 난도를 물어볼 차례(학습을 저장한 뒤 · 같은 묶음에 공부가 더해진 뒤). 고르거나 닫으면 지운다 */
+  autoReviewAsk?: boolean;
+  /** 8일: 자동 묶음에 마지막으로 고른 난도. 있으면 이것이 묶음의 실제 난도다(없으면 추천 난도) */
+  autoReviewChosenGrade?: 'again' | 'hard' | 'good' | 'easy';
   /** 자동 복습으로 공부 시간을 모으는 중(정한 시간이 차면 한 묶음으로 넣는다, 4일) */
   autoReviewWaiting?: boolean;
   /** 측정 도중 "바로 복습 넣기"로 저장한 기록(4일): 저장하자마자 기다리던 기록과 함께 복습에 넣는다 */

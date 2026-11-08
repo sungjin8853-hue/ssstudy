@@ -11914,3 +11914,32 @@ test('8일: 복습과목 측정 — 학습노트 · 이전 복습노트를 저�
   const qs = questionsFor('A ; B\n[a] b =d =c').filter(q => q.prompt === 'b');
   assert.deepEqual(qs.map(q => [q.kind, q.answer, q.form]), [['direct', 'd AND c', 'equal']]);
 });
+
+test('8일: 자동 복습도 저장한 뒤 난도 피드백을 묻고, 같은 묶음에 더해지면 다시 묻는다 — 마지막에 고른 난도가 묶음의 실제 난도', () => {
+  const { registerAutoReview, chooseAutoReviewGrade, autoReviewAskOf } = loadSource('utils/autoReview.ts');
+  const pending = (id, end, minutes, start, endPage) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: minutes, pagesRead: endPage - start + 1,
+    startPage: start, endPage, pageCountIsExplicit: true, unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true });
+  let logs = registerAutoReview([pending('a', '2026-11-03T01:00:00.000Z', 30, 1, 5)], 'a');
+  let ask = autoReviewAskOf(logs, 's');
+  assert.deepEqual([ask.groupAt, ask.members.map(log => log.id)], ['2026-11-03T01:00:00.000Z', ['a']]);
+  logs = chooseAutoReviewGrade(logs, 's', ask.groupAt, 'hard');
+  assert.equal(autoReviewAskOf(logs, 's'), null, 'asked once');
+  const a = logs[0];
+  assert.deepEqual([a.feedbackGrade, a.autoReviewChosenGrade, a.reviewFsrs.lastReviewMs], ['hard', 'hard', Date.parse('2026-11-03T01:00:00.000Z')]);
+  // 같은 묶음에 더해지면 다시 묻고, 고르지 않고 닫아도 앞서 고른 난도가 묶음의 난도
+  logs = registerAutoReview([...logs, pending('b', '2026-11-03T03:30:00.000Z', 20, 6, 8)], 'b');
+  ask = autoReviewAskOf(logs, 's');
+  assert.deepEqual(ask.members.map(log => log.id), ['a', 'b']);
+  assert.ok(logs.every(log => log.feedbackGrade === 'hard'));
+  logs = chooseAutoReviewGrade(logs, 's', ask.groupAt);
+  assert.ok(logs.every(log => !log.autoReviewAsk && log.feedbackGrade === 'hard'));
+  // 다시 고르면 그것이 묶음 전체의 난도(다음 복습도 그 난도로)
+  logs = registerAutoReview([...logs, pending('c', '2026-11-03T03:50:00.000Z', 5, 9, 9)], 'c');
+  const before = logs.find(log => log.id === 'a').nextReviewDate;
+  logs = chooseAutoReviewGrade(logs, 's', autoReviewAskOf(logs, 's').groupAt, 'easy');
+  assert.ok(logs.every(log => log.feedbackGrade === 'easy' && log.autoReviewChosenGrade === 'easy'));
+  assert.ok(Date.parse(logs.find(log => log.id === 'a').nextReviewDate) > Date.parse(before));
+  assert.equal(new Set(logs.map(log => log.nextReviewDate)).size, 1);
+  const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('<AutoReviewFeedbackDialog') && summary.includes('autoReviewAskOf(logs, detailData.subject.id)'));
+});

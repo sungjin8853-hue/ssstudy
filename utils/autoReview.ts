@@ -1,6 +1,6 @@
 import type { StudyLog, Subject } from '../types';
 import { getLogProgressPages, getLogStudyDate } from './schedule';
-import { fsrsReview } from './fsrs';
+import { fsrsIntervalMs, fsrsReview } from './fsrs';
 import { registerPendingLog } from './review';
 import { pastSessions, previousUnitSpeed, recommendSubjectGrade, speedPerHour, SUBJECT_GRADE_RATING } from './subjectFeedback';
 import type { SubjectGrade } from './subjectFeedback';
@@ -112,13 +112,16 @@ export const registerAutoGroup = (logs: StudyLog[], memberIds: readonly string[]
   const ids = new Set(memberIds);
   const members = logs.filter(log => ids.has(log.id));
   if (!members.length) return logs;
-  const grade = autoReviewGradeOf(logs, members);
+  // 8일: 묶음에 고른 난도가 있으면 그것이 실제 난도다(마지막에 고른 것). 없으면 추천 난도
+  const chosen = members.map(log => log.autoReviewChosenGrade).find(Boolean);
+  const grade = chosen ?? autoReviewGradeOf(logs, members);
   const card = fsrsReview(null, SUBJECT_GRADE_RATING[grade], atMs);
   const starts = members.map(log => log.startPage ?? log.endPage).filter((page): page is number => Number.isFinite(page));
   const ends = members.map(log => log.endPage ?? log.startPage).filter((page): page is number => Number.isFinite(page));
   const range = starts.length && ends.length ? { start: Math.min(...starts), end: Math.max(...ends) } : undefined;
   return logs.map(log => (ids.has(log.id)
-    ? registerPendingLog({ ...log, feedbackGrade: grade, reviewFsrs: card, autoReviewQueued: undefined, autoReviewWaiting: undefined, autoReviewCut: undefined, autoReviewRegistered: true }, atMs, range)
+    ? registerPendingLog({ ...log, feedbackGrade: grade, reviewFsrs: card, autoReviewQueued: undefined, autoReviewWaiting: undefined, autoReviewCut: undefined, autoReviewRegistered: true,
+      ...(chosen ? { autoReviewChosenGrade: chosen } : {}) }, atMs, range)
     : log));
 };
 
@@ -150,7 +153,34 @@ export const registerAutoReview = (
   const groupAt = groups[groups.length - 1];
   const groupMs = groupAt ? Date.parse(groupAt) : (current.unitReviewPending ? atMs : Date.parse(current.reviewRegisteredAt ?? '') || atMs);
   const memberIds = [...new Set([...(groupAt ? next.filter(log => log.subjectId === current.subjectId && log.autoReviewRegistered && log.reviewRegisteredAt === groupAt).map(log => log.id) : []), current.id])];
-  return registerAutoGroup(next, memberIds, groupMs);
+  // 8일: 넣은 묶음의 난도를 물어본다(같은 묶음에 공부가 더해져도 다시 묻는다)
+  const askIds = new Set(memberIds);
+  return registerAutoGroup(next, memberIds, groupMs).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
+};
+
+/** 8일: 물어볼 자동 묶음(과목 하나에 가장 최근 것). 넣은 때와 기록들 */
+export const autoReviewAskOf = (logs: readonly StudyLog[], subjectId: string): { groupAt: string; members: StudyLog[] } | null => {
+  const asking = logs.filter(log => log.subjectId === subjectId && log.autoReviewAsk && log.autoReviewRegistered && log.reviewRegisteredAt);
+  if (!asking.length) return null;
+  const groupAt = asking.map(log => log.reviewRegisteredAt!).sort().at(-1)!;
+  return { groupAt, members: logs.filter(log => log.subjectId === subjectId && log.autoReviewRegistered && log.reviewRegisteredAt === groupAt) };
+};
+
+/**
+ * 8일: 자동 묶음의 난도를 고른 것으로 정한다(마지막에 고른 난도가 실제 종합 난도). grade가 없으면(닫기) 그대로 두고 묻기만 끝낸다.
+ * 이미 복습한 기록은 바꾸지 않는다. 기억(FSRS)은 묶음의 넣은 때에 그 난도로 평가한 것이다.
+ */
+export const chooseAutoReviewGrade = (logs: StudyLog[], subjectId: string, groupAt: string, grade?: SubjectGrade): StudyLog[] => {
+  const atMs = Date.parse(groupAt);
+  const card = grade ? fsrsReview(null, SUBJECT_GRADE_RATING[grade], atMs) : null;
+  return logs.map(log => {
+    if (log.subjectId !== subjectId) return log;
+    if (log.autoReviewAsk && log.reviewRegisteredAt !== groupAt) return { ...log, autoReviewAsk: undefined };
+    if (!log.autoReviewRegistered || log.reviewRegisteredAt !== groupAt) return log;
+    if (!card || !grade || !isFreshAutoRegistered(log)) return { ...log, autoReviewAsk: undefined };
+    return { ...log, autoReviewAsk: undefined, autoReviewChosenGrade: grade, feedbackGrade: grade, reviewFsrs: card,
+      nextReviewDate: new Date(card.lastReviewMs + fsrsIntervalMs(card)).toISOString() };
+  });
 };
 
 /**

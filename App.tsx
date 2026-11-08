@@ -21,7 +21,7 @@ import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, co
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
-import { autoReviewHoursOf, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
+import { autoReviewHoursOf, chooseAutoReviewGrade, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -965,6 +965,7 @@ const App: React.FC = () => {
                         onRestoreReviewQuestion={handleRestoreReviewQuestion}
                         onSkipEditIntake={handleSkipEditIntake}
                         onRegisterReview={handleRegisterReview}
+                        onChooseAutoReviewGrade={(subjectId, groupAt, grade) => setLogs(prev => chooseAutoReviewGrade(prev, subjectId, groupAt, grade))}
                         activeWeekday={dashboardWeekday}
                         activeStudyDate={dashboardDate}
                         onAddLog={handleLogSession}

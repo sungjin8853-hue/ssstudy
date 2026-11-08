@@ -35,7 +35,8 @@ import { NoteSheet } from './NoteSheet';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
-import { autoReviewHoursOf } from '../utils/autoReview';
+import { AutoReviewFeedbackDialog } from './AutoReviewFeedbackDialog';
+import { autoReviewAskOf, autoReviewHoursOf } from '../utils/autoReview';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
 import { pendingFeedbackOf } from '../utils/subjectFeedback';
 import { pendingChapterGroups } from '../utils/chapterReview';
@@ -59,6 +60,8 @@ interface Props {
   onSkipEditIntake?: (logIds: string[]) => void;
   /** 주면 복습을 기다리는 기록이 있는 학습과목 위쪽에 "복습에 넣기" 버튼이 생긴다. 누르면 난도를 고르는 창이 뜨고, 난도를 고르면 그 과목의 대기 기록이 모두 그 난도로 복습에 들어간다 */
   onRegisterReview?: (subjectId: string, grade: SubjectGrade, logIds?: string[]) => void;
+  /** 8일: 자동으로 넣은 묶음의 난도를 고르거나(grade) 닫는다(grade 없음) */
+  onChooseAutoReviewGrade?: (subjectId: string, groupAt: string, grade?: SubjectGrade) => void;
   activeWeekday: number;
   activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
@@ -512,7 +515,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -840,6 +843,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const setAutoReview = (on: boolean) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewRegister: on || undefined }]); };
   const setAutoReviewHours = (hours: number) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewHours: hours }]); };
   // 자동 복습으로 모으는 중인 기록(4일): 정한 공부 시간이 차면 한 묶음으로 들어간다
+  // 8일: 자동으로 넣은 묶음의 난도를 물어볼 차례면(저장 직후 · 같은 묶음에 더해진 뒤) 난도 피드백 창
+  const autoAsk = useMemo(() => (detailData && !detailIsReview ? autoReviewAskOf(logs, detailData.subject.id) : null), [logs, detailData, detailIsReview]);
   const autoWaiting = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.autoReviewWaiting && log.subjectId === detailData.subject.id) : []), [logs, detailData, detailIsReview]);
   // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다(자동으로 넣는 중이면 설정을 보도록 둔다)
   useEffect(() => { if (pendingReviewCount === 0 && !autoReview) setChoosingReview(false); }, [pendingReviewCount, autoReview]);
@@ -1142,6 +1147,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
           onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}
           onChoose={(grade, logIds) => { rememberChapterPrompt(); onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />
+      )}
+
+      {autoAsk && onChooseAutoReviewGrade && detailData && !choosingReview && (
+        <AutoReviewFeedbackDialog key={`${autoAsk.groupAt}:${autoAsk.members.map(log => log.id).join(',')}`} logs={logs} members={autoAsk.members} groupAt={autoAsk.groupAt} pageLabel={pagePos}
+          onChoose={grade => onChooseAutoReviewGrade(detailData.subject.id, autoAsk.groupAt, grade)}
+          onClose={() => onChooseAutoReviewGrade(detailData.subject.id, autoAsk.groupAt)} />
       )}
 
       {/* 기본 복습 화면에서는 뒷순서 할 일 한 줄(이어서 · 학습 범위)을 두지 않는다: 아래 지표와 겹친다(21:55) */}
