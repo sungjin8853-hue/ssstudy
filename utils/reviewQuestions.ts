@@ -1536,17 +1536,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       visitGroups(original, node, scope ? [scope] : [], original.type === 'relation' ? implicit : [readCell(original)?.sets ?? []]);
     });
   });
-  if (!questions.length && memo.trim()) {
-    // `[!]`에 걸린 줄·토글은 노트 회상에서도 뺀다
-    const blockedIds = new Set<string>();
-    nodes.forEach(node => { if (node.type === 'toggle' ? (isLogicToggleTitle(node.text) || (node.parentId !== null && blockedIds.has(node.parentId))) : (node.parentId !== null && blockedIds.has(node.parentId))) blockedIds.add(node.id); });
-    const kept = nodes.filter(node => !blockedIds.has(node.id)).map(node => ({ node, text: node.type === 'toggle' ? node.text : node.text.split('\n').filter(line => !hasLogicMark(line)).join('\n') }));
-    const text = kept.map(item => item.text).join('\n');
-    if (text.trim()) questions.push({ key: 'note', prompt: '정리노트', answer: text, kind: 'recall', level: 1, priority: 1, importance: 0,
-      direction: 'forward', conditions: [], conditionSpans: [], recallUnits: 0, providedUnits: 0, difficulty: 0,
-      columns: { prompt: [], answer: [], conditions: [] },
-      answerSpans: kept.filter(item => item.text.trim()).map(item => ({ nodeId: item.node.id, start: 0, end: item.node.text.length })), promptSpans: [] });
-  }
+  // 8일: 논리어 · 연결어가 없는 노트로 문제를 만들지 않는다. 전에는 문제가 하나도 없으면 아무 값도 보여 주지 않고
+  // 노트 전체를 떠올리게 하는 '정리노트' 회상 문제(kind 'recall')를 하나 넣었는데 없앴다("전체 상기 문제 … 있으면 없애라")
   questions.forEach(question => {
     const nodeId = question.answerSpans[0]?.nodeId ?? question.promptSpans[0]?.nodeId;
     const scoped = nodeId ? criterionByNode.get(nodeId) : undefined;

@@ -133,7 +133,7 @@ test('questions are stable items and do not depend on a difficulty stage', () =>
   assert.deepEqual(gate.getReviewGateQuestionKeys('[alpha] label< beta // other< gamma'), sourceQuestions.filter(q => q.kind === 'reverse').map(q => q.key));
   // `;`는 충분조건이라 앞으로만 낸다: `label; beta`의 문제는 `label: beta`의 정방향 문제와 같은 문제다.
   assert.deepEqual(gate.getReviewGateQuestionKeys('[alpha] label; beta // other; gamma'), sourceQuestions.filter(q => q.kind === 'direct').map(q => q.key));
-  assert.deepEqual(gate.getReviewGateQuestionKeys('[alpha] plain recall'), ['note']);
+  assert.deepEqual(gate.getReviewGateQuestionKeys('[alpha] plain recall'), []);
   assert.deepEqual(gate.getReviewGateQuestionKeys(' '), []);
 });
 
@@ -208,7 +208,7 @@ test('relation parsing preserves note text and ignores operators within topics',
   // 같은 연결어를 붙여 쓴 `;;`는 칸 하나를 건너뛴다(A와 B는 1번째와 3번째 칸)
   assert.deepEqual(gate.parseReviewGateMemo('A;;B').questions.map(q => [q.kind, q.prompt, q.answer]), [['direct', 'A', 'B']]);
   // 서로 다른 연결어를 붙여 쓴 `:;`는 읽을 수 없다
-  assert.ok(gate.parseReviewGateMemo('A:;B').questions.every(q => q.kind === 'recall'));
+  assert.deepEqual(gate.parseReviewGateMemo('A:;B').questions, []);
 });
 
 test('toggle titles and child text use the same relation directions', () => {
@@ -1451,21 +1451,14 @@ test('question content displays the target classification before reveal and the 
   assert.equal(questionsFor(memo).find(q => q.kind === 'direct' && q.prompt === 'beta').key, question.key);
 });
 
-test('fallback note recall still renders the full note and its global criterion', () => {
-  const React = require('react');
-  const { renderToStaticMarkup } = require('react-dom/server');
-  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
-  const memo = '기호가 없는 정리 내용';
-  const question = questionsFor(memo)[0];
-  const render = () => renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question,
-    criterion: '대상:설명', revealed: true, memo }));
-  const html = inStyle('flash', render);
-  assert.ok(html.includes('data-review-note-summary') && html.includes(memo));
-  // 세션 노트 분류 줄은 어느 모양에서도 따로 보이지 않는다
-  assert.ok(!html.includes('data-classification-criterion') && !html.includes('대상:설명'));
-  // 줄글에서도 세션 노트 기준 줄을 가져오지 않는다
-  const prose = inStyle('prose', render);
-  assert.ok(prose.includes('data-review-note-summary') && prose.includes(memo) && !prose.includes('data-classification-criterion'));
+test('notes without logic words make no questions: no whole-note recall that shows nothing or only the set', () => {
+  // 8일: 논리어 · 연결어가 없는 노트는 문제를 내지 않는다(전에는 '정리노트' 전체 회상 문제 하나를 냈다)
+  for (const memo of ['기호가 없는 정리 내용', '> 과일\n사과\n배', '[과일] 사과', '[과일] 사과\n[과일] 배', '> [과일]\n사과', '> 과일\n> 열대\n망고', '[!] 삼각형 : 빨강']) {
+    assert.deepEqual(questionsFor(memo), [], memo);
+  }
+  // 논리어가 있는 줄은 그대로 묻고, 같은 노트의 순수 글자 줄은 묻지 않는다
+  assert.deepEqual(questionsFor('> 과일\n사과 : 빨강\n그냥 글').map(q => [q.kind, q.prompt, q.answer]), [['direct', '사과', '빨강'], ['reverse', '빨강', '사과']]);
+  assert.deepEqual(questionsFor('> 과일 :\n사과').filter(q => q.kind === 'direct').map(q => q.answer), ['사과']);
 });
 
 test('equals is a higher-importance colon while periods, decimals and spaces stay literal', () => {
@@ -1551,10 +1544,10 @@ test('sequence separators do not consume negative signs, exponents, or unfinishe
   assert.deepEqual(sequence.map(q => [q.prompt, q.answer]), [['a', '-1'], ['-1', 'b']]);
 });
 
-test('plain text with digit-glued hyphens and colons or one-letter English compounds asks only recall', () => {
+test('plain text with digit-glued hyphens and colons or one-letter English compounds asks nothing', () => {
   const { parseReviewMemoSyntax } = loadSource('utils/reviewMemoLogic.ts');
   for (const text of ['2024-11-08', '3-2 반', 'COVID-19 증상', '10:30 출발', '비율 3:2', 'X-ray 촬영', 'e-mail 보내기', 'T-shirt']) {
-    assert.deepEqual(questionsFor(text).map(q => q.kind), ['recall'], text);
+    assert.deepEqual(questionsFor(text), [], text);
     assert.ok(!parseReviewMemoSyntax(text).logicalOperators.some(item => item.operator === 'sequence'), text);
   }
   // 그 값이 칸 안에 있어도 칸을 나누지 않는다
@@ -7215,8 +7208,6 @@ test('every question kind is asked as a workbook sentence: no AND/OR in the ques
   assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’ 다음 자리의 ‘p’에 대응하는 것은?');
   assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’ → ‘p’ 다음 자리의 ‘q’에 대응하는 것은?'));
   assert.equal(questionsFor(':::toggle 자동차 :\n엔진:동력\n:::end').find(q => q.kind === 'direct' && q.prompt === '엔진').statement, '‘자동차’ 다음 자리의 ‘엔진’ 다음 값은?');
-  // 노트 회상은 그대로
-  assert.equal(questionsFor('그냥 글').find(q => q.kind === 'recall').statement, undefined);
 });
 
 test('ability-convert cards are sentences too: the given values are in the sentence and the card keeps only the answer slots', () => {
@@ -8243,10 +8234,10 @@ test('the = and - shorthand can be turned off: both become plain letters everywh
     assert.deepEqual(shape('a=b=c'), ['direct|a|b AND c', 'direct|b|a AND c', 'direct|c|a AND b'], '8일: an all-= row asks everything equal to each value, no order questions');
     shorthand.setNoteShorthand(false);
     assert.equal(shorthand.relationMarks(), ':;<');
-    assert.deepEqual(shape('a=b'), ['recall|정리노트|a=b'], 'a=b is one plain text');
-    assert.deepEqual(shape('서울-부산-대구'), ['recall|정리노트|서울-부산-대구']);
+    assert.deepEqual(shape('a=b'), [], 'a=b is one plain text: no questions');
+    assert.deepEqual(shape('서울-부산-대구'), []);
     assert.deepEqual(shape('x: y = z'), ['direct|x|y = z', 'reverse|y = z|x'], ':, ; and < still split');
-    assert.deepEqual(shape('a=b=c'), ['recall|정리노트|a=b=c']);
+    assert.deepEqual(shape('a=b=c'), []);
     assert.deepEqual(shape('2-1: 답'), ['direct|2-1|답', 'reverse|답|2-1']);
     assert.equal(isReviewSequenceSeparator('서울-부산', 2), false);
     assert.deepEqual(parseReviewMemoSyntax('a-b, c').logicalOperators.map(item => item.operator), ['and'], 'only the comma is a logic operator');
@@ -9679,10 +9670,6 @@ test('flash card renders one row of keywords; the asked slot is "?" until the an
   const blankShow = revealed => inStyle('flash', () => renderToStaticMarkup(React.createElement(ReviewQuestionContent, { memo: 'A:p=q=r', question: blank, criterion: null, revealed })));
   assert.ok(blankShow(false).includes('data-flash-chain="true"') && blankShow(false).includes('data-flash-blank="true"'));
   assert.ok(blankShow(true).includes('data-flash-answer="true"') && !blankShow(true).includes('data-flash-slot'));
-  // 노트 회상은 키워드 줄이 없다(예전 카드)
-  const recall = questionsFor('기호가 없는 정리 내용')[0];
-  const recallHtml = inStyle('flash', () => renderToStaticMarkup(React.createElement(ReviewQuestionContent, { memo: '기호가 없는 정리 내용', question: recall, criterion: '대상:설명', revealed: false })));
-  assert.ok(!recallHtml.includes('data-flash-row'));
 });
 
 test('chapters: 1~10, 20~30 are parsed and counting, end page and the next-chapter hint skip the gap between chapters', () => {
@@ -10062,7 +10049,7 @@ test(':: skips a column in questions: the column names, importance and sentences
   // `;;` `<<`도 같다, 서로 다른 연결어를 붙인 `:;`와 끝·앞의 `::`는 읽을 수 없다
   assert.deepEqual(asked('a;;c').map(q => [q.prompt, q.answer, q.direction]), [['a', 'c', 'forward']]);
   assert.deepEqual(questionsFor('a<<c').filter(q => q.kind === 'reverse').map(q => [q.prompt, q.answer, q.direction]), [['c', 'a', 'reverse']]);
-  ['a:;c', 'A::', '::B'].forEach(memo => assert.ok(questionsFor(memo).every(q => q.kind === 'recall'), memo));
+  ['a:;c', 'A::', '::B'].forEach(memo => assert.deepEqual(questionsFor(memo), [], memo));
   // 모든 칸에 집합이 있는 줄은 건너뛰어도 능력 변환이다
   assert.ok(questionsFor('[A:D] B :: [K] L').some(q => q.kind === 'convert' && q.prompt === 'B' && q.answer === 'L'));
   // 토글 제목 아래 줄: 위쪽 토글이 이어주는 칸 집합도 건너뛴 칸 번호대로 읽는다
