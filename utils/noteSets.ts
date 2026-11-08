@@ -768,6 +768,7 @@ export const knownSetNames = (index: NoteSetIndex): string[] => unique([
 /** 이름의 바로 위 집합들(토글 제목 · 아래 항목이 있는 셀 · `[집합] 셀`), 쓴 그대로 */
 /** `=` · `-`만으로 이은 줄(`b = d = c`)의 값들(띄어쓰기를 뺀 꼴). 그런 줄이 아니면 빈 목록 */
 const loneValues = (shown: string): string[] => {
+  if (!isNoteShorthandOn()) return [];
   const cuts = topLevelCuts(shown, '=-');
   if (!cuts.length) return [];
   const bounds = [-1, ...cuts, shown.length];

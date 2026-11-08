@@ -132,7 +132,8 @@ const MemberInput: React.FC<{ name: string; dark: boolean; onCommit: (next: stri
     className={`min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 text-[15px] font-bold outline-none focus:ring-2 ${dark ? 'text-slate-100 focus:bg-slate-700 focus:ring-indigo-400' : 'text-slate-900 focus:bg-teal-50 focus:ring-teal-400'}`} />;
 };
 
-const GrowingTextarea = ({ value, inputRef, colorColons, dark, fieldOverrides, fieldBase = 0, minLine = 32, ghostText = false, onUnfold, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+const GrowingTextarea = ({ value, inputRef, colorColons, dark, fieldOverrides, fieldBase = 0, minLine = 32, ghostText = false, titleField = false, onUnfold, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  titleField?: boolean;
   inputRef: (element: HTMLTextAreaElement | null) => void;
   colorColons: boolean;
   dark: boolean;
@@ -227,7 +228,7 @@ const GrowingTextarea = ({ value, inputRef, colorColons, dark, fieldOverrides, f
     event.clipboardData.setData('text/plain', stripGhosts(picked));
     if (cut) field.ownerDocument.execCommand('delete');
   };
-  return <MemoColorTextarea {...props} rows={1} value={display} colorColons={colorColons} dark={dark} fieldOverrides={fieldOverrides} fieldBase={fieldBase}
+  return <MemoColorTextarea {...props} rows={1} value={display} colorColons={colorColons} dark={dark} fieldOverrides={fieldOverrides} fieldBase={fieldBase} titleField={titleField}
     ghosts={labels.length ? labels : undefined} storedValue={text}
     onSelect={event => { settle(event.currentTarget); props.onSelect?.(event); }}
     onMouseUp={event => { settle(event.currentTarget); props.onMouseUp?.(event); }}
@@ -741,7 +742,7 @@ export const ReviewMemoEditor: React.FC<Props> = ({
               )}
               <div className="min-w-0 flex-1">
                 <GrowingTextarea inputRef={register(block.id, block.type === 'toggle' ? 'title' : 'text')} minLine={grid ? NOTE_GRID_CELL : 32}
-                  ghostText={block.type === 'text'}
+                  ghostText={block.type === 'text'} titleField={block.type === 'toggle'}
                   onUnfold={block.type === 'text' ? (line, full) => {
                     // 생략된 위치 `[..B]`를 펼쳐 그 줄 맨 앞에 실제 글자로 넣는다: 그 뒤로는 다른 글처럼 고치고 지울 수 있다
                     const lines = block.text.split('\n');

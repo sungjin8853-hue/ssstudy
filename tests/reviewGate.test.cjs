@@ -11943,3 +11943,26 @@ test('8일: 자동 복습도 저장한 뒤 난도 피드백을 묻고, 같은 �
   const summary = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes('<AutoReviewFeedbackDialog') && summary.includes('autoReviewAskOf(logs, detailData.subject.id)'));
 });
+
+test('8일 점검: 복습한 자동 묶음은 다시 넣거나 묻지 않음, 줄 끝 {X}의 : 색, 단축어를 끄면 = · - 줄의 값이 집합에 들지 않음', () => {
+  const { registerAutoReview, autoReviewAskOf } = loadSource('utils/autoReview.ts');
+  const pending = (id, end, minutes, start, endPage) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: minutes, pagesRead: endPage - start + 1,
+    startPage: start, endPage, pageCountIsExplicit: true, unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true });
+  let logs = registerAutoReview([pending('a', '2026-11-03T01:00:00.000Z', 30, 1, 5)], 'a');
+  // a를 그사이 복습했다(물어볼 것도 없다)
+  logs = logs.map(log => ({ ...log, reviewStep: 1, isReviewed: true }));
+  assert.equal(autoReviewAskOf(logs, 's'), null);
+  logs = registerAutoReview([...logs, pending('b', '2026-11-03T02:40:00.000Z', 20, 6, 8)], 'b');
+  const a = logs.find(log => log.id === 'a');
+  assert.deepEqual([a.reviewStep, a.isReviewed], [1, true], 'a reviewed record is not put in again');
+  assert.equal(logs.find(log => log.id === 'b').reviewRegisteredAt, '2026-11-03T02:40:00.000Z');
+  const colors = loadSource('utils/reviewMemoColors.ts');
+  assert.ok(colors.splitReviewMemoColonColors('사과 : {빨강}').some(part => part.colonIndex === 0), 'a value at the end of a line: the colon is coloured');
+  assert.ok(!colors.splitReviewMemoColonColors('자동차 :{부품}', new Map(), 0, true).some(part => part.colonIndex !== undefined), 'a toggle title name is still a name');
+  const shorthand = loadSource('utils/noteShorthand.ts');
+  const ns = loadSource('utils/noteSets.ts');
+  try {
+    shorthand.setNoteShorthand(false);
+    assert.deepEqual(ns.upperSetsOf(ns.buildNoteSetIndex(['[a] X-ray = 엑스선']), 'ray'), []);
+  } finally { shorthand.setNoteShorthand(true); }
+});

@@ -152,7 +152,8 @@ export const registerAutoReview = (
     .sort();
   const groupAt = groups[groups.length - 1];
   const groupMs = groupAt ? Date.parse(groupAt) : (current.unitReviewPending ? atMs : Date.parse(current.reviewRegisteredAt ?? '') || atMs);
-  const memberIds = [...new Set([...(groupAt ? next.filter(log => log.subjectId === current.subjectId && log.autoReviewRegistered && log.reviewRegisteredAt === groupAt).map(log => log.id) : []), current.id])];
+  // 이미 복습한 기록은 다시 넣지 않는다(넣으면 복습 단계가 처음으로 돌아간다)
+  const memberIds = [...new Set([...(groupAt ? next.filter(log => log.subjectId === current.subjectId && log.reviewRegisteredAt === groupAt && isFreshAutoRegistered(log)).map(log => log.id) : []), current.id])];
   // 8일: 넣은 묶음의 난도를 물어본다(같은 묶음에 공부가 더해져도 다시 묻는다)
   const askIds = new Set(memberIds);
   return registerAutoGroup(next, memberIds, groupMs).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
@@ -160,10 +161,11 @@ export const registerAutoReview = (
 
 /** 8일: 물어볼 자동 묶음(과목 하나에 가장 최근 것). 넣은 때와 기록들 */
 export const autoReviewAskOf = (logs: readonly StudyLog[], subjectId: string): { groupAt: string; members: StudyLog[] } | null => {
-  const asking = logs.filter(log => log.subjectId === subjectId && log.autoReviewAsk && log.autoReviewRegistered && log.reviewRegisteredAt);
+  // 그사이 복습을 해 버린 묶음은 묻지 않는다(고를 수 있는 기록이 없다)
+  const asking = logs.filter(log => log.subjectId === subjectId && log.autoReviewAsk && isFreshAutoRegistered(log));
   if (!asking.length) return null;
   const groupAt = asking.map(log => log.reviewRegisteredAt!).sort().at(-1)!;
-  return { groupAt, members: logs.filter(log => log.subjectId === subjectId && log.autoReviewRegistered && log.reviewRegisteredAt === groupAt) };
+  return { groupAt, members: logs.filter(log => log.subjectId === subjectId && log.reviewRegisteredAt === groupAt && isFreshAutoRegistered(log)) };
 };
 
 /**

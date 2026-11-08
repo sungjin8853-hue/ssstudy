@@ -11,6 +11,8 @@ interface Props extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   fieldOverrides?: ReadonlyMap<number, string>;
   /** 이 글이 시작하는 칸 번호(끝이 열린 토글 제목 아래 줄은 제목 뒤에서 시작) */
   fieldBase?: number;
+  /** 토글 제목 칸(줄 끝 `:{이름}`이 칸 이름표) */
+  titleField?: boolean;
   /**
    * 줄 맨 앞에 글자처럼 끼워 넣은 위치 `[..B]`. 이때 value는 끼운 글이 들어간 보이는 글이고, storedValue는 끼우기 전의 저장하는 글이다.
    * 색은 저장하는 글로 정해 끼운 글이 색칠에 끼어들지 않고, 끼운 글만 어두운 점선 밑줄로 보인다(글자 폭은 그대로).
@@ -52,7 +54,7 @@ const withGhostParts = (text: string, parts: MemoColorPart[], ghosts: readonly G
 };
 
 export const MemoColorTextarea = forwardRef<HTMLTextAreaElement, Props>(function MemoColorTextarea({
-  value, colorColons, dark = false, wrapperClassName = '', fieldOverrides, fieldBase = 0, ghosts, storedValue, ...props
+  value, colorColons, dark = false, wrapperClassName = '', fieldOverrides, fieldBase = 0, titleField = false, ghosts, storedValue, ...props
 }, ref) {
   const mirror = useRef<HTMLDivElement | null>(null);
   const field = useRef<HTMLTextAreaElement | null>(null);
@@ -76,7 +78,7 @@ export const MemoColorTextarea = forwardRef<HTMLTextAreaElement, Props>(function
   }, [value, showColors]);
   const mirrorText = hasGhosts ? storedValue! : String(value);
   const mirrorParts: Array<MemoColorPart & { ghost?: string }> = !showColors ? [] : (() => {
-    const colored = colorColons ? markReviewMemoOperators(mirrorText, markReviewMemoLogicWords(mirrorText, splitReviewMemoColonColors(mirrorText, fieldOverrides, fieldBase))) : [{ text: mirrorText }];
+    const colored = colorColons ? markReviewMemoOperators(mirrorText, markReviewMemoLogicWords(mirrorText, splitReviewMemoColonColors(mirrorText, fieldOverrides, fieldBase, titleField), titleField), titleField) : [{ text: mirrorText }];
     return hasGhosts ? withGhostParts(mirrorText, colored, ghosts!) : colored;
   })();
   return <div className={`relative ${wrapperClassName}`}>

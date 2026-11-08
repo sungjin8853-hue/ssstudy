@@ -20,7 +20,8 @@ export interface MemoColorPart {
 }
 
 /** `base`: 이 글이 시작하는 칸 번호. 끝이 열린 토글 제목(`자동차 :`) 아래 줄은 제목의 칸 수만큼 뒤에서 시작하므로 `:` 색도 그 번호부터 센다(문제 만들기와 같은 번호). */
-export const splitReviewMemoColonColors = (text: string, inherited: ReadonlyMap<number, string> = new Map(), base = 0): MemoColorPart[] => {
+/** endIsLabel: 줄 끝 `:{X}`를 칸 이름표로 볼 것인가(토글 제목만 true, 8일: 보통 줄은 값) */
+export const splitReviewMemoColonColors = (text: string, inherited: ReadonlyMap<number, string> = new Map(), base = 0, endIsLabel = false): MemoColorPart[] => {
   const parts: MemoColorPart[] = [];
   let start = 0;
   let colonIndex = base;
@@ -48,7 +49,7 @@ export const splitReviewMemoColonColors = (text: string, inherited: ReadonlyMap<
     // 따옴표 `'…'` 안의 `:` `;` `<`는 칸을 나누지 않으므로 칸 색(`:` 번호)을 받지 않는다(아래 논리어 색을 받는다).
     if (!isRelationMark(text[index]) || quoted.has(index)) continue;
     // `=`는 칸을 나누지 않는 한 칸 안의 논리어라서 자리 색을 받지 않는다(여기서는 `:` `;` `<`만 칸을 나눈다).
-    const override = readReviewFieldOverride(text, index + 1);
+    const override = readReviewFieldOverride(text, index + 1, text.length, endIsLabel);
     fieldIndex += 1;
     if (override || inherited.has(fieldIndex)) {
       if (override) index = override.end - 1;
@@ -108,7 +109,7 @@ const frameQuotes = (text: string) => {
  * 조각은 글을 더하거나 빼지 않고 논리어 경계에서만 더 잘게 나뉜다(이어 붙이면 원문과 같다). 아직 닫지 않은 `[` `(`는 논리어가 아니다.
  * `:` 조각의 colonIndex는 그대로 두고 logic만 켠다. 논리어가 하나도 없으면 받은 조각을 그대로 돌려준다.
  */
-export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): MemoColorPart[] => {
+export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[], endIsLabel = false): MemoColorPart[] => {
   if (!/[\[(@#'{]/.test(text)) return parts;
   const inside = new Uint8Array(text.length);
   let any = false;
@@ -127,7 +128,7 @@ export const markReviewMemoLogicWords = (text: string, parts: MemoColorPart[]): 
     const { marks } = reviewQuotes(text);
     for (let index = 0; index < text.length; index += 1) {
       if (!isRelationMark(text[index]) || marks.has(index)) continue;
-      const override = readReviewFieldOverride(text, index + 1);
+      const override = readReviewFieldOverride(text, index + 1, text.length, endIsLabel);
       if (override) { mark(override.start, override.end); index = override.end - 1; }
     }
   }
@@ -182,7 +183,7 @@ export const getReviewMemoLogicColor = (dark: boolean) => (dark ? '#5eead4' : '#
  * 문제를 만들 때 실제로 논리어로 읽히는 것만 칠한다: `-`는 이음표로 읽히는 자리(양쪽에 글이 없는 `-`·음수 `-5`·지수 `1e-5` 제외), `=`와 `-`는 단축어가 켜진 때만,
  * `:{이름}`의 이름 안쪽과 `[ ]` 덩어리(이미 논리어 색) 안쪽은 칠하지 않는다. 관계 기호 `:` `;` `<`의 칸 색은 그대로다.
  */
-export const markReviewMemoOperators = (text: string, parts: MemoColorPart[]): MemoColorPart[] => {
+export const markReviewMemoOperators = (text: string, parts: MemoColorPart[], endIsLabel = false): MemoColorPart[] => {
   const quoted = reviewQuoteMarks(text);
   if (!/[,\-=]/.test(text) && !quoted.size) return parts;
   // 따옴표 안의 `,` `-` `=`와 `#` 틀의 따옴표 안 글자는 논리어가 아니라 글자다
@@ -204,7 +205,7 @@ export const markReviewMemoOperators = (text: string, parts: MemoColorPart[]): M
       // 색은 일반 글자 색이다(29일: 따옴표는 안에 논리어가 없다는 표시). 기호 하나만 감싼 `':'`만 논리어 색이다
       // 4일: 따옴표 안은 모두 글자라 논리어 색을 입히지 않는다
     } else if (isRelationMark(character)) {
-      const override = readReviewFieldOverride(text, index + 1);
+      const override = readReviewFieldOverride(text, index + 1, text.length, endIsLabel);
       if (override) index = override.end - 1;
     } else if (literal.has(index)) continue;
     else if (character === ',') kinds.set(index, 'and');
