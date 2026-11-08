@@ -21,7 +21,8 @@ export interface OpenTail {
 const isConnector = (character: string | undefined): character is ':' | ';' | '<' => character === ':' || character === ';' || character === '<';
 
 /** 글 맨 끝의 덜 끝난 관계. 괄호·대괄호 안이나 따옴표 안의 기호, 글 앞에 아무것도 없는 기호는 꼬리가 아니다. */
-export const openTailOf = (text: string): OpenTail | null => {
+/** named: `A :{이름}`(칸 이름만 있는 끝)도 덜 끝난 것으로 보는가. 토글 제목만 그렇다(8일: 보통 줄 끝 `{X}`는 값). */
+export const openTailOf = (text: string, named = true): OpenTail | null => {
   let end = text.length;
   while (end > 0 && /\s/.test(text[end - 1])) end -= 1;
   if (end === 0) return null;
@@ -34,10 +35,10 @@ export const openTailOf = (text: string): OpenTail | null => {
   const free = (index: number) => !quoted.has(index) && depth[index] === 0;
   const hasContent = (before: number) => text.slice(0, before).trim().length > 0;
   // `A :{이름}`처럼 연결어 뒤에 칸 이름만 있는 끝
-  const named = /([:;<])\s*\{[^{}\n]*\}\s*([,\-=])?$/.exec(text.slice(0, end));
-  if (named && free(named.index) && hasContent(named.index)) {
-    const logic = named[2] && (named[2] === ',' || isNoteShorthandOn()) ? named[2] as ',' | '-' | '=' : undefined;
-    return { connector: named[1] as ':' | ';' | '<', ...(logic ? { logic } : {}), start: named.index, end };
+  const nameTail = named ? /([:;<])\s*\{[^{}\n]*\}\s*([,\-=])?$/.exec(text.slice(0, end)) : null;
+  if (nameTail && free(nameTail.index) && hasContent(nameTail.index)) {
+    const logic = nameTail[2] && (nameTail[2] === ',' || isNoteShorthandOn()) ? nameTail[2] as ',' | '-' | '=' : undefined;
+    return { connector: nameTail[1] as ':' | ';' | '<', ...(logic ? { logic } : {}), start: nameTail.index, end };
   }
   const last = text[end - 1];
   if (isConnector(last) && free(end - 1) && hasContent(end - 1)) return { connector: last, start: end - 1, end };
@@ -76,7 +77,7 @@ const toggleEnd = (lines: readonly string[], from: number): number => {
  * 문제 만들기·관계도·집합 읽기가 이 글을 쓰고, 노트에 저장된 글은 바뀌지 않는다.
  */
 export const expandOpenLines = (memo: string): string => {
-  if (!memo || !/[:;<,\-=}]\s*\n/.test(memo)) return memo;
+  if (!memo || !/[:;<,\-=]\s*\n/.test(memo)) return memo;
   const unit = (list: readonly string[], index: number): { lines: string[]; next: number } => {
     const line = list[index];
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
@@ -85,7 +86,7 @@ export const expandOpenLines = (memo: string): string => {
       return { lines: [line, ...each(list.slice(index + 1, end)), list[end]], next: end + 1 };
     }
     const following = list[index + 1];
-    if (line === REVIEW_MEMO_TOGGLE_END || !openTailOf(line) || following === undefined || !following.trim() || following === REVIEW_MEMO_TOGGLE_END) {
+    if (line === REVIEW_MEMO_TOGGLE_END || !openTailOf(line, false) || following === undefined || !following.trim() || following === REVIEW_MEMO_TOGGLE_END) {
       return { lines: [line], next: index + 1 };
     }
     const child = unit(list, index + 1);

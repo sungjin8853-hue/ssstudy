@@ -187,6 +187,8 @@ const groupHead = (inner: string): string | null => {
 };
 
 /** `base`: 이 줄이 시작하는 칸 번호. 맨 위 줄은 0이고, `> 제목 :` 아래 줄은 제목 칸 수만큼 뒤에서 시작한다(분류기준은 세션·상위 토글의 해당 `:`번째를 따른다). */
+/** 8일: 지금 읽는 노트의 보통 줄 노드(토글 제목이 아님). 줄 끝 `:{X}`가 이름표가 아니라 값인 곳 */
+let lineNodeIds = new Set<string>();
 function parseExpression(text: string, nodeId: string, from = 0, to = text.length, inherited: ReadonlyMap<number, string> = new Map(), base = 0): Expression {
   const edges = reviewQuotes(text).edges;
   const sortedEdges = edges.size ? [...edges].sort((a, b) => a - b) : [];
@@ -237,7 +239,7 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
     const fields = ends.map((end, index) => {
       const start = index === 0 ? from : relationCuts[index - 1] + 1;
       if (index > 0) { column += skips[index - 1]; skipped += skips[index - 1]; }
-      const override = index > 0 ? readReviewFieldOverride(text, start, end) : undefined;
+      const override = index > 0 ? readReviewFieldOverride(text, start, end, !lineNodeIds.has(nodeId)) : undefined;
       const label = override?.label ?? inherited.get(base + index + skipped);
       classifications.push(label !== undefined ? label : index === 0 ? column : ++column);
       // 칸 전체가 `( )`인 칸(`X : (A:B)`)의 안쪽 `:`는 그 칸 번호부터 이어서 센다
@@ -748,6 +750,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   const memo = expandNestLines(expandOpenLines(normalizeNotePunctuation(original)));
   const tailByNode = new Map<string, OpenTail>();
   const nodes: QuestionNoteNode[] = [];
+  lineNodeIds = new Set<string>();
   const expressions = new Map<string, Expression[]>();
   const inheritedByNode = new Map<string, ReadonlyMap<number, string>>();
   const incomingByNode = new Map<string, AtReference | null>();
@@ -795,6 +798,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const value = block.type === 'toggle' ? blankTitle(written) : written;
       if (block.type === 'toggle') { const open = openTailOf(blankTitleCriteria(written)); if (open) tailByNode.set(id, open); }
       nodes.push({ id, parentId, type: block.type, text: written });
+      if (block.type === 'text') lineNodeIds.add(id);
       inheritedByNode.set(id, inherited);
       incomingByNode.set(id, previous);
       offsetByNode.set(id, offset);
@@ -1052,9 +1056,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 형식 `#` 토글의 제목은 아래 줄에 이미 들어가 있어서 자리(조건)로 다시 주지 않는다
       if (frameNodes.has(parent.id)) { parentId = parent.parentId; continue; }
       const rawTitle = titleSource(parent).replace(trailingRelation(), '');
+      // 문제 키는 예전 글(끝 빈칸 · 중괄호 그대로)로 만들어 복습 기록이 이어진다. 보이는 조건은 빈칸 없이(8일: `> 사과 :{색}` → ‘사과 ’로 보이던 것)
       const keyTitle = stripReviewFieldOverrides(rawTitle).trim().replace(trailingRelation(), '');
       // 제목 글 안의 `{X}`도 글과 같다(조건에는 X로 보인다). 문제 키는 예전 글로 만들어 복습 기록이 이어진다
-      const title = keyTitle.replace(/\{([^{}\n]+)\}/g, (_, word: string) => word.trim());
+      const title = keyTitle.replace(/\{([^{}\n]+)\}/g, (_, word: string) => word.trim()).trim();
       const parsed = parseExpression(rawTitle, parent.id, 0, rawTitle.length, inheritedByNode.get(parent.id), offsetByNode.get(parent.id) ?? 0);
       // 칸 이름은 칸의 위치에서만 온다: 관계 제목(`> A:B`)과 끝이 열린 제목(`> A:`)의 머리는 관계의 칸이라 이름이 붙고,
       // 글자만 있는 제목(`> ② 세 가지 표기`)은 아래 줄들의 위치일 뿐 분류기준 안의 칸이 아니라서 이름을 붙이지 않는다.

@@ -8,7 +8,11 @@ export interface ReviewFieldOverride {
 }
 
 // Only a complete, same-line brace label immediately after a relation separator is metadata.
-export const readReviewFieldOverride = (text: string, from: number, to = text.length): ReviewFieldOverride | undefined => {
+/**
+ * endIsLabel: 줄이 끝나는 `{X}`(`A :{X}`)를 칸 이름표로 읽는가. 토글 제목은 이름표다(아래 줄이 그 이름 칸을 채운다).
+ * 8일: 노트의 보통 줄에서는 값이다(`사과 : {빨강}` = 사과 → 빨강). 보통 줄은 false로 부른다.
+ */
+export const readReviewFieldOverride = (text: string, from: number, to = text.length, endIsLabel = true): ReviewFieldOverride | undefined => {
   // 따옴표 `'…'` 안의 `:` `;` `<`는 칸을 나누는 기호가 아니라서 뒤의 `{이름}`도 이름표가 아니다.
   if (from > 0 && reviewQuoteMarks(text).has(from - 1)) return undefined;
   let start = from;
@@ -27,6 +31,7 @@ export const readReviewFieldOverride = (text: string, from: number, to = text.le
         // 칸 끝(to)에 걸린 다음 연결어도 본다(`: {빨강} : 달다`에서 칸은 `{빨강}`까지다)
         while (next < text.length && /[^\S\r\n]/.test(text[next])) next += 1;
         if (next < text.length && /[-=,:;<]/.test(text[next])) return undefined;
+        if (!endIsLabel && (next >= text.length || /[\r\n]/.test(text[next]) || (text[next] === '/' && text[next + 1] === '/'))) return undefined;
         return { label: text.slice(start + 1, index).trim(), start, end: index + 1 };
       }
     }

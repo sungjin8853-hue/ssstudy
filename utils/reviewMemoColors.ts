@@ -40,7 +40,7 @@ export const splitReviewMemoColonColors = (text: string, inherited: ReadonlyMap<
     }
     if (text[index] === '\n' || isReviewSlash(text, index)) {
       if (text[index] === '\n') {
-        lineBase = openTailOf(text.slice(lineStart, index))?.connector ? fieldIndex : base;
+        lineBase = openTailOf(text.slice(lineStart, index), false)?.connector ? fieldIndex : base;
         lineStart = index + 1;
       }
       colonIndex = lineBase; fieldIndex = lineBase; scopes.length = 0;

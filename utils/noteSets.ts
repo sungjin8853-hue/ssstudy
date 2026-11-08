@@ -457,7 +457,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
           relationCuts.forEach((cut, at) => {
             const pieceEnd = relationCuts[at + 1] ?? segment.length;
             // 칸 이름표 `:{이름}`은 칸 글이 아니다
-            const label = readReviewFieldOverride(segment, cut + 1, pieceEnd);
+            const label = readReviewFieldOverride(segment, cut + 1, pieceEnd, false);
             segment.slice(label ? label.end : cut + 1, pieceEnd).split(',').forEach(piece => {
               const later = laterCellOf(piece);
               const name = normSetName(later.cell.replace(/^['"]+|['"]+$/g, ''));
@@ -1022,7 +1022,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
         if (!inside) return;
         const criterion = leadingCriterionOf(segment) ?? [...stack].reverse().find(item => item.criterion)?.criterion ?? ability ?? noteWide ?? index.sessionCriterion;
         const cuts = topLevelCuts(segment, relationMarks());
-        const laterText = (cut: number, end: number) => { const label = readReviewFieldOverride(segment, cut + 1, end); return segment.slice(label ? label.end : cut + 1, end); };
+        const laterText = (cut: number, end: number) => { const label = readReviewFieldOverride(segment, cut + 1, end, false); return segment.slice(label ? label.end : cut + 1, end); };
         const cells = [plainKeywordText(cell), ...cuts.map((cut, at) => plainKeywordText(laterCellOf(laterText(cut, cuts[at + 1] ?? segment.length)).cell).trim())];
         rows.push({ cells, criteria: parseCriterionLabels(criterion) });
       });

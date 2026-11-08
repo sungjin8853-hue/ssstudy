@@ -68,14 +68,14 @@ export const topLevelCuts = (text: string, delimiters: string): number[] => {
   return cuts;
 };
 
-const parseRelation = (text: string): DiagramRelation | null => {
+const parseRelation = (text: string, endIsLabel = true): DiagramRelation | null => {
   const cuts = topLevelCuts(text, relationMarks());
   if (!cuts.length) return null;
   const bounds = [-1, ...cuts, text.length];
   const fields: string[] = [];
   bounds.slice(1).forEach((end, index) => {
     const start = bounds[index] + 1;
-    const override = index > 0 ? readReviewFieldOverride(text, start, end) : undefined;
+    const override = index > 0 ? readReviewFieldOverride(text, start, end, endIsLabel) : undefined;
     fields.push(text.slice(override?.end ?? start, end).trim());
   });
   while (fields.length > 1 && !fields[fields.length - 1]) fields.pop();
@@ -97,7 +97,7 @@ const parseSegment = (segment: string): DiagramItem | null => {
   if (!text) return null;
   const setLine = readNoteSetLine(text);
   if (setLine) return { kind: 'setline', line: setLine };
-  const relation = parseRelation(text);
+  const relation = parseRelation(text, false);
   return relation ? { kind: 'relation', ...relation } : { kind: 'plain', text };
 };
 

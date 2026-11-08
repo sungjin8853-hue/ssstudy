@@ -11830,3 +11830,24 @@ test('7일: 문제 조건은 가장 가까운 집합만, 위치를 구별할 만
   const ui = fs.readFileSync(path.resolve(__dirname, '../components/FlashKeywords.tsx'), 'utf8');
   assert.ok(ui.includes('data-flash-related="true"') && ui.includes('연관 집합'));
 });
+
+test('8일: 보통 줄 끝의 {X}는 값(덜 끝난 줄이 아님), 이름 칸을 아래 줄로 채우는 건 토글 제목만 — 조건에 끝 빈칸이 붙지 않음', () => {
+  const say = memo => questionsFor(memo).filter(q => q.kind !== 'recall').map(q => [questionBuilder.getReviewQuestionSentence(null, q).statement, q.answer]);
+  assert.deepEqual(say('사과 : {빨강}'), [['‘사과’ 다음 값은?', '빨강'], ['‘빨강’ 앞의 값은?', '사과']]);
+  // 아래 줄을 빨아들이지 않는다
+  assert.deepEqual(say('사과 : {빨강}\n바나나 : 노랑').map(([, answer]) => answer), ['빨강', '사과', '노랑', '바나나']);
+  assert.deepEqual(say('사과 :{색}\n빨강'), [['‘사과’ 다음 값은?', '색'], ['‘색’ 앞의 값은?', '사과']]);
+  // 토글 제목은 그대로 이름 칸
+  assert.deepEqual(say(':::toggle 사과 :{색}\n빨강\n:::end'), [['‘사과’의 색은?', '빨강'], ['색 ‘빨강’ 앞의 값은?', '사과']]);
+  const nested = say(':::toggle 사과 :{색}\n바나나 : 노랑\n:::end');
+  assert.ok(nested.some(([statement]) => statement === '‘사과’에서 색 ‘바나나’ 다음 값은?'), 'no trailing space in ‘사과’');
+  // 줄 끝 {X}도 그 행 글과 교집합(줄 앞 [P] 안)
+  const ns = loadSource('utils/noteSets.ts');
+  assert.deepEqual(ns.upperSetsOf(ns.buildNoteSetIndex(['[과일] 사과 : {빨강}']), '빨강'), ['과일']);
+  // 뒤에 글이 오는 이름표는 그대로
+  assert.deepEqual(say('막 :{기능} 보호')[0], ['‘막’의 기능은?', '보호']);
+  const { openTailOf, expandOpenLines } = loadSource('utils/noteOpenTail.ts');
+  assert.ok(openTailOf('사과 :{색}') && !openTailOf('사과 :{색}', false));
+  assert.equal(expandOpenLines('사과 :{색}\n빨강'), '사과 :{색}\n빨강');
+  assert.equal(expandOpenLines('사과 :\n빨강'), ':::toggle 사과 :\n빨강\n:::end', 'a plain trailing connector still opens');
+});
