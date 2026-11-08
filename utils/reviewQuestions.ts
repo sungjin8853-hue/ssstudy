@@ -19,7 +19,7 @@ import { hasQuoteMark, quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { fillFrame, isFrameTitle, placeUnderFrame, subFrameOf } from './noteFrame';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
-import { convertStatement, placeOf, proseOf } from './questionProse';
+import { convertStatement, keywordCondition, placeOf, proseOf } from './questionProse';
 import type { CellKind, CellPiece } from './questionStatement';
 
 /** generated: `#` 틀이 펼쳐 만든 줄의 글(노트에 쓴 글이 아니다). 글자 범위는 틀 줄을 가리킨다. */
@@ -79,6 +79,8 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   placeCount?: number;
   /** 7일: 그 사슬 중 앞쪽 몇 개가 위쪽 토글인가(나머지는 줄 앞 `[ ]` 같은 위치 집합) */
   toggleCount?: number;
+  /** 8일: 맞힐 값으로 쓴 노트 글 안의 `{X}`들. 문제에 "X에 해당하는 내용이 들어가도록"을 붙이고, 정답 칸에 X에 든 값들을 보인다 */
+  answerKeywords?: string[];
   /** 7일: 조건마다 보이는 방법(사슬 안 조건만, 나머지는 undefined). 문제에서 가까운 집합만 보이고 위치를 가릴 만큼만 위 집합을 더한다 */
   conditionRoles?: (ConditionRole | undefined)[];
   columns: { prompt: QuestionColumn[]; answer: QuestionColumn[]; conditions: QuestionColumn[][] };
@@ -662,7 +664,7 @@ export const getReviewQuestionSentence = (criterion: string | null | undefined, 
     return { statement: convertStatement({ ...question.convert, direction: question.direction }, { given: labels.prompt, required: labels.answer }) };
   }
   if (question.cell) {
-    return { statement: cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, labels.conditions, undefined, question.conditionRoles), attrs: { prompt: labels.prompt, answer: labels.answer } }) };
+    return { statement: `${cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, labels.conditions, undefined, question.conditionRoles), attrs: { prompt: labels.prompt, answer: labels.answer } })}${keywordCondition(question.answerKeywords)}` };
   }
   const prose = proseOf(question, { prompt: labels.prompt, answer: labels.answer, conditions: labels.conditions });
   if (prose) return prose;
@@ -1591,9 +1593,17 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   assignPairBundles(questions, expressions);
   questions.sort((a, b) => a.priority - b.priority || a.importance - b.importance || compareReviewQuestionDifficulty(a, b));
   assignConditionRoles(questions);
+  // 맞힐 값의 글자 범위에 쓴 `{X}`(키워드)
+  const nodeText = new Map(nodes.map(node => [node.id, node.text]));
+  questions.forEach(question => {
+    const words = question.answerSpans.filter(span => span.generated === undefined)
+      .flatMap(span => [...(nodeText.get(span.nodeId) ?? '').slice(span.start, span.end).matchAll(/\{([^{}\n]+)\}/g)].map(match => match[1].trim()));
+    const unique = [...new Set(words.filter(Boolean))];
+    if (unique.length) question.answerKeywords = unique;
+  });
   // 구조로 낸 문제 글은 문제집처럼 문장으로 바꾼다(이미 줄글인 빈칸 · 노트 회상 · 능력 변환 카드는 그대로)
   questions.forEach(question => {
-    if (question.cell && question.conditionRoles) question.statement = cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, undefined, undefined, question.conditionRoles) });
+    if (question.cell && (question.conditionRoles || question.answerKeywords)) question.statement = `${cellBlankStatement({ ...question.cell, where: placeOf(question.conditions, undefined, undefined, question.conditionRoles) })}${keywordCondition(question.answerKeywords)}`;
     if (question.statement) return;
     const prose = proseOf(question);
     if (!prose) return;

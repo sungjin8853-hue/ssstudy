@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { buildReviewQuestions, conditionRolesAmong, getReviewQuestionClassification, getReviewQuestionSentence, REVIEW_QUESTION_KIND_LABELS } from '../utils/reviewQuestions';
-import { buildNoteSetIndex, headCellOf, noteCriterionOf, questionAbilities, upperSetsOf } from '../utils/noteSets';
+import { buildNoteSetIndex, headCellOf, keywordMembers, noteCriterionOf, questionAbilities, upperSetsOf } from '../utils/noteSets';
 import type { NoteQuestion } from '../utils/reviewQuestions';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { ConvertQuestionContent } from './ConvertQuestionContent';
@@ -52,6 +52,19 @@ export const ReviewQuestionContent: React.FC<{
     return sets.length ? [{ cell, sets, hidden: !beforeIsPrompt }] : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [question, memo, memoKey, abilities]);
+  // 8일: 맞힐 값에 `{X}`가 있으면 구체적인 값을 써도 맞다: X에 든 값들(여럿이면 모두에 든 값)을 정답 아래에 보인다
+  const keywordValues = useMemo(() => {
+    const words = question.answerKeywords ?? [];
+    if (!words.length) return null;
+    const index = buildNoteSetIndex(setMemos && setMemos.length ? setMemos : [memo]);
+    const answerParts = new Set(question.answer.split(/\s*(?:AND|OR|→|=|,)\s*/).map(part => part.replace(/\s+/g, '')));
+    const values = keywordMembers(index, words).filter(value => !answerParts.has(value.replace(/\s+/g, '')));
+    return { words, values: values.slice(0, 12), more: values.length > 12 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question, memo, memoKey]);
+  const keywordNote = keywordValues && <p data-keyword-accept="true" className="max-w-3xl text-center text-base font-bold text-indigo-900">
+    {keywordValues.words.join(' · ')}에 {keywordValues.words.length > 1 ? '모두 ' : ''}해당하는 값이면 맞아요{keywordValues.values.length ? `: ${keywordValues.values.join(', ')}${keywordValues.more ? ' …' : ''}` : ''}
+  </p>;
   const prose = style === 'prose';
   if (question.convert) return <ConvertQuestionContent question={question} criterion={activeCriterion} revealed={revealed} />;
   const sentence = prose ? getReviewQuestionSentence(activeCriterion, question) : null;
@@ -86,6 +99,7 @@ export const ReviewQuestionContent: React.FC<{
       </div>
       {revealed && <div data-question-field="answer" className="space-y-2">
         {answerText(solved ?? question.answer)}
+        {keywordNote}
         <ProcessToggle process={question.process} resetKey={question.key} revealed={revealed} />
       </div>}
     </div>;
@@ -98,6 +112,7 @@ export const ReviewQuestionContent: React.FC<{
       {abilityPanel}
       {kindTag}
       <FlashKeywords card={flash} revealed={revealed} answerText={question.solution ?? question.answer} />
+      {revealed && keywordNote}
       <ProcessToggle process={question.process} resetKey={question.key} revealed={revealed} />
     </div>;
   }

@@ -11813,10 +11813,10 @@ test('7일: 문제 조건은 가장 가까운 집합만, 위치를 구별할 만
   assert.deepEqual(statements(':::toggle 생물 [개념:정의]\n:::toggle 동물\n:::toggle 포유류\n고래 : 바다에 사는 포유류\n:::end\n:::end\n:::toggle 식물\n고래 : 고래풀\n:::end\n:::end'),
     ['‘포유류’에서 개념 ‘고래’의 정의는?', '‘식물’에서 개념 ‘고래’의 정의는?'], 'only the nearest set when it already tells the places apart');
   assert.deepEqual(statements(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end\n:::toggle 상어\n:::toggle 특징\n크기 : 중간\n:::end\n:::end'),
-    ['[고래] ‘특징’에서 ‘크기’ 다음 값은?', '[상어] ‘특징’에서 ‘크기’ 다음 값은?'], 'the same nearest set: the upper set that tells them apart is added as [ ]');
+    ['‘고래’의 ‘특징’에서 ‘크기’ 다음 값은?', '‘상어’의 ‘특징’에서 ‘크기’ 다음 값은?'], 'the same nearest set: the upper set that tells them apart is added as “A의 B” (8일)');
   assert.deepEqual(statements(':::toggle A\n:::toggle B\n:::toggle C\nx : 1\n:::end\n:::end\n:::end\n:::toggle D\n:::toggle B\n:::toggle C\nx : 2\n:::end\n:::end\n:::end'),
-    ['[A] ‘C’에서 ‘x’ 다음 값은?', '[D] ‘C’에서 ‘x’ 다음 값은?'], 'a set both share (B) does not help and is skipped');
-  assert.deepEqual(statements(':::toggle 생물\n:::toggle 동물\n[포유류] 고래 : 바다\n:::end\n:::end'), ['[동물] ‘포유류’에서 ‘고래’ 다음 값은?'],
+    ['‘A’의 ‘C’에서 ‘x’ 다음 값은?', '‘D’의 ‘C’에서 ‘x’ 다음 값은?'], 'a set both share (B) does not help and is skipped');
+  assert.deepEqual(statements(':::toggle 생물\n:::toggle 동물\n[포유류] 고래 : 바다\n:::end\n:::end'), ['‘동물’의 ‘포유류’에서 ‘고래’ 다음 값은?'],
     'a line [ ] (position set) is the nearest; the toggle right above (ability set) comes with it, 생물 is not needed');
   assert.deepEqual(statements(':::toggle 동물\n고래 : (먹이 : 크릴)\n:::end'), ['‘동물’에서 ‘고래’ 다음 값은?', '‘동물’에서 ‘고래’ 다음 자리의 ‘먹이’ 다음 값은?'], 'places inside the line stay');
   const [q] = qb.buildReviewQuestions(':::toggle 고래\n:::toggle 특징\n크기 : 큼\n:::end\n:::end\n:::toggle 상어\n:::toggle 특징\n크기 : 중간\n:::end\n:::end').questions.filter(item => item.kind === 'direct');
@@ -11835,10 +11835,10 @@ test('7일: 문제 조건은 가장 가까운 집합만, 위치를 구별할 만
 
 test('8일: 보통 줄 끝의 {X}는 값(덜 끝난 줄이 아님), 이름 칸을 아래 줄로 채우는 건 토글 제목만 — 조건에 끝 빈칸이 붙지 않음', () => {
   const say = memo => questionsFor(memo).filter(q => q.kind !== 'recall').map(q => [questionBuilder.getReviewQuestionSentence(null, q).statement, q.answer]);
-  assert.deepEqual(say('사과 : {빨강}'), [['‘사과’ 다음 값은?', '빨강'], ['‘빨강’ 앞의 값은?', '사과']]);
+  assert.deepEqual(say('사과 : {빨강}'), [['‘사과’ 다음 값은? (빨강에 해당하는 내용이 들어가도록)', '빨강'], ['‘빨강’ 앞의 값은?', '사과']], '8일: a {X} answer gets the keyword condition');
   // 아래 줄을 빨아들이지 않는다
   assert.deepEqual(say('사과 : {빨강}\n바나나 : 노랑').map(([, answer]) => answer), ['빨강', '사과', '노랑', '바나나']);
-  assert.deepEqual(say('사과 :{색}\n빨강'), [['‘사과’ 다음 값은?', '색'], ['‘색’ 앞의 값은?', '사과']]);
+  assert.deepEqual(say('사과 :{색}\n빨강'), [['‘사과’ 다음 값은? (색에 해당하는 내용이 들어가도록)', '색'], ['‘색’ 앞의 값은?', '사과']]);
   // 토글 제목은 그대로 이름 칸
   assert.deepEqual(say(':::toggle 사과 :{색}\n빨강\n:::end'), [['‘사과’의 색은?', '빨강'], ['색 ‘빨강’ 앞의 값은?', '사과']]);
   const nested = say(':::toggle 사과 :{색}\n바나나 : 노랑\n:::end');
@@ -11875,4 +11875,26 @@ test('8일: [a] b = d = c — 값마다 같은 것을 모두, 순서 문제(화�
   const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
   const handler = logger.slice(logger.indexOf('const handleEditGateLines'), logger.indexOf('setGateDroppedIds(previous => [...previous, currentGateQuestion.id]);', logger.indexOf('const handleEditGateLines')));
   assert.ok(handler.includes('setPreSessionReviewDrafts('), 'the gate draft follows the edit');
+});
+
+test('8일: 줄글 — 위 집합은 “A의 B”, 맞힐 값의 {X}는 “X에 해당하는 내용이 들어가도록”(여럿이면 모두 해당), 정답 칸에 써도 되는 구체적인 값', () => {
+  const say = memo => questionsFor(memo).filter(q => q.kind === 'direct' || q.kind === 'reverse').map(q => [questionBuilder.getReviewQuestionSentence(null, q).statement, q.answer]);
+  assert.ok(say(':::toggle 생물\n:::toggle 동물\n[포유류] 고래 : 바다\n:::end\n:::end').some(([text]) => text === '‘동물’의 ‘포유류’에서 ‘고래’ 다음 값은?'));
+  assert.ok(say('[산] {염기}와 {물} : 중화').some(([text, answer]) => text === '‘산’에서 ‘중화’ 앞의 값은? (염기 · 물에 모두 해당하는 내용이 들어가도록)' && answer === '염기와 물'));
+  assert.ok(say('[산] {염기}와 {물} : 중화').some(([text]) => text === '‘산’에서 ‘염기와 물’ 다음 값은?'), 'a given value gets no condition');
+  assert.ok(say('[원소] A,B ; {원소}-{원소}; 회전 운동').some(([text]) => text === '‘원소’에서 ‘A, B’ 다음 값을 순서대로 쓰시오. (원소에 해당하는 내용이 들어가도록)'), 'the same keyword twice is named once');
+  const fl = loadSource('utils/questionFlash.ts');
+  const q = questionsFor('[산] {염기}와 {물} : 중화').find(item => item.kind === 'reverse');
+  assert.equal(fl.flashOf(q).hint, '염기 · 물에 모두 해당하는 내용이 들어가도록');
+  const ns = loadSource('utils/noteSets.ts');
+  assert.deepEqual(ns.keywordMembers(ns.buildNoteSetIndex(['[원소] A,B ; {원소}-{원소}; 회전 운동']), ['원소']), ['A', 'B']);
+  assert.deepEqual(ns.keywordMembers(ns.buildNoteSetIndex(['[염기] 수산화나트륨\n[염기] 암모니아 = NH3']), ['염기']), ['수산화나트륨', '암모니아', 'NH3']);
+  // 정답 칸: 구체적인 값을 써도 맞다는 줄
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
+  const memo = '[원소] A,B ; {원소}-{원소}; 회전 운동';
+  const question = questionsFor(memo).find(item => item.answerKeywords && item.kind === 'direct');
+  const html = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question, revealed: true, memo }));
+  assert.ok(html.includes('data-keyword-accept="true"') && html.includes('원소에 해당하는 값이면 맞아요: A, B'));
 });

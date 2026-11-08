@@ -4,7 +4,7 @@
  * 키워드는 줄글과 같은 순서다: 문제가 놓인 자리 → 주어진 값 → 이어 주는 말(관계) → 맞힐 칸. 줄글을 만드는 규칙(proseOf)을 그대로 따라가고,
  * 문장 대신 조각으로 돌려준다. 맞힐 칸은 정답을 확인할 때 같은 자리에서 정답으로 바뀐다.
  */
-import { AFTER, count as stepWords, operatorOf, OWNER, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
+import { AFTER, count as stepWords, keywordCondition, operatorOf, OWNER, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
 import { blankMark } from './questionStatement';
 import type { CellKind, CellPiece } from './questionStatement';
 
@@ -27,6 +27,8 @@ export interface FlashCard {
   chain: FlashPiece[] | null;
   /** 맞힐 값의 속성 이름과 쓰는 방법(`모두` · `순서대로` · `하나만` · `차례로`) */
   ask: { label: string[]; mode: string | null };
+  /** 8일: 맞힐 값의 `{X}` 부가조건(‘원소에 해당하는 내용이 들어가도록’) */
+  hint?: string;
 }
 
 const GLUE_GLYPH: Record<CellKind, string> = { and: '＋', sequence: '→', equal: '＝' };
@@ -59,7 +61,7 @@ const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly
 };
 
 /** 줄글을 만드는 규칙(proseOf)을 그대로 따라 조각으로 돌려준다. 줄글로 바꾸지 않는 종류(노트 회상 · 능력 변환)는 null. */
-export const flashOf = (input: ProseInput & { cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] } }, attrs?: ProseAttrs): FlashCard | null => {
+const flashBody = (input: ProseInput & { cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] } }, attrs?: ProseAttrs): FlashCard | null => {
   const { kind, prompt, answer, conditions, direction } = input;
   if (kind === 'recall' || kind === 'convert') return null;
   const { place, done } = placeAndDone(conditions, attrs?.conditions, answer, input.conditionRoles);
@@ -134,4 +136,11 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
   if (kind === 'order-previous') return { ...base, relation: { word: '바로 앞', arrow: 'back' }, ask: { label: askLabel, mode: null } };
   if (kind === 'order-reconstruct') return { ...base, relation: { word: '다음에 오는', arrow: 'forward' }, ask: { label: askLabel, mode: '순서대로' } };
   return null;
+};
+
+/** 줄글을 만드는 규칙(proseOf)을 그대로 따라 조각으로 돌려준다. 맞힐 값에 `{X}`가 있으면 부가조건(hint)을 더한다. */
+export const flashOf = (input: ProseInput & { cell?: { given: string; kind: CellKind; pieces: readonly CellPiece[] } }, attrs?: ProseAttrs): FlashCard | null => {
+  const card = flashBody(input, attrs);
+  const hint = keywordCondition(input.answerKeywords).trim().replace(/^\(|\)$/g, '');
+  return card && hint ? { ...card, hint } : card;
 };

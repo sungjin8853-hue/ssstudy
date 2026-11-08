@@ -53,6 +53,8 @@ export interface ProseInput {
   form?: 'equal' | 'components' | 'match';
   /** 남은 값의 다음 값을 묻는 남은 조건 문제(2일) */
   beyond?: boolean;
+  /** 8일: 맞힐 값에 쓴 `{X}`들(중복 없이). 있으면 "X에 해당하는 내용이 들어가도록" 부가조건을 붙인다 */
+  answerKeywords?: readonly string[];
   /** 7일: 조건마다 보이는 방법(near · related · hidden). 없으면 모든 조건을 같게 보인다 */
   conditionRoles?: readonly ('near' | 'related' | 'hidden' | undefined)[];
 }
@@ -121,14 +123,31 @@ export const placeOf = (conditions: readonly string[], labels?: readonly (readon
   const entries = withoutAnswerPlace(conditions, answer, roles);
   const afters = entries.filter(item => AFTER.test(item.text));
   const { related, near: place } = splitRelated(entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text)));
-  const upper = related.map(item => `[${readableLabel(item.text.replace(OWNER, ''))}] `).join('');
+  // 8일: 위 집합은 "A의 B"로 잇는다(‘고래’의 ‘특징’에서)
+  const upper = related.map(item => `${quote(readableLabel(item.text.replace(OWNER, '')))}의 `).join('');
   return `${place.length ? `${upper}${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
     // 5일: 겹친 `이후`(바깥 칸 다음 자리 안의 또 다음 자리)는 순서대로 이어 보인다: ‘A’ → ‘B’ 다음 자리의
     ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(' → ')} 다음 자리의 ` : ''}`;
 };
 
 /** 문제 한 개의 줄글. 줄글로 바꾸지 않는 종류(노트 회상 · 능력 변환)는 null. attrs가 있으면 값마다 속성 이름을 붙인다. */
+/**
+ * 8일: 맞힐 값에 `{X}`가 있으면 부가조건 "(X에 해당하는 내용이 들어가도록)". 한 칸의 `{ }` 여럿은 모두 그 칸 하나가 공통으로 가진 요소라
+ * 집합이 둘 이상이면 "모두 해당하는"으로 쓴다(`{염기}와 {물}` → 염기 · 물에 모두 해당하는 내용).
+ */
+export const keywordCondition = (keywords: readonly string[] | undefined): string => {
+  const words = [...new Set((keywords ?? []).map(word => word.trim()).filter(Boolean))];
+  if (!words.length) return '';
+  return ` (${words.join(' · ')}에 ${words.length > 1 ? '모두 ' : ''}해당하는 내용이 들어가도록)`;
+};
+
 export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => {
+  const prose = proseBody(input, attrs);
+  const extra = keywordCondition(input.answerKeywords);
+  return prose && extra ? { ...prose, statement: `${prose.statement}${extra}` } : prose;
+};
+
+const proseBody = (input: ProseInput, attrs?: ProseAttrs): Prose | null => {
   const { kind, prompt, answer, conditions, direction } = input;
   if (kind === 'recall' || kind === 'convert') return null;
   const labelsOf = (index: number) => attrs?.conditions[index];

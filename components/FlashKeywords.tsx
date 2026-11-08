@@ -95,6 +95,7 @@ export const FlashKeywords: React.FC<{ card: FlashCard; revealed: boolean; answe
           <Slot revealed={revealed} answer={answerText} />
         </div>}
         {ask.mode && <p data-flash-mode="true" className="text-sm font-black text-amber-800">{MODE_TEXT[ask.mode] ?? ask.mode}</p>}
+        {card.hint && <p data-flash-hint="true" className="max-w-[18rem] text-center text-sm font-bold text-indigo-800">{card.hint}</p>}
       </li>
     </ol>
   );

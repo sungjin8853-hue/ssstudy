@@ -274,6 +274,25 @@ export const slotCellsOf = (index: NoteSetIndex, expression: string): string[] =
 };
 
 /**
+ * 8일: 맞힐 값의 `{X}`(여럿이면 모두에 든) 자리에 써도 되는 구체적인 값들. `,` · `=` · `-`로 이은 원소는 하나씩이고,
+ * 키워드 이름 자체(`원소-원소`처럼 그 키워드로 쓴 칸)는 빠진다.
+ */
+export const keywordMembers = (index: NoteSetIndex, words: readonly string[]): string[] => {
+  const names = new Set(words.map(normSetName));
+  const expression = words.length > 1 ? words.join('.') : words[0] ?? '';
+  if (!expression.trim()) return [];
+  const plain = !/[.,%()[\]:;']/.test(expression);
+  const cells = [...evaluateSetExpression(index, expression), ...(plain ? evaluateSetExpression(index, `[${expression}]`) : [])];
+  const pieces = cells.flatMap(cell => {
+    const literal = reviewQuotes(cell).literal;
+    const cuts = topLevelCuts(cell, isNoteShorthandOn() ? '=-,' : ',').filter(cut => !literal.has(cut));
+    const bounds = [-1, ...cuts, cell.length];
+    return bounds.slice(1).map((end, at) => cell.slice(bounds[at] + 1, end).trim());
+  });
+  return [...new Set(pieces.filter(piece => piece && !/[{}#]/.test(piece) && !names.has(normSetName(piece))))];
+};
+
+/**
  * 줄 안의 `{A}`를 "집합 A의 원소가 들어갈 자리"로 읽는다. 노트에 있는 집합(원소가 하나 이상)을 가리키는 것만 자리이고,
  * 집합이 아닌 이름(`:{원인}`처럼 칸 이름표로 쓴 것)은 자리가 아니다. 따옴표로 묶은 글 안에서도 자리다(`'{A}아, 반가워'`).
  */
