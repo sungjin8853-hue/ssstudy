@@ -6,16 +6,18 @@ import { pastSessions, previousUnitSpeed, recommendSubjectGrade, speedPerHour, S
 import type { SubjectGrade } from './subjectFeedback';
 
 /**
- * 자동 복습 넣기(3일 요청, 4일 바꿈): 과목에서 켜 두면 "복습에 넣기"를 누르지 않아도 공부를 저장하면 복습에 들어간다.
- *  - 공부 시간이 정한 시간(autoReviewHours, 기본 1시간)만큼 모이면 모인 공부를 한 묶음으로 복습에 넣는다(4일: "학습 시간 자체가 몇 시간 채워져야 하나의 복습").
- *    같은 과목 · 같은 단계끼리 모은다. 단계가 바뀌면 앞 단계에 모인 공부는 그때 넣고, 과목을 다 끝내면 모인 만큼 넣는다.
- *  - 앞 공부가 끝나고 1시간 안에 이어 한 공부는 같은 때 한 것으로 보고 한 기록으로 합쳐 저장한다(4일: 저장하는 양을 줄인다).
- *    아직 복습에 넣지 않고 모으는 중인 기록끼리만 합친다(3시간 안 공부를 묶음에 합치던 것은 없앴다).
+ * 자동 복습 넣기(3일 요청, 4일 바꿈, 8일 다시 바꿈): 과목에서 켜 두면 "복습에 넣기"를 누르지 않아도 공부를 저장하면 바로 복습에 들어간다.
+ *  - 8일 "일정 시간이 채워지면 복습하는 게 아니라 바로바로 복습으로 들어가게 하고 3시간 단위로 복습을 넣은 시간을 나누어 거의 동일 시각에 한 복습은
+ *    동일한 때에 한 것으로": 저장할 때마다 넣는다. 아직 복습하지 않은 자동 묶음(같은 과목 · 같은 단계)의 넣은 때로부터 3시간 안에 넣는 공부는
+ *    그 묶음에 들어가 같은 때(묶음의 처음 넣은 때)에 넣은 것으로 본다. 3시간이 지나면 새 묶음이다.
+ *  - 앞 공부가 끝나고 1시간 안에 이어 한 공부는 한 기록으로 합쳐 저장한다(4일, 아직 복습하지 않은 앞 기록에만).
  *  - 묶음의 난도는 묶음 전체 속도(푼 장수 합 ÷ 걸린 시간 합)를 바로 앞에 공부한 단위(앞 묶음)의 속도와 견준 추천 난도다(앞 단위가 없으면 지난 공부 전체 평균, 그것도 없으면 보통).
- *  - 묶음은 모두 다 찬 때(마지막 공부를 저장한 때)에 그 난도로 복습에 들어간다(복습에 넣기를 그때 누른 것과 같다).
+ *    묶음에 공부가 더해질 때마다 묶음 전체를 다시 매기고, 기억(FSRS)은 묶음의 넣은 때에 평가한 것이다.
  */
 export const DEFAULT_AUTO_REVIEW_HOURS = 1;
 export const AUTO_REVIEW_SAME_TIME_MS = 60 * 60 * 1000;
+/** 8일: 넣은 때가 이만큼 안이면 같은 때에 넣은 것으로 본다(3시간 단위) */
+export const AUTO_REVIEW_GROUP_MS = 3 * 60 * 60 * 1000;
 
 /** 복습 하나에 모을 공부 시간(시간). 0이면 저장할 때마다 넣는다 */
 export const autoReviewHoursOf = (subject: Pick<Subject, 'autoReviewHours'> | undefined) => {
@@ -31,6 +33,9 @@ const sumOf = (a?: number, b?: number) => (a === undefined && b === undefined ? 
 
 /** 자동 복습으로 모으는 중인(아직 넣지 않은) 기록 */
 export const isAutoWaiting = (log: StudyLog) => Boolean(log.unitReviewPending && (log.autoReviewWaiting || log.autoReviewQueued));
+/** 자동으로 넣었고 아직 한 번도 복습하지 않은 기록(묶음에 더하거나 합칠 수 있다) */
+export const isFreshAutoRegistered = (log: StudyLog) => Boolean(log.autoReviewRegistered && log.reviewRegisteredAt && !log.unitReviewPending
+  && !log.isReviewed && !(log.reviewStep ?? 0) && !(log.basicReviewTimeRecords?.length) && !log.reviewQuestionSchedules);
 
 /** 앞 기록(earlier)에 바로 이어 한 기록(later)을 한 기록으로 합친다: 장수 · 시간은 더하고 범위는 앞 시작 ~ 뒤 끝, 노트는 차례로 잇는다 */
 export const mergeStudyLogs = (earlier: StudyLog, later: StudyLog): StudyLog => {
@@ -69,7 +74,7 @@ export const simplifyAutoLog = (logs: StudyLog[], logId: string): { logs: StudyL
     .filter(log => log.id !== incoming.id && log.subjectId === incoming.subjectId && isStudyLog(log) && stageOf(log) === stageOf(incoming) && endMs(log) <= endMs(incoming))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const previous = before[before.length - 1];
-  if (!previous || !isAutoWaiting(previous) || previous.manualEntry || incoming.manualEntry) return { logs, id: logId };
+  if (!previous || !(isAutoWaiting(previous) || isFreshAutoRegistered(previous)) || previous.manualEntry || incoming.manualEntry) return { logs, id: logId };
   // 공부한 날이 다르면(자정을 넘김) 합치지 않는다: 합치면 뒤 공부가 앞 날짜로 세어져 그날 계획에서 빠진다
   if (getLogStudyDate(previous) !== getLogStudyDate(incoming)) return { logs, id: logId };
   if (startMs(incoming) - endMs(previous) > AUTO_REVIEW_SAME_TIME_MS) return { logs, id: logId };
@@ -118,30 +123,34 @@ export const registerAutoGroup = (logs: StudyLog[], memberIds: readonly string[]
 };
 
 /**
- * 막 저장한 기록 하나(logId)를 자동 복습에 넣는다: 1시간 안에 이어 한 공부면 앞 기록에 합치고, 같은 단계에 모은 공부 시간이
- * hours만큼 차면(또는 force: 바로 복습 넣기 · 과목을 다 끝냄) 모은 기록을 한 묶음으로 넣는다. 아니면 모으는 중으로 둔다.
- * 다른 단계에 모으던 기록은 단계가 바뀐 것이니 먼저 넣는다. 대기 중이 아니면 그대로 돌려준다.
+ * 막 저장한 기록 하나(logId)를 자동 복습에 바로 넣는다(8일): 1시간 안에 이어 한 공부면 앞 기록에 합치고, 아직 복습하지 않은 같은 단계의 자동 묶음을
+ * 넣은 때로부터 3시간 안이면 그 묶음에 더해 묶음의 넣은 때로 넣는다(묶음 전체 난도를 다시 매긴다). 아니면 새 묶음이다.
+ * hours · force는 예전 "모을 시간"용이라 쓰지 않는다(부르는 쪽 호환). 대기 중이 아니면 그대로 돌려준다.
  */
 export const registerAutoReview = (
-  logs: StudyLog[], logId: string, hours = DEFAULT_AUTO_REVIEW_HOURS, force = false,
-  /** 묶음을 넣기 직전에 할 일(노트 합치기: 복습에 넣을 때 이전 쪽 노트에 합친다) */
+  logs: StudyLog[], logId: string, _hours = DEFAULT_AUTO_REVIEW_HOURS, _force = false,
+  /** 넣기 직전에 할 일(노트 합치기: 복습에 넣을 때 이전 쪽 노트에 합친다) */
   beforeRegister: (logs: StudyLog[], ids: string[]) => StudyLog[] = current => current
 ): StudyLog[] => {
   const incoming0 = logs.find(log => log.id === logId);
   if (!incoming0 || !incoming0.unitReviewPending) return logs;
   const atMs = endMs(incoming0);
-  const register = (current: StudyLog[], ids: string[]) => registerAutoGroup(beforeRegister(current, ids), ids, atMs);
-  const cut = force || Boolean(incoming0.autoReviewCut);
-  const simplified = simplifyAutoLog(logs, logId);
-  let next = simplified.logs;
+  // 예전 판에서 모으던 기록이 남아 있으면 먼저 넣는다(그 마지막 공부 때에)
+  let next = flushFilledAutoGroups(logs, incoming0.subjectId, 0, beforeRegister, logId);
+  const simplified = simplifyAutoLog(next, logId);
+  next = simplified.logs;
   const incoming = next.find(log => log.id === simplified.id)!;
-  const waiting = next.filter(log => log.id !== incoming.id && log.subjectId === incoming.subjectId && log.unitReviewPending && log.autoReviewWaiting);
-  const otherStage = waiting.filter(log => stageOf(log) !== stageOf(incoming));
-  if (otherStage.length) next = register(next, otherStage.map(log => log.id));
-  const group = [...waiting.filter(log => stageOf(log) === stageOf(incoming)), incoming];
-  const minutes = group.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0);
-  if (cut || minutes >= hours * 60 - 1e-9) return register(next, group.map(log => log.id));
-  return next.map(log => (log.id === incoming.id ? { ...log, autoReviewQueued: undefined, autoReviewCut: undefined, autoReviewWaiting: true } : log));
+  if (incoming.unitReviewPending) next = beforeRegister(next, [incoming.id]);
+  const current = next.find(log => log.id === incoming.id) ?? incoming;
+  // 같은 때(3시간 단위)의 아직 복습하지 않은 자동 묶음
+  const groups = [...new Set(next.filter(log => log.id !== current.id && log.subjectId === current.subjectId && stageOf(log) === stageOf(current) && isFreshAutoRegistered(log))
+    .map(log => log.reviewRegisteredAt!))]
+    .filter(at => { const ms = Date.parse(at); return Number.isFinite(ms) && ms <= atMs && atMs - ms <= AUTO_REVIEW_GROUP_MS; })
+    .sort();
+  const groupAt = groups[groups.length - 1];
+  const groupMs = groupAt ? Date.parse(groupAt) : (current.unitReviewPending ? atMs : Date.parse(current.reviewRegisteredAt ?? '') || atMs);
+  const memberIds = [...new Set([...(groupAt ? next.filter(log => log.subjectId === current.subjectId && log.autoReviewRegistered && log.reviewRegisteredAt === groupAt).map(log => log.id) : []), current.id])];
+  return registerAutoGroup(next, memberIds, groupMs);
 };
 
 /**
@@ -150,9 +159,10 @@ export const registerAutoReview = (
  */
 export const flushFilledAutoGroups = (
   logs: StudyLog[], subjectId: string, hours: number,
-  beforeRegister: (logs: StudyLog[], ids: string[]) => StudyLog[] = current => current
+  beforeRegister: (logs: StudyLog[], ids: string[]) => StudyLog[] = current => current,
+  exceptId?: string
 ): StudyLog[] => {
-  const waiting = logs.filter(log => log.subjectId === subjectId && log.unitReviewPending && log.autoReviewWaiting);
+  const waiting = logs.filter(log => log.id !== exceptId && log.subjectId === subjectId && log.unitReviewPending && log.autoReviewWaiting);
   const stages = [...new Set(waiting.map(stageOf))];
   return stages.reduce((current, stage) => {
     const group = waiting.filter(log => stageOf(log) === stage);

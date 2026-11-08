@@ -8595,10 +8595,10 @@ test("quotes '…' are read the same way by the diagram, the editor colours, the
   // merge: the quoted cell stays one cell; a word inside it is letters, so it takes no link (4일)
   const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
   const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
-  assert.deepEqual(merged('A : 다', "A : '가 ; 나'"), ["A:'가 ; 나',다"]);
+  assert.deepEqual(merged('A : 다', "A : '가 ; 나'"), ["A : '가 ; 나', 다"], '8일: the merged line keeps the spacing of the earlier line');
   assert.deepEqual(merged('나 : 마', "A : '가 ; 나 ; 다'"), []);
   assert.deepEqual(merged('가 : 마', "A : '가 ; 나'"), []);
-  assert.deepEqual(merged("'B-C' : 마", "A : 'B-C'"), ["A:('B-C':마)"], 'the whole quoted cell still links');
+  assert.deepEqual(merged("'B-C' : 마", "A : 'B-C'"), ["A : ('B-C':마)"], 'the whole quoted cell still links');
 });
 
 test('editor : colours count from the column an open toggle title leaves off, the same number the questions use', () => {
@@ -8756,8 +8756,8 @@ test('merging works with every connector and treats the values of a ( ) in the s
   // a link keeps the new cells next to the cell they follow
   assert.deepEqual(merged('A:B:D:E', 'A:B:D'), ['A:B:D:E']);
   // (A:B) 안녕: A and 안녕 share a cell and a position, so A takes a merge like any word of the cell; B (another position) can too
-  assert.deepEqual(merged('A:C', '(A:B) 안녕 : X'), ['((A:C):B) 안녕:X']);
-  assert.deepEqual(merged('B:C', '(A:B) 안녕 : X'), ['(A:(B:C)) 안녕:X']);
+  assert.deepEqual(merged('A:C', '(A:B) 안녕 : X'), ['((A:C):B) 안녕 : X']);
+  assert.deepEqual(merged('B:C', '(A:B) 안녕 : X'), ['(A:(B:C)) 안녕 : X']);
   assert.deepEqual(merged('A:C', 'X:(A:B) 안녕'), ['X:((A:C):B) 안녕']);
   assert.deepEqual(merged('A:C', '((A:C):B) 안녕:X'), [], 'merging again changes nothing');
 });
@@ -11272,58 +11272,53 @@ test('3일: a value written at the same place with the same [ ] is added to that
   assert.ok(!questionsFor('[B] A:[N] C,(V:[P] O)').some(q => /\[/.test(`${q.statement || ''}${q.answer}`)), 'no [ ] text leaks');
 });
 
-test('4일: auto review collects study time until the set hours are filled, then puts the collected studies in as one group; studies within 1 hour are saved as one record', () => {
-  const { registerAutoReview, simplifyAutoLog, autoReviewHoursOf, DEFAULT_AUTO_REVIEW_HOURS, AUTO_REVIEW_SAME_TIME_MS } = loadSource('utils/autoReview.ts');
-  assert.equal(DEFAULT_AUTO_REVIEW_HOURS, 1);
+test('8일: auto review puts each saved study in at once; studies put in within 3 hours of a not-yet-reviewed group join it at the group time; studies within 1 hour are saved as one record', () => {
+  const { registerAutoReview, simplifyAutoLog, AUTO_REVIEW_SAME_TIME_MS, AUTO_REVIEW_GROUP_MS } = loadSource('utils/autoReview.ts');
   assert.equal(AUTO_REVIEW_SAME_TIME_MS, 60 * 60 * 1000);
-  assert.deepEqual([autoReviewHoursOf(undefined), autoReviewHoursOf({ autoReviewHours: 2.5 }), autoReviewHoursOf({ autoReviewHours: 0 })], [1, 2.5, 0]);
+  assert.equal(AUTO_REVIEW_GROUP_MS, 3 * 60 * 60 * 1000);
   const pending = (id, end, minutes, start, endPage, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: minutes, pagesRead: endPage - start + 1,
     startPage: start, endPage, pageCountIsExplicit: true, unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true, ...extra });
   const past = { id: 'old', subjectId: 's', timestamp: '2026-10-01T01:00:00.000Z', timeSpentMinutes: 60, pagesRead: 10, startPage: 1, endPage: 10 };
-  // 30분: 1시간이 안 차서 모은다
-  let logs = registerAutoReview([past, pending('a', '2026-11-03T01:00:00.000Z', 30, 11, 15)], 'a', 1);
+  // 30분: 바로 들어간다
+  let logs = registerAutoReview([past, pending('a', '2026-11-03T01:00:00.000Z', 30, 11, 15)], 'a');
   const a = logs.find(log => log.id === 'a');
-  assert.ok(a.unitReviewPending && a.autoReviewWaiting && !a.autoReviewQueued && !a.autoReviewRegistered, 'still collecting');
-  // 3시간 뒤 40분: 1시간 넘게 쉬어 따로 저장되고, 모은 시간 70분 ≥ 60분이라 둘이 한 묶음으로 들어간다(다 찬 때)
-  logs = registerAutoReview([...logs, pending('b', '2026-11-03T04:40:00.000Z', 40, 16, 22)], 'b', 1);
+  assert.ok(!a.unitReviewPending && a.autoReviewRegistered && a.reviewEnabled && !a.isCondensed && a.reviewRegisteredAt === '2026-11-03T01:00:00.000Z', 'in at once');
+  // 2시간 40분 뒤(1시간 넘게 쉼 → 따로 저장) 넣은 공부는 3시간 안이라 같은 묶음: 넣은 때 · 다음 복습 · 범위가 같다
+  logs = registerAutoReview([...logs, pending('b', '2026-11-03T03:40:00.000Z', 40, 16, 22)], 'b');
   const [a2, b] = ['a', 'b'].map(id => logs.find(log => log.id === id));
   assert.ok(a2 && b, 'not merged: the gap was over 1 hour');
-  assert.ok([a2, b].every(log => !log.unitReviewPending && log.autoReviewRegistered && !log.autoReviewWaiting && log.reviewEnabled && !log.isCondensed));
-  assert.deepEqual([a2.reviewRegisteredAt, b.reviewRegisteredAt], ['2026-11-03T04:40:00.000Z', '2026-11-03T04:40:00.000Z'], 'the group goes in when it is filled');
+  assert.deepEqual([a2.reviewRegisteredAt, b.reviewRegisteredAt], ['2026-11-03T01:00:00.000Z', '2026-11-03T01:00:00.000Z'], 'the same time: the group time');
   assert.equal(a2.nextReviewDate, b.nextReviewDate);
-  assert.equal(b.reviewFsrs.lastReviewMs, Date.parse('2026-11-03T04:40:00.000Z'));
+  assert.equal(b.reviewFsrs.lastReviewMs, Date.parse('2026-11-03T01:00:00.000Z'));
   assert.deepEqual(b.reviewUnitRange, { start: 11, end: 22 });
-  // 끝나고 1시간 안에 시작한 공부는 한 기록으로 합쳐 저장한다(모으는 중인 기록끼리만)
-  logs = registerAutoReview([...logs, pending('c', '2026-11-04T01:00:00.000Z', 20, 23, 25, { reviewMemo: 'x : 1' })], 'c', 1);
-  logs = registerAutoReview([...logs, pending('d', '2026-11-04T01:50:00.000Z', 20, 26, 29, { reviewMemo: 'y : 2', timeAttackMinutes: 15 })], 'd', 1);
+  // 그 묶음의 넣은 때로부터 3시간이 지나면 새 묶음
+  logs = registerAutoReview([...logs, pending('n', '2026-11-03T05:30:00.000Z', 20, 23, 24)], 'n');
+  assert.equal(logs.find(log => log.id === 'n').reviewRegisteredAt, '2026-11-03T05:30:00.000Z');
+  assert.equal(logs.find(log => log.id === 'b').reviewRegisteredAt, '2026-11-03T01:00:00.000Z', 'the earlier group stays');
+  // 끝나고 1시간 안에 시작한 공부는 아직 복습하지 않은 앞 기록에 합친다
+  logs = registerAutoReview([...logs, pending('c', '2026-11-04T01:00:00.000Z', 20, 25, 27, { reviewMemo: 'x : 1' })], 'c');
+  logs = registerAutoReview([...logs, pending('d', '2026-11-04T01:50:00.000Z', 20, 28, 31, { reviewMemo: 'y : 2', timeAttackMinutes: 15 })], 'd');
   assert.ok(!logs.some(log => log.id === 'd'), 'd is folded into c');
   const c = logs.find(log => log.id === 'c');
-  assert.deepEqual([c.startPage, c.endPage, c.pagesRead, c.timeSpentMinutes, c.timeAttackMinutes, c.timestamp, c.reviewMemo, c.progressPages],
-    [23, 29, 7, 40, 15, '2026-11-04T01:50:00.000Z', 'x : 1\ny : 2', undefined]);
-  assert.ok(c.unitReviewPending && c.autoReviewWaiting, '40 minutes: still collecting');
-  // 이미 넣은 기록 뒤에는 1시간 안이어도 합치지 않는다
-  const afterRegistered = simplifyAutoLog([...logs, pending('e', '2026-11-03T05:00:00.000Z', 10, 23, 23)], 'e');
-  assert.equal(afterRegistered.id, 'e');
-  // 단원 사이를 건너뛴 단원 기록은 합치고 진척 장수를 따로 적는다(1~5쪽 끝 단원 → 다음 단원 11~12쪽)
+  assert.deepEqual([c.startPage, c.endPage, c.pagesRead, c.timeSpentMinutes, c.timeAttackMinutes, c.timestamp, c.reviewMemo, c.reviewRegisteredAt],
+    [25, 31, 7, 40, 15, '2026-11-04T01:50:00.000Z', 'x : 1\ny : 2', '2026-11-04T01:00:00.000Z']);
+  assert.ok(c.autoReviewRegistered && !c.unitReviewPending);
+  // 이미 복습한 기록 뒤에는 합치지도 묶지도 않는다
+  const reviewed = logs.map(log => (log.id === 'c' ? { ...log, reviewStep: 1, isReviewed: true } : log));
+  const after = registerAutoReview([...reviewed, pending('e', '2026-11-04T02:20:00.000Z', 10, 32, 33)], 'e');
+  assert.equal(after.find(log => log.id === 'e').reviewRegisteredAt, '2026-11-04T02:20:00.000Z');
+  assert.equal(simplifyAutoLog([...reviewed, pending('e2', '2026-11-04T02:20:00.000Z', 10, 32, 33)], 'e2').id, 'e2');
+  // 단원 사이를 건너뛴 단원 기록은 합치고 진척 장수를 따로 적는다
   const gap = simplifyAutoLog([pending('g1', '2026-11-05T01:00:00.000Z', 10, 1, 5, { autoReviewQueued: undefined, autoReviewWaiting: true, progressPages: 5 }), pending('g2', '2026-11-05T01:30:00.000Z', 10, 11, 12, { progressPages: 2 })], 'g2');
   assert.deepEqual([gap.id, gap.logs.length, gap.logs[0].progressPages, gap.logs[0].endPage], ['g1', 1, 7, 12]);
-  // 단원이 없는데 사이를 건너뛴 기록은 합치지 않는다(나중에 고치면 건너뛴 쪽까지 진척으로 세어진다)
   const jump = simplifyAutoLog([pending('j1', '2026-11-05T01:00:00.000Z', 10, 1, 5, { autoReviewQueued: undefined, autoReviewWaiting: true }), pending('j2', '2026-11-05T01:30:00.000Z', 10, 11, 12)], 'j2');
   assert.deepEqual([jump.id, jump.logs.length], ['j2', 2]);
-  // 단계가 바뀌면 앞 단계에 모은 기록을 넣는다
-  logs = registerAutoReview([...logs, pending('f', '2026-11-04T05:00:00.000Z', 10, 1, 2, { subjectStageId: 'f' })], 'f', 1);
-  assert.ok(logs.find(log => log.id === 'c').autoReviewRegistered && logs.find(log => log.id === 'f').autoReviewWaiting);
-  // 바로 복습 넣기 · 과목을 다 끝냄(force) · 0시간이면 바로 넣는다
-  const cut = registerAutoReview([pending('h', '2026-11-06T01:00:00.000Z', 5, 1, 1, { autoReviewCut: true })], 'h', 1);
-  assert.ok(cut[0].autoReviewRegistered && !cut[0].autoReviewCut);
-  assert.ok(registerAutoReview([pending('i', '2026-11-06T01:00:00.000Z', 5, 1, 1)], 'i', 1, true)[0].autoReviewRegistered);
-  assert.ok(registerAutoReview([pending('j', '2026-11-06T01:00:00.000Z', 5, 1, 1)], 'j', 0)[0].autoReviewRegistered);
-  // 대기 중이 아닌 기록은 그대로
-  assert.equal(registerAutoReview(logs, 'b'), logs);
-  // 넣기 직전에 노트 합치기를 부른다
-  const seen = [];
-  registerAutoReview([pending('k', '2026-11-06T01:00:00.000Z', 70, 1, 3)], 'k', 1, false, (current, ids) => { seen.push(ids); return current; });
-  assert.deepEqual(seen, [['k']]);
+  // 단계가 다르면 같은 때여도 다른 묶음
+  logs = registerAutoReview([...logs, pending('f', '2026-11-04T02:30:00.000Z', 10, 1, 2, { subjectStageId: 'f' })], 'f');
+  assert.equal(logs.find(log => log.id === 'f').reviewRegisteredAt, '2026-11-04T02:30:00.000Z');
+  // 예전 판에서 모으던 기록은 다음 저장 때 먼저 넣는다
+  const legacy = registerAutoReview([pending('w', '2026-11-06T01:00:00.000Z', 10, 1, 1, { autoReviewQueued: undefined, autoReviewWaiting: true }), pending('x', '2026-11-06T05:00:00.000Z', 5, 2, 2)], 'x');
+  assert.ok(legacy.every(log => log.autoReviewRegistered && !log.unitReviewPending));
 });
 
 test('4일: 바로 복습 넣기 during measurement and the auto review hours setting', () => {
@@ -11331,9 +11326,8 @@ test('4일: 바로 복습 넣기 during measurement and the auto review hours se
   assert.ok(logger.includes('data-testid="cut-review-button"') && logger.includes('autoReviewCut: true'), 'the note area has the button and the saved study is marked');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
   assert.ok(app.includes('registerAllPendingNow') && app.includes('(log.autoReviewQueued || log.autoReviewCut)'), 'App puts marked studies in at once');
-  assert.ok(app.includes("typeof subject.autoReviewHours === 'number'"), 'the hours survive loading');
   const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/RegisterReviewDialog.tsx'), 'utf8');
-  assert.ok(dialog.includes('복습 하나에 모을 공부 시간') && !dialog.includes('3시간 안에'), 'the setting replaces the 3-hour merge text');
+  assert.ok(!dialog.includes('복습 하나에 모을 공부 시간') && dialog.includes('3시간 안에 넣은 공부는 같은 때 넣은 한 묶음'), '8일: no hours setting; immediate with 3-hour groups');
 });
 
 test('4일: auto review has no units — auto-registered logs make no unit boundary, the efficiency cell compares only with the subject average, and the grade compares with the total average', () => {
@@ -11475,13 +11469,14 @@ test('4일 점검: auto review does not fold a study into one from another study
   const { registerAutoReview, flushFilledAutoGroups } = loadSource('utils/autoReview.ts');
   const mk = (id, end, min, s, e, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: min, pagesRead: e - s + 1, startPage: s, endPage: e, pageCountIsExplicit: true,
     unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true, ...extra });
-  // 23:50 끝 → 00:10~00:30: 1시간 안이지만 공부한 날이 달라 따로 둔다(합치면 뒤 공부가 앞 날짜로 세어진다)
-  let logs = registerAutoReview([mk('a', '2026-11-04T14:50:00.000Z', 20, 1, 2, { studyDate: '2026-11-04' })], 'a', 2);
-  logs = registerAutoReview([...logs, mk('b', '2026-11-04T15:30:00.000Z', 20, 3, 4, { studyDate: '2026-11-05' })], 'b', 2);
+  // 23:50 끝 → 00:10~00:30: 1시간 안이지만 공부한 날이 달라 따로 저장한다(8일: 넣은 때는 3시간 안이라 같은 묶음)
+  let logs = registerAutoReview([mk('a', '2026-11-04T14:50:00.000Z', 20, 1, 2, { studyDate: '2026-11-04' })], 'a');
+  logs = registerAutoReview([...logs, mk('b', '2026-11-04T15:30:00.000Z', 20, 3, 4, { studyDate: '2026-11-05' })], 'b');
   assert.deepEqual(logs.map(log => log.id), ['a', 'b']);
-  // 모은 40분: 2시간이면 그대로, 0.5시간으로 줄이면 바로 넣는다(넣는 때 = 마지막 공부 때)
-  assert.equal(flushFilledAutoGroups(logs, 's', 2), logs);
-  const flushed = flushFilledAutoGroups(logs, 's', 0.5);
+  assert.equal(logs[1].reviewRegisteredAt, logs[0].reviewRegisteredAt);
+  // 예전 판에서 모으던 기록: 0시간으로 바로 넣는다(넣는 때 = 마지막 공부 때)
+  const waiting = [mk('p', '2026-11-04T14:50:00.000Z', 20, 1, 2, { autoReviewQueued: undefined, autoReviewWaiting: true }), mk('q', '2026-11-04T15:30:00.000Z', 20, 3, 4, { autoReviewQueued: undefined, autoReviewWaiting: true })];
+  const flushed = flushFilledAutoGroups(waiting, 's', 0);
   assert.ok(flushed.every(log => log.autoReviewRegistered && !log.unitReviewPending));
   assert.equal(flushed[0].reviewRegisteredAt, '2026-11-04T15:30:00.000Z');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
@@ -11897,4 +11892,25 @@ test('8일: 줄글 — 위 집합은 “A의 B”, 맞힐 값의 {X}는 “X에 
   const question = questionsFor(memo).find(item => item.answerKeywords && item.kind === 'direct');
   const html = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { question, revealed: true, memo }));
   assert.ok(html.includes('data-keyword-accept="true"') && html.includes('원소에 해당하는 값이면 맞아요: A, B'));
+});
+
+test('8일: 합친 노트 줄은 이전 줄의 띄어쓰기를 따른다', () => {
+  const { mergeNoteIntoEarlier } = loadSource('utils/noteMerge.ts');
+  const merged = (incoming, earlier) => mergeNoteIntoEarlier(incoming, [{ id: 'e', memo: earlier }]).map(update => update.after);
+  assert.deepEqual(merged('가 : 1, 2\n나 : 3', '가 : 1'), ['가 : 1, 2']);
+  assert.deepEqual(merged('가:1,2', '가:1'), ['가:1,2'], 'no spaces stays no spaces');
+  assert.deepEqual(merged('A : (B : C), D', 'A : X'), ['A : X, (B : C), D'], 'inside ( ) is left as is');
+});
+
+test('8일: 복습과목 측정 — 학습노트 · 이전 복습노트를 저절로 보이고 버튼으로 숨김(숨겨도 새로 쓴 글은 마지막 학습노트로), 줄마다 다른 연결어를 보는 홀로 쓴 =', () => {
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('data-testid="review-run-notes-toggle"') && logger.includes('data-testid="previous-review-notes"'));
+  assert.ok(logger.includes("localStorage.getItem('swp_review_run_notes_hidden') !== '1'"), 'shown by default, the choice is remembered');
+  const seed = logger.slice(logger.indexOf('const seedCarriedNoteSheet'), logger.indexOf('const toggleReviewRunNotes'));
+  assert.ok(seed.includes('reviewRunNotesShown ? sortReviewLogsByRange(activeReviewRunLogs) : []'));
+  const toggle = logger.slice(logger.indexOf('const toggleReviewRunNotes'), logger.indexOf('const previousReviewNotes'));
+  assert.ok(toggle.includes('splitNoteSheet(parts, reviewMemo)') && toggle.includes('onUpdateReviewMemo(logId, memo)'), 'edits are saved before the sheet is refilled');
+  // 같은 블록의 다른 줄에 `;`가 있어도 `[a] b =d =c`는 홀로 쓴 `=`
+  const qs = questionsFor('A ; B\n[a] b =d =c').filter(q => q.prompt === 'b');
+  assert.deepEqual(qs.map(q => [q.kind, q.answer, q.form]), [['direct', 'd AND c', 'equal']]);
 });

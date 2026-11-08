@@ -219,7 +219,11 @@ function parseExpression(text: string, nodeId: string, from = 0, to = text.lengt
   if (reviewGroups(text).closed.get(from) === to - 1) return parseExpression(text, nodeId, from + 1, to - 1, inherited, text[from] === '(' ? base : 0);
   let allCuts = splitAt(text, from, to, relationMarks());
   // 다른 연결어(`:` `;` `<`) 없이 홀로 쓴 `=`·`-`는 연결어다(31일): `=`는 `:`, `-`는 `;`의 역할로 칸을 나눈다
-  if (!allCuts.length && isNoteShorthandOn() && splitAt(text, 0, text.length, relationMarks()).length === 0) allCuts = splitAt(text, from, to, '=-');
+  // 8일: "다른 연결어"는 그 줄에서 본다(전에는 블록 글 전체를 봐서, 같은 블록의 다른 줄에 `;`가 있으면 `[a] b = d = c`가 칸 안 `=`로 읽혀 "대응하는 것"이 됐다)
+  const lineStart = text.lastIndexOf('\n', Math.max(0, from - 1)) + 1;
+  const lineBreak = text.indexOf('\n', from);
+  const lineEnd = lineBreak < 0 ? text.length : lineBreak;
+  if (!allCuts.length && isNoteShorthandOn() && splitAt(text, lineStart, lineEnd, relationMarks()).length === 0) allCuts = splitAt(text, from, to, '=-');
   if (allCuts.length) {
     // 붙여 쓴 같은 연결어(`::` `;;`)는 칸 하나를 건너뛴다: 마지막 기호에서 칸을 자르고, 앞의 기호 수만큼 칸 번호가 더 늘어난다.
     const relationCuts: number[] = [];

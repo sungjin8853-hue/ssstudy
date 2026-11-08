@@ -956,6 +956,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [isReviewNotePanelOpen, setIsReviewNotePanelOpen] = useState(false);
   const [showNoteTutorial, setShowNoteTutorial] = useState(false);
   const [isReviewCondensePanelOpen, setIsReviewCondensePanelOpen] = useState(false);
+  // 8일: 복습과목을 잴 때 학습노트(복습하는 기록의 정리노트)와 이전 복습노트를 저절로 보인다. 버튼으로 숨기면 노트지는 새로 쓰는 글만 담는다
+  const [reviewRunNotesShown, setReviewRunNotesShown] = useState(() => { try { return localStorage.getItem('swp_review_run_notes_hidden') !== '1'; } catch { return true; } });
   const [isMemoCollapsed, setIsMemoCollapsed] = useState(readSessionMemoCollapsed);
   const [selectedTaskKey, setSelectedTaskKey] = useState('');
   // 범위로 나뉜 복습 칸에서 지금 보는 탭(칸 키 → 범위 번호, 없거나 -1이면 전체)
@@ -1746,7 +1748,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     // 6일: 복습과목을 재는 동안에는 복습하는 기록들의 정리노트를 노트지로 가져온다(정리노트 쪽 차례). 고치면 그 기록의 노트를 고친 것이라
     // 고친 문제만 새로 복습에 들고(고친 부분을 복습에 넣기), 새로 쓴 줄은 마지막 기록에 더해진다
     if (activeReviewRun) {
-      const parts = sortReviewLogsByRange(activeReviewRunLogs)
+      const parts = (reviewRunNotesShown ? sortReviewLogsByRange(activeReviewRunLogs) : [])
         .filter(log => (log.reviewMemo ?? '').trim().length > 0)
         .map(log => ({ logId: log.id, memo: log.reviewMemo ?? '' }));
       sheetPartsRef.current = parts;
@@ -1767,6 +1769,42 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setReviewMemo(mergeSheetParts(parts));
     setReviewMemoDocument(undefined);
   };
+
+  // 8일: 학습노트 · 이전 복습노트 보이기를 바꾼다. 지금 노트지에 고치거나 새로 쓴 글은 먼저 그 기록들에 저장해 두고(사라지지 않게) 노트지를 다시 채운다
+  const toggleReviewRunNotes = () => {
+    if (!activeReviewRun) return;
+    const nextShown = !reviewRunNotesShown;
+    const parts = sheetPartsRef.current;
+    const sheet = parts.length > 0 ? splitNoteSheet(parts, reviewMemo) : null;
+    const memoOf = new Map(activeReviewRunLogs.map(log => [log.id, log.reviewMemo ?? '']));
+    (sheet?.updates ?? []).forEach(update => memoOf.set(update.logId, update.memo));
+    const added = sheet ? sheet.added : reviewMemo;
+    const lastReviewed = sortReviewLogsByRange(activeReviewRunLogs).at(-1);
+    const target = parts.length > 0 ? parts[parts.length - 1].logId : lastReviewed?.id;
+    if (target && added.trim()) {
+      const base = memoOf.get(target) ?? '';
+      memoOf.set(target, base.trim() ? `${base.replace(/\s+$/, '')}\n${added.replace(/^\n+/, '')}` : added.replace(/^\n+/, ''));
+    }
+    memoOf.forEach((memo, logId) => {
+      const log = activeReviewRunLogs.find(item => item.id === logId);
+      if (log && (log.reviewMemo ?? '') !== memo && onUpdateReviewMemo) onUpdateReviewMemo(logId, memo);
+    });
+    const nextParts = nextShown ? sortReviewLogsByRange(activeReviewRunLogs)
+      .map(log => ({ logId: log.id, memo: memoOf.get(log.id) ?? '' })).filter(part => part.memo.trim().length > 0) : [];
+    sheetPartsRef.current = nextParts;
+    sheetUpdatesRef.current = [];
+    setReviewMemo(mergeSheetParts(nextParts));
+    setReviewMemoDocument(undefined);
+    setReviewRunNotesShown(nextShown);
+    try { localStorage.setItem('swp_review_run_notes_hidden', nextShown ? '0' : '1'); } catch { /* 저장이 막혀도 이번 화면에는 적용한다 */ }
+  };
+  // 이전 복습노트: 같은 과목을 이 복습과목으로 전에 잰 기록에 남은 노트(6일 전에는 복습 노트를 복습 기록에 따로 저장했다)
+  const previousReviewNotes = useMemo(() => {
+    if (!activeReviewRun || !selectedSubject) return [];
+    return logs.filter(log => log.reviewParentSubjectId === activeReviewRun.parentSubjectId && log.subjectId === selectedSubject.id && (log.reviewMemo ?? '').trim())
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+      .map(log => ({ id: log.id, when: log.studyDate || log.timestamp.slice(0, 10), range: formatReviewRange(log, pageLabel), text: getReviewMemoOutlineText(log.reviewMemo ?? '') }));
+  }, [activeReviewRun, selectedSubject, logs, pageLabel]);
 
   const startMeasurementNow = () => {
     unlockSounds();
@@ -3063,6 +3101,28 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                       </div>
                     )}
                     {showNoteTutorial && <NoteTutorial onClose={() => setShowNoteTutorial(false)} />}
+                    {activeReviewRun && (
+                      <div data-testid="review-run-notes" className="mb-3 flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-black text-rose-800">{reviewRunNotesShown ? '학습노트를 아래 노트지에 가져왔어요 · 고치면 그 노트가 고쳐져요' : '학습노트 · 이전 복습노트를 숨겼어요 · 새로 쓴 글은 마지막 학습노트에 더해져요'}</span>
+                          <button type="button" data-testid="review-run-notes-toggle" aria-pressed={reviewRunNotesShown} onClick={toggleReviewRunNotes}
+                            className="ml-auto h-10 rounded-xl border-2 border-rose-200 bg-white px-4 text-sm font-black text-rose-700 transition-colors hover:bg-rose-50">
+                            {reviewRunNotesShown ? '노트 숨기기' : '노트 보이기'}
+                          </button>
+                        </div>
+                        {reviewRunNotesShown && previousReviewNotes.length > 0 && (
+                          <section aria-label="이전 복습노트" data-testid="previous-review-notes" className="flex max-h-56 flex-col gap-2 overflow-y-auto rounded-xl border border-rose-100 bg-rose-50/60 px-3 py-2">
+                            <h4 className="text-xs font-black text-rose-800">이전 복습노트</h4>
+                            {previousReviewNotes.map(item => (
+                              <div key={item.id} className="rounded-lg bg-white px-3 py-2 ring-1 ring-rose-100">
+                                <p className="text-[12px] font-black text-slate-500">{item.when} · {item.range}</p>
+                                <pre className="m-0 whitespace-pre-wrap break-words font-sans text-sm font-semibold text-slate-800">{item.text}</pre>
+                              </div>
+                            ))}
+                          </section>
+                        )}
+                      </div>
+                    )}
                     <NoteSetSourceContext.Provider value={noteSetMemos}>
                     <NoteSetEditContext.Provider value={rewriteSessionNotes}>
                     <ReviewMemoEditor

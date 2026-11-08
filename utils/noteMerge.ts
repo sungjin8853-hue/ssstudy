@@ -563,6 +563,29 @@ const replaceStatement = (memo: string, statement: NoteStatement, text: string) 
 };
 
 /**
+ * 8일: 합친 글은 이전 줄의 띄어쓰기 버릇을 따른다(`가 : 1`에 합치면 `가:1,2`가 아니라 `가 : 1, 2`). 괄호 · 따옴표 안은 그대로 둔다.
+ */
+const restyleLike = (existing: string, merged: string): string => {
+  const spacedConnector = /\s[:;<]\s/.test(existing);
+  const spacedComma = /,\s/.test(existing) || spacedConnector;
+  if (!spacedConnector && !spacedComma) return merged;
+  let out = '';
+  let depth = 0;
+  let quoted = false;
+  for (let index = 0; index < merged.length; index += 1) {
+    const char = merged[index];
+    if (char === "'") quoted = !quoted;
+    if (!quoted && '([{'.includes(char)) depth += 1;
+    if (!quoted && ')]}'.includes(char)) depth = Math.max(0, depth - 1);
+    const top = !quoted && depth === 0;
+    if (top && spacedConnector && ':;<'.includes(char) && merged[index + 1] !== char && merged[index - 1] !== char) { out = `${out.replace(/\s+$/, '')} ${char} `; while (merged[index + 1] === ' ') index += 1; continue; }
+    if (top && spacedComma && char === ',') { out = `${out.replace(/\s+$/, '')}, `; while (merged[index + 1] === ' ') index += 1; continue; }
+    out += char;
+  }
+  return out.trim();
+};
+
+/**
  * 새로 쓴 노트를 이전 노트들(오래된 것부터)에 합친다. 새 노트의 글은 그대로 두고, 바뀐 이전 노트만 돌려준다.
  * 같은 속성 경로에서 맨 앞 칸 이름이 같은 줄을 찾고, 겹침이 가장 많은 줄(같으면 가장 오래된 줄)에 합친다.
  */
@@ -584,7 +607,7 @@ export const mergeNoteIntoEarlier = (newMemo: string, earlier: MergeSource[]): M
         if (existing.path.join('\u0001') !== incomingKey) return;
         const merge = mergeNoteChains(existing.text, incoming.text, positionsWith(existing));
         // 형식 토글 밑 줄에 합치면 아래 줄 글로 되돌려 쓴다. 형식의 고정 칸이 바뀌는 합치기는 하지 않는다(그 토글의 모든 줄이 바뀌므로)
-        const written = merge && existing.frame ? unfillFrame(existing.frame.text, merge.text, existing.frame.original) : merge?.text;
+        const written = merge && existing.frame ? unfillFrame(existing.frame.text, merge.text, existing.frame.original) : merge ? restyleLike(existing.text, merge.text) : undefined;
         if (merge && written && (!best || merge.overlap > best.merge.overlap)) best = { id: source.id, statement: existing, merge: { ...merge, text: written } };
       });
     });

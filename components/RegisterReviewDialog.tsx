@@ -11,19 +11,12 @@ import type { StudyLog } from '../types';
  * 난도(다시 · 어려움 · 보통 · 쉬움)를 누르면 바로 그 과목의 복습 대기 기록 모두가 그 난도로 복습에 들어가고 창이 닫힌다(학습 실행 화면으로 돌아간다).
  * 이번 속도는 대기 기록들이 푼 장수 ÷ 걸린 시간, 평균 속도와 등급별 기록은 같은 과목의 지난 공부 기록이다.
  */
-const formatHours = (hours: number) => {
-  const minutes = Math.round(hours * 60);
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return h && m ? `${h}시간 ${m}분` : h ? `${h}시간` : `${m}분`;
-};
-
 export const RegisterReviewDialog: React.FC<{
   info: PendingFeedback;
   pageLabel: string;
   /** 단원별로 고를 때(1일 요청): 아직 복습에 넣지 않은 단원 묶음 · 처음 고른 단원 · 기록 전체 · 과목 */
   chapters?: { groups: PendingChapterGroup[]; initialKeys: string[]; logs: readonly StudyLog[]; subjectId: string; notice?: string };
-  /** 자동 복습 넣기 설정(3일 요청): 켜면 복습에 넣기를 누르지 않아도 공부 시간이 hours만큼 모이면 복습에 들어간다(4일) */
+  /** 자동 복습 넣기 설정(3일 요청): 켜면 복습에 넣기를 누르지 않아도 저장할 때 바로 복습에 들어간다(8일, 3시간 안은 한 묶음) */
   auto?: { on: boolean; onChange: (on: boolean) => void; hours?: number; onHoursChange?: (hours: number) => void; waitingCount?: number; waitingMinutes?: number };
   /** 기다리는 기록 수. 0이면(자동으로 넣는 중) 설정만 보인다 */
   pendingCount?: number;
@@ -31,14 +24,6 @@ export const RegisterReviewDialog: React.FC<{
   onClose: () => void;
 }> = ({ info, pageLabel, chapters, auto, pendingCount = 1, onChoose, onClose }) => {
   const [picked, setPicked] = useState<string[]>(() => chapters?.initialKeys ?? []);
-  const [hoursText, setHoursText] = useState(() => String(auto?.hours ?? 1));
-  const commitHours = () => {
-    const hours = Number(hoursText);
-    if (!auto?.onHoursChange || !Number.isFinite(hours) || hours < 0) { setHoursText(String(auto?.hours ?? 1)); return; }
-    const rounded = Math.round(hours * 100) / 100;
-    setHoursText(String(rounded));
-    if (rounded !== auto.hours) auto.onHoursChange(rounded);
-  };
   const selectedLogs = useMemo(() => (chapters ? chapters.groups.filter(group => picked.includes(group.key)).flatMap(group => group.logs) : []), [chapters, picked]);
   const chapterInfo = useMemo(() => (chapters ? chapterFeedbackOf(chapters.logs, chapters.subjectId, selectedLogs, Date.now()) : null), [chapters, selectedLogs]);
   const { speed, summary, recommended, intervals } = chapterInfo ?? info;
@@ -66,25 +51,10 @@ export const RegisterReviewDialog: React.FC<{
               className="mt-0.5 h-5 w-5 shrink-0 accent-indigo-600" />
             <span className="flex flex-col gap-0.5">
               <span className="text-sm font-black text-slate-800">자동으로 복습에 넣기</span>
-              <span className="text-[12px] font-bold leading-relaxed text-slate-500">복습에 넣기를 누르지 않아도 공부 시간이 정한 시간만큼 모이면 모인 공부를 한 묶음으로 복습에 넣어요. 앞 공부가 끝나고 1시간 안에 이어 한 공부는 같은 때 한 것으로 보고 한 기록으로 합쳐 저장해요. 난도는 그 공부들의 속도를 바로 앞에 공부한 단위와 견준 추천 난도예요.</span>
+              <span className="text-[12px] font-bold leading-relaxed text-slate-500">복습에 넣기를 누르지 않아도 공부를 저장하면 바로 복습에 넣어요. 3시간 안에 넣은 공부는 같은 때 넣은 한 묶음이에요. 앞 공부가 끝나고 1시간 안에 이어 한 공부는 한 기록으로 합쳐 저장해요. 난도는 그 묶음의 속도를 바로 앞에 공부한 단위와 견준 추천 난도예요.</span>
               {auto.on && pendingCount - (auto.waitingCount ?? 0) > 0 && <span data-testid="auto-review-backlog" className="text-[12px] font-black text-indigo-700">켜기 전에 저장한 기록 {pendingCount - (auto.waitingCount ?? 0)}개는 아래에서 난도를 골라 넣어요.</span>}
             </span>
           </label>
-        )}
-        {auto?.on && auto.onHoursChange && (
-          <div data-testid="auto-review-hours" className="mt-2 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
-            <label htmlFor="auto-review-hours-input" className="text-sm font-black text-slate-800">복습 하나에 모을 공부 시간</label>
-            <span className="flex items-center gap-1">
-              <input id="auto-review-hours-input" type="number" inputMode="decimal" min={0} step={0.5} value={hoursText}
-                onChange={event => setHoursText(event.target.value)}
-                onBlur={commitHours} onKeyDown={event => { if (event.key === 'Enter') commitHours(); }}
-                className="h-10 w-20 rounded-xl border border-slate-300 bg-slate-50 px-2 text-right text-base font-black text-slate-900 outline-none focus:border-indigo-500" />
-              <span className="text-sm font-black text-slate-700">시간</span>
-            </span>
-            <span data-testid="auto-review-waiting" className="w-full text-[12px] font-bold text-slate-500">
-              {(auto.hours ?? 1) <= 0 ? '0시간이면 공부를 저장할 때마다 넣어요.' : `지금 모은 공부 ${Math.round(auto.waitingMinutes ?? 0)}분 · ${formatHours(auto.hours ?? 1)}이 차면 넣어요.`}
-            </span>
-          </div>
         )}
         {pendingCount > 0 && <>
         {chapters && <>
