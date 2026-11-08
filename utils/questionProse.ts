@@ -171,7 +171,8 @@ export const proseOf = (input: ProseInput, attrs?: ProseAttrs): Prose | null => 
       ? { statement: `${where}${givenTag}의 ${object('구성요소')} 모두 쓰시오.`, solution }
       : { statement: `${where}${madeOf(givenTag)} 이루어진 ${topic(attr || '것')}?`, solution };
   }
-  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${withAnd(givenTag)} 같은 것은?`, solution };
+  // 8일: `=`로만 셋 이상 이은 줄은 한 값과 같은 것을 모두 묻는다(`b = d = c` → ‘b’와 같은 것을 모두 쓰시오 → d, c)
+  if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${withAnd(givenTag)} ${answerOperator === 'and' ? '같은 것을 모두 쓰시오.' : '같은 것은?'}`, solution };
   // 칸 안의 `=`(다른 연결어가 있는 줄): 예전처럼 "대응하는 것"으로 묻는다(1일). 같은 것은 홀로 쓴 `=`만
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') return { statement: `${where}${givenTag}에 대응하는 ${topic(attr || '것')}?`, solution };
   if (kind === 'direct') return { statement: `${where}${givenTag}${of}${tailOf(ask('forward'), answerOperator)}`, solution };

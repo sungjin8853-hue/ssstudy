@@ -2001,6 +2001,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       next.set(edit.logId, replaced);
     }
     next.forEach((memo, logId) => onUpdateReviewMemo(logId, memo));
+    // 8일: 이 복습이 보이는 노트(시작할 때 찍어 둔 글)도 고친 글로 바꾼다. 그대로 두면 다음 문제의 "나온 줄"이 고치기 전 글이라
+    // 그 줄을 다시 고칠 때 "노트가 바뀌어서 그 줄을 찾지 못했어요"가 떴다
+    setPreSessionReviewDrafts(previous => {
+      const updated = { ...previous };
+      next.forEach((memo, logId) => { if (logId in updated) updated[logId] = memo; });
+      return updated;
+    });
     setGateDroppedIds(previous => [...previous, currentGateQuestion.id]);
     // 문제가 그대로 남아 있으면 다음 복습에 다시 나오고, 고친 글이 새 문제를 만들었으면(켜 둔 경우) 그 문제가 다음 복습에 든다
     const stays = gateCoverOf(currentGateQuestion).every(cover => !next.has(cover.logId)

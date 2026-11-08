@@ -6903,7 +6903,8 @@ test('= is a classification-free logic word inside one cell: A:B=C is the cells 
   assert.ok(questionsFor('A:F=G').some(q => q.kind === 'reverse' && q.prompt === 'G' && q.answer === 'F' && q.conditions.join() === 'A 이후'));
   assert.deepEqual(direct('A=B'), [['A', 'B', 1, []]]);
   // 31일: 다른 연결어 없이 홀로 쓴 `=`는 `:` 역할이라 칸을 나눈다(뒤 칸일수록 덜 중요)
-  assert.deepEqual(direct('A=B=C').map(item => item.slice(0, 3)), [['A', 'B', 1], ['B', 'C', 2]]);
+  // 8일: `=`로만 셋 이상 이은 줄은 모두 같은 것이라 값마다 같은 것을 모두 묻는다(순서 문제 없음)
+  assert.deepEqual(direct('A=B=C').map(item => item.slice(0, 2)), [['A', 'B AND C'], ['B', 'A AND C'], ['C', 'A AND B']]);
   assert.ok(!questionsFor('A:F=G').some(q => q.kind === 'alternative' || q.kind === 'remaining'), '= is not an OR and not an AND list');
   // 분류기준 이름은 `:` 칸만 센다: `A:F=G:H`의 칸은 A · F=G · H
   const classify = q => questionBuilder.getReviewQuestionClassification('개념:정의:예시', q);
@@ -8221,7 +8222,8 @@ test('the = and - shorthand can be turned off: both become plain letters everywh
     assert.ok(shape('서울-부산-대구').includes('direct|서울|부산') && !shape('서울-부산-대구').includes('reverse|부산|서울'), '31일: 홀로 쓴 -는 ;(앞으로만)');
     assert.equal(shorthand.relationMarks(), ':;<', '`=` never splits columns');
     // 31일: 다른 연결어 없이 홀로 쓴 `=`는 `:` 역할(칸을 나눈다)
-    assert.ok(['direct|a|b', 'reverse|b|a', 'direct|b|c', 'reverse|c|b', 'reconstruct|a|b → c', 'far|a|c'].every(item => shape('a=b=c').includes(item)), '`=` alone splits columns like :');
+    assert.ok(['direct|a|b', 'reverse|b|a'].every(item => shape('a=b').includes(item)), '`=` alone splits columns like :');
+    assert.deepEqual(shape('a=b=c'), ['direct|a|b AND c', 'direct|b|a AND c', 'direct|c|a AND b'], '8일: an all-= row asks everything equal to each value, no order questions');
     shorthand.setNoteShorthand(false);
     assert.equal(shorthand.relationMarks(), ':;<');
     assert.deepEqual(shape('a=b'), ['recall|정리노트|a=b'], 'a=b is one plain text');
@@ -11850,4 +11852,27 @@ test('8일: 보통 줄 끝의 {X}는 값(덜 끝난 줄이 아님), 이름 칸�
   assert.ok(openTailOf('사과 :{색}') && !openTailOf('사과 :{색}', false));
   assert.equal(expandOpenLines('사과 :{색}\n빨강'), '사과 :{색}\n빨강');
   assert.equal(expandOpenLines('사과 :\n빨강'), ':::toggle 사과 :\n빨강\n:::end', 'a plain trailing connector still opens');
+});
+
+test('8일: [a] b = d = c — 값마다 같은 것을 모두, 순서 문제(화살표 빈칸 · 재구성 · 두 걸음) 없음, d · c도 a 안', () => {
+  const say = memo => questionsFor(memo).filter(q => q.kind !== 'recall').map(q => [q.kind, questionBuilder.getReviewQuestionSentence(null, q).statement, q.answer]);
+  assert.deepEqual(say('[a] b =d =c'), [
+    ['direct', '‘a’에서 ‘b’과(와) 같은 것을 모두 쓰시오.', 'd AND c'],
+    ['direct', '‘a’에서 ‘d’과(와) 같은 것을 모두 쓰시오.', 'b AND c'],
+    ['direct', '‘a’에서 ‘c’과(와) 같은 것을 모두 쓰시오.', 'b AND d']]);
+  // 둘이면 전처럼 같은 것은?
+  assert.deepEqual(say('[a] B = C').map(item => item[1]), ['‘a’에서 ‘B’과(와) 같은 것은?', '‘a’에서 ‘C’과(와) 같은 것은?']);
+  // 다른 연결어가 있는 줄의 칸 안 `=`는 그대로 대응하는 것
+  assert.ok(say('a : b = c = d').some(item => item[1] === '‘a’ 다음 자리의 ‘b’에 대응하는 것은?'));
+  const ns = loadSource('utils/noteSets.ts');
+  const index = ns.buildNoteSetIndex(['[a] b =d =c']);
+  assert.deepEqual(['b', 'd', 'c'].map(cell => ns.upperSetsOf(index, cell)), [['a'], ['a'], ['a']]);
+  // 플래시 카드는 "같은 · 모두 쓰기"
+  const fl = loadSource('utils/questionFlash.ts');
+  const [first] = questionsFor('[a] b =d =c');
+  assert.deepEqual([fl.flashOf(first).relation.word, fl.flashOf(first).ask.mode], ['같은', '모두']);
+  // 복습 중 "나온 줄"을 고치면 그 복습이 보이는 노트도 고친 글로 바뀐다(다음 문제에서 같은 줄을 또 고쳐도 찾는다)
+  const logger = fs.readFileSync(path.resolve(__dirname, '../components/SessionLogger.tsx'), 'utf8');
+  const handler = logger.slice(logger.indexOf('const handleEditGateLines'), logger.indexOf('setGateDroppedIds(previous => [...previous, currentGateQuestion.id]);', logger.indexOf('const handleEditGateLines')));
+  assert.ok(handler.includes('setPreSessionReviewDrafts('), 'the gate draft follows the edit');
 });

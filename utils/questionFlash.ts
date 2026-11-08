@@ -113,7 +113,7 @@ export const flashOf = (input: ProseInput & { cell?: { given: string; kind: Cell
       : { ...base, relation: { word: '로 이루어진', arrow: 'back' }, ask: { label: askLabel, mode: null } };
   }
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') {
-    return { ...base, relation: { word: '같은', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
+    return { ...base, relation: { word: '같은', arrow: 'equal' }, ask: { label: askLabel, mode: answerOperator === 'and' ? '모두' : null } };
   }
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') {
     return { ...base, relation: { word: '대응하는', arrow: 'equal' }, ask: { label: askLabel, mode: null } };

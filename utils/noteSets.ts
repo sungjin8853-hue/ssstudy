@@ -747,18 +747,26 @@ export const knownSetNames = (index: NoteSetIndex): string[] => unique([
 ].filter(name => name.trim() && !/[\[\]]/.test(name)));
 
 /** 이름의 바로 위 집합들(토글 제목 · 아래 항목이 있는 셀 · `[집합] 셀`), 쓴 그대로 */
+/** `=` · `-`만으로 이은 줄(`b = d = c`)의 값들(띄어쓰기를 뺀 꼴). 그런 줄이 아니면 빈 목록 */
+const loneValues = (shown: string): string[] => {
+  const cuts = topLevelCuts(shown, '=-');
+  if (!cuts.length) return [];
+  const bounds = [-1, ...cuts, shown.length];
+  return bounds.slice(1).map((end, at) => normSetName(shown.slice(bounds[at] + 1, end))).filter(Boolean);
+};
+
 export const upperSetsOf = (index: NoteSetIndex, name: string): string[] => {
   const key = normSetName(name);
   const direct = index.parents.get(key);
   // `물 = H2O`처럼 `=`·`-`만 쓴 줄은 집합 안에 줄 전체가 한 셀로 들어 있다: 그 줄의 앞 값이 같으면 그 줄의 상위 집합이다(2일)
   const viaLone = direct?.length ? [] : [...index.parents.entries()]
-    .filter(([cell]) => { const shown = index.display.get(cell) ?? cell; const cut = topLevelCuts(shown, '=-')[0]; return cut !== undefined && normSetName(shown.slice(0, cut)) === key; })
+    // 8일: 앞 값만이 아니라 `=` · `-`로 이은 값 모두가 그 집합 안이다(`[a] b = d = c`의 d, c도 a 안)
+    .filter(([cell]) => loneValues(index.display.get(cell) ?? cell).includes(key))
     .flatMap(([, parents]) => parents);
   const found = [...new Set([...(direct ?? []), ...viaLone])].map(parent => index.display.get(parent) ?? parent);
   if (found.length) return found;
   // 셀 왼쪽에만 쓴 집합(`[과일] 사과 - 빨강`): 그 위치 표시가 상위 집합이다
-  const loneHead = (cell: string) => { const shown = index.display.get(cell) ?? cell; const cut = topLevelCuts(shown, '=-')[0]; return normSetName(cut === undefined ? shown : shown.slice(0, cut)); };
-  return [...index.placements.values()].filter(mark => markKeyOf(mark.display) !== key && mark.cells.some(cell => cell === key || loneHead(cell) === key)).map(mark => canonicalMark(mark.display));
+  return [...index.placements.values()].filter(mark => markKeyOf(mark.display) !== key && mark.cells.some(cell => cell === key || loneValues(index.display.get(cell) ?? cell).includes(key))).map(mark => canonicalMark(mark.display));
 };
 
 /**

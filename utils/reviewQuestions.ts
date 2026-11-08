@@ -1233,7 +1233,16 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         columns: { prompt: [expression.classifications[givenIndex]], answer: [expression.classifications[wantedIndex]], conditions: conditionColumns },
         answerSpans: form.hiddenSpans, promptSpans: [...spans(columns[givenIndex]), ...form.visibleSpans] }));
     };
-    expression.separators.forEach((separator, index) => {
+    // 8일: `=`로만 셋 이상 이은 줄(`b = d = c`)은 모두 같은 것이라 순서가 없다: 이웃한 쌍 · 빈칸 · 재구성 · 연결 추론 대신
+    // 값마다 "같은 것을 모두" 묻는다(이웃한 쌍만 물으면 ‘b’와 같은 것이 d만 정답이 되어 c가 틀린 답이 된다)
+    const pureEqual = !convertible && columns.length > 2 && columns.every(nonempty) && expression.separators.every(separator => separator === '=');
+    if (pureEqual) columns.forEach((column, index) => {
+      const others = expression.fields.filter((_, other) => other !== index);
+      add({ prompt: expressionLabel(column), answer: expressionLabel(combine('and', others)), direction: 'forward', kind: 'direct', form: 'equal', lone: true,
+        ...rank(scores[index], Math.max(...scores)), conditions, conditionSpans, answerSpans: others.flatMap(spans), promptSpans: spans(column),
+        columns: { prompt: [expression.classifications[index]], answer: others.map((_, at) => expression.classifications[at < index ? at : at + 1]), conditions: conditionColumns } });
+    });
+    if (!pureEqual) expression.separators.forEach((separator, index) => {
       const left = columns[index];
       const right = columns[index + 1];
       if (!nonempty(left) || !nonempty(right)) return;
@@ -1292,7 +1301,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       });
     });
     // 전체 재구성·빈칸은 한 행 전체를 떠올리는 문제의 변주다. 중요도는 행에서 가장 덜 중요한 칸을 따르고, 변주는 난도에만 영향을 준다.
-    if (columns.length > 2 && columns.every(nonempty)) {
+    if (columns.length > 2 && columns.every(nonempty) && !pureEqual) {
       const rest = combine('and', expression.fields.slice(1));
       if (expression.separators.every(goesForward)) {
         if (convertible) convertRow(columns.map((_, index) => index), columns.map((_, index) => index).slice(1));
@@ -1346,7 +1355,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     // 걸음이 많을수록 어렵고 문제 수는 줄어든다. 앞으로는 `:`·`=`로, 거꾸로는 `:`·`;`·`=`로 이어진 구간만 묻는다(7일: 괄호 안 관계로는 건너가지 않는다).
     // 안쪽 관계에서 시작하는 문제는 그 관계가 따로 낸다.
     const chain = chainOf(expression, baseScore);
-    for (let from = 0; from <= (convertible ? -1 : expression.fields.length - 2); from += 1) {
+    for (let from = 0; from <= (convertible || pureEqual ? -1 : expression.fields.length - 2); from += 1) {
       for (let to = from + 2; to < chain.columns.length; to += 1) {
         const path = chain.columns.slice(from, to + 1);
         if (!path.every(nonempty)) continue;
