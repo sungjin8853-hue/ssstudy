@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { StudyLog } from '../types';
 
 /** 학습 실행 화면(태블릿)에서 쓰는 작은 표시 컴포넌트 모음. 계산은 하지 않고 받은 값만 보여준다. */
 
@@ -108,6 +109,8 @@ export interface IdleSummaryContext {
   onPickMember?: (key: string) => void;
   /** 지금 보는 칸이 이미 끝난 과목이면 true. 화살표 이동은 칸 고유 키로 SessionLogger가 맡는다(같은 과목이 범위별로 여러 칸이어도 한 칸씩 간다). */
   currentRowDone?: boolean;
+  /** 9일: 지금 고른 할 일이 복습이면 그 복습 칸의 기록들(복습 칸 제목 오른쪽 "복습 삭제"로 고른 것을 복습 제외로 바꾼다) */
+  reviewTaskLogs?: StudyLog[];
 }
 
 /** 화살표 한 번의 이동 대상. 목록 밖에 있으면(처음 상태) 오른쪽 화살표는 맨 위 줄로 간다. 끝을 넘으면 undefined. */

@@ -21,7 +21,10 @@ import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, co
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
-import { autoReviewHoursOf, chooseAutoReviewGrade, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
+import { autoReviewHoursOf, chooseAutoReviewGrade, registerAutoReview } from './utils/autoReview';
+import { excludeLogFromReview } from './utils/reviewDelete';
+import { planTimesChanged, withPlanTimes } from './utils/weekPlan';
+import { KEYBOARD_MIN_INSET, useKeyboardInset } from './components/NoteSymbolBar';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -145,6 +148,8 @@ const App: React.FC = () => {
   // 과목마다의 `=`·`-` 단축어 설정을 노트 읽기에 알려 둔다
   useSubjectShorthandSync(subjects);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
+  // 9일: 화면 키보드가 올라와 있으면 맨 아래 탭을 키보드 위로 띄우지 않는다
+  const keyboardOpen = useKeyboardInset() >= KEYBOARD_MIN_INSET;
   const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
   const [dashboardDetailSubjectId, setDashboardDetailSubjectId] = useState('');
   /** 학습 실행의 "학습 설정 가기"로 열 때 설정 화면이 먼저 보여줄 과목(그 과목이 든 폴더를 펼치고 카드로 스크롤) */
@@ -769,7 +774,18 @@ const App: React.FC = () => {
 
   // 자동 복습 넣기(8일): 저장하면 바로 복습에 넣고, 3시간 안에 넣은 것은 같은 때의 한 묶음이다(노트 합치기는 넣을 때 복습에 넣기와 같다).
   // 1시간 안에 이어 한 공부는 앞 기록에 합친다. 측정 도중 "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다(자동이 꺼진 과목은 추천 난도로)
-  // 예전 판에서 모으던 기록은 바로 넣는다. 한 효과에서 차례로 해 서로 덮어쓰지 않는다
+  // 켜기 전에 저장한 기록 · 예전 판에서 모으던 기록은 넣지 않고 남긴다(9일). 한 효과에서 차례로 해 서로 덮어쓰지 않는다
+  // 9일 "계획 갱신은 사용자가 미룬 것만(날짜만) 고려, 나머지는 자동으로": 한 장당 계획 시간(잰 속도 · 임시값 · 학습 설정에서 바뀐 단계)이
+  // 바뀌면 그 과목만 바로 새로 적는다. 요일별 할당(페이지)과 계획 시작일 · 밀린 양은 건드리지 않는다(밀린 양을 새로 나누는 것은 계획 갱신)
+  const planTimesGuard = React.useRef(0);
+  useEffect(() => {
+    const stale = subjects.filter(subject => planTimesChanged(subjects, logs, subject));
+    if (!stale.length) { planTimesGuard.current = 0; return; }
+    if (++planTimesGuard.current > 3) return;
+    const ids = new Set(stale.map(subject => subject.id));
+    setSubjects(prev => prev.map(subject => (ids.has(subject.id) ? withPlanTimes(prev, logs, subject) : subject)));
+  }, [logs, subjects]);
+
   const autoHoursKey = subjects.map(subject => (subject.autoReviewRegister ? `${subject.id}:${autoReviewHoursOf(subject)}` : '')).join('|');
   useEffect(() => {
     const queued = logs.filter(log => log.unitReviewPending && (log.autoReviewQueued || log.autoReviewCut)).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -783,9 +799,8 @@ const App: React.FC = () => {
       const finished = subject ? getSubjectRemainingPageCount(subject) <= 0 : false;
       next = registerAutoReview(next, log.id, autoReviewHoursOf(subject), finished, (current, ids) => mergePendingNotes(current, log.subjectId, ids));
     });
-    subjects.filter(subject => subject.autoReviewRegister).forEach(subject => {
-      next = flushFilledAutoGroups(next, subject.id, 0, (current, ids) => mergePendingNotes(current, subject.id, ids));
-    });
+    // 9일: 예전 판에서 시간이 차기를 기다리며 모으던 기록은 자동으로 넣지 않고 보통 대기 기록으로 남긴다(켜기 전에 저장한 기록과 같다)
+    if (next.some(log => log.autoReviewWaiting)) next = next.map(log => (log.autoReviewWaiting ? { ...log, autoReviewWaiting: undefined } : log));
     if (next !== logs) setLogs(next);
   }, [logs, autoHoursKey]);
 
@@ -809,6 +824,12 @@ const App: React.FC = () => {
   };
 
   // 복습에서 뺀 문제: 노트 글은 그대로 두고(논리 이유는 그 줄에 [!]만 붙인다) 기록만 더한다. 되돌리면 [!]를 빼고 기록을 지운다.
+  // 9일: 오늘 할 일 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다(공부 기록 · 노트는 그대로)
+  const handleExcludeFromReview = (logIds: string[]) => {
+    const ids = new Set(logIds);
+    setLogs(prev => prev.map(log => (ids.has(log.id) ? excludeLogFromReview(log) : log)));
+  };
+
   const handleRemoveReviewQuestions = (updates: RemovalUpdate[]) => {
     setLogs(prev => prev.map(log => {
       const update = updates.find(item => item.logId === log.id);
@@ -905,7 +926,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav aria-label="주 메뉴" data-testid="bottom-nav" className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white shadow-lg">
+      {/* 9일 "키보드 · 스크롤 때 안 움직이게": 화면 키보드가 올라와 있는 동안은 탭이 키보드 위로 따라 올라오거나 글과 함께 흘러다니지 않고
+          제자리(키보드 뒤)에 있다가, 키보드가 내려가면 그 자리에 그대로 보인다 */}
+      <nav aria-label="주 메뉴" data-testid="bottom-nav" data-keyboard={keyboardOpen ? 'true' : undefined}
+        style={keyboardOpen ? { visibility: 'hidden' } : undefined}
+        className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white shadow-lg">
         <div className="mx-auto flex max-w-3xl items-stretch justify-around gap-2 px-3 py-2">
           {([
             { tab: 'dashboard', icon: '⏱️', label: '학습 실행' },
@@ -972,6 +997,7 @@ const App: React.FC = () => {
                         onReplaceLogs={handleReplaceLogs}
                         onDeleteLogs={handleDeleteLogs}
                         onUpdateSubjects={handleUpdateSubjects}
+                        onExcludeFromReview={handleExcludeFromReview}
                       />
                     )}
                     onLogSession={handleLogSession}

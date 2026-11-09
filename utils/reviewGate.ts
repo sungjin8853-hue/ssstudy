@@ -167,6 +167,8 @@ export const getCurrentReviewIntervalMs = (reviewStep = 0) => (
 );
 
 export const getDueReviewGateQuestionKeys = inLogSubject((log: StudyLog, nowMs: number, includeLocked = false): string[] => {
+  // 9일: 기본 복습만 제외한 기록은 복습 문제를 묻지 않는다(복습과목은 그대로 한다)
+  if (log.basicReviewSkipped) return [];
   const schedules = getReviewQuestionSchedules(log);
   return buildReviewQuestions(log.reviewMemo || '').questions.filter(question => {
     if (isReviewQuestionRemoved(log, question.key)) return false;

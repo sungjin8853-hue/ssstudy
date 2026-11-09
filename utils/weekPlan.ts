@@ -424,6 +424,65 @@ export const withPlanTimes = (subjects: Subject[], logs: StudyLog[], subject: Su
   return { ...subject, planMinutesPerPage: Object.keys(times).length > 0 ? times : undefined };
 };
 
+/**
+ * 계획 갱신(한 과목): 단계별 계획 시간을 새로 적고, 그 비율로 요일별 페이지를 다시 나누며, 오늘부터 새 계획이다.
+ * 9일: "계획 갱신"을 누를 때(모든 과목)와, 한 과목의 계획 시간이 바뀔 때(임시값 · 학습 설정 저장 · 잰 속도) 그 과목만 같은 식으로 다시 세운다.
+ */
+export const replanSubject = (subjects: Subject[], logs: StudyLog[], subject: Subject, todayKey = getLocalDateKey()): Subject => {
+  const planned = withPlanTimes(subjects, logs, subject);
+  return {
+    ...planned,
+    planResetDate: todayKey,
+    planStageId: currentPlanStageId(planned),
+    scheduledWeekdayPages: calculateFreshWeekdayPagePlan(planned, getSubjectRemainingPageCount(planned), getDiffDays(planned.targetDate))
+  };
+};
+
+/** 저장된 계획 시간이 지금 속도 · 임시값으로 계산한 계획 시간과 다른가(다르면 그 과목만 계획 갱신한다) */
+export const planTimesChanged = (subjects: Subject[], logs: StudyLog[], subject: Subject): boolean => (
+  JSON.stringify(withPlanTimes(subjects, logs, subject).planMinutesPerPage ?? null) !== JSON.stringify(subject.planMinutesPerPage ?? null)
+);
+
+/** 9일: 하루 필요 시간은 10분 단위로 올린다(1시간 3분 → 1시간 10분) */
+export const ceilToTenMinutes = (minutes: number) => (minutes > 0 ? Math.ceil(minutes / 10 - 1e-9) * 10 : 0);
+
+export interface PlanRefreshSummary {
+  /** 월~일 순서. 분은 10분 단위로 올린 값 */
+  days: Array<{ weekday: number; label: string; before: number; after: number }>;
+  /** 갱신 후 한 주 합계와 하루 평균(7일로 나눈 값 · 공부하는 날만의 평균), 10분 단위로 올림 */
+  afterWeek: number;
+  afterDailyAverage: number;
+  afterStudyDayAverage: number;
+  beforeDailyAverage: number;
+  subjects: Array<{ id: string; name: string; days: Array<{ weekday: number; before: number; after: number }> }>;
+}
+
+/** 계획 갱신 전 · 후 요일별 공부(직접 공부) 필요 시간: 학습 설정의 "한 주 필요 시간"과 같은 계산 */
+export const planRefreshSummary = (before: Subject[], after: Subject[], logs: StudyLog[], now = new Date()): PlanRefreshSummary => {
+  const a = buildWeekPlan(before, logs, now);
+  const b = buildWeekPlan(after, logs, now);
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const dayOf = (plan: WeekPlan, weekday: number) => plan.days.find(day => day.weekday === weekday);
+  const days = order.map(weekday => ({
+    weekday, label: dayOf(b, weekday)?.label ?? '',
+    before: ceilToTenMinutes(dayOf(a, weekday)?.minutes ?? 0), after: ceilToTenMinutes(dayOf(b, weekday)?.minutes ?? 0)
+  }));
+  const week = (plan: WeekPlan) => plan.days.reduce((sum, day) => sum + day.minutes, 0);
+  const subjects = b.rows.map(row => {
+    const old = a.rows.find(item => item.subject.id === row.subject.id);
+    return { id: row.subject.id, name: row.subject.name, days: order.map(weekday => ({
+      weekday, before: ceilToTenMinutes(old?.cells[weekday]?.minutes ?? 0), after: ceilToTenMinutes(row.cells[weekday]?.minutes ?? 0)
+    })) };
+  }).filter(item => item.days.some(day => day.before > 0 || day.after > 0));
+  return {
+    days, subjects,
+    afterWeek: ceilToTenMinutes(week(b)),
+    afterDailyAverage: ceilToTenMinutes(week(b) / 7),
+    afterStudyDayAverage: ceilToTenMinutes(b.activeDayAverageMinutes),
+    beforeDailyAverage: ceilToTenMinutes(week(a) / 7)
+  };
+};
+
 /** 지금 단계 한 페이지의 계획 시간(직접 공부 시간)을 요일마다(모든 요일이 같다: 하루 시간은 단계와 상관없이 고르다). 0이면 모른다 */
 export const getWeekdayMinutesPerPage = (subjects: Subject[], logs: StudyLog[], subject: Subject): Record<number, number> => {
   const total = getStagePlanTime(subjects, logs, subject, currentPlanStageId(subject)).total;

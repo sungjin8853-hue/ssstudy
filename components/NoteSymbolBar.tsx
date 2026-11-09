@@ -32,7 +32,7 @@ const TONES: Record<NoteSymbol['tone'], string> = {
   toggle: 'border-[#C9CCF7] bg-[#ECEBFD] text-[#2B2480]'
 };
 
-/** 화면 키보드가 올라와 있으면 그 높이(px), 아니면 0. 키보드 바로 위에 막대를 붙이기 위해 쓴다. */
+/** 화면 키보드가 올라와 있으면 그 높이(px), 아니면 0. 9일부터 맨 아래 탭이 키보드 위로 뜨지 않게 하는 데 쓴다. */
 export const useKeyboardInset = () => {
   const [inset, setInset] = useState(0);
   useEffect(() => {
@@ -50,20 +50,19 @@ export const useKeyboardInset = () => {
   return inset;
 };
 
-const KEYBOARD_MIN_INSET = 120;
+/** 이 높이(px)보다 크게 화면이 가려지면 화면 키보드가 올라온 것으로 본다 */
+export const KEYBOARD_MIN_INSET = 120;
 
 export const NoteSymbolBar: React.FC<{ onInsert: (value: string) => void; className?: string }> = ({ onInsert, className = '' }) => {
-  const inset = useKeyboardInset();
-  const floating = inset >= KEYBOARD_MIN_INSET;
+  // 9일 "키보드 때 안 움직이게": 키보드가 올라와도 막대는 노트 칸 위 제자리에 둔다(전에는 키보드 바로 위로 옮겨 갔다)
   // `=`·`-` 단축어를 끄면 그 둘은 그냥 글자라서 막대에서 뺀다
   const shorthand = useNoteShorthand();
   const symbols = shorthand ? NOTE_SYMBOLS : NOTE_SYMBOLS.filter(symbol => symbol.value !== '=' && symbol.value !== '-');
   // 글 입력칸에서 포커스가 빠지지 않도록 누르는 순간의 기본 동작을 막는다.
   const keepFocus = (event: React.SyntheticEvent) => event.preventDefault();
   return (
-    <div role="group" aria-label="기호 입력" data-floating={floating ? 'true' : 'false'}
-      style={floating ? { bottom: inset } : undefined}
-      className={`flex gap-1.5 border-[#D2D8F5] bg-white px-2 py-2.5 sm:gap-2 sm:px-3 ${floating ? 'fixed inset-x-0 z-40 border-t shadow-[0_-4px_16px_rgba(30,40,90,0.12)]' : 'border-b'} ${className}`}>
+    <div role="group" aria-label="기호 입력" data-floating="false"
+      className={`flex gap-1.5 border-b border-[#D2D8F5] bg-white px-2 py-2.5 sm:gap-2 sm:px-3 ${className}`}>
       {symbols.map(symbol => (
         <button key={symbol.value} type="button" aria-label={symbol.aria}
           onMouseDown={keepFocus} onPointerDown={keepFocus}

@@ -32,7 +32,8 @@ import { copyText } from '../utils/copyText';
 import { getReviewMemoOutlineText } from '../utils/reviewMemo';
 import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
-import { currentPlanStageId, withPlanTimes } from '../utils/weekPlan';
+import { currentPlanStageId, planRefreshSummary, PlanRefreshSummary, replanSubject, withPlanTimes } from '../utils/weekPlan';
+import { PlanRefreshDialog } from './PlanRefreshDialog';
 import { formatPageSpans, unsolvedPagesAfter } from '../utils/unsolvedPages';
 import { hasLogicMark, memoLineText } from '../utils/noteLogicMarks';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
@@ -180,7 +181,7 @@ export const MeasurementProgress: React.FC<{ pages: number; target: number | nul
   </>;
 };
 
-export const OrganizationTimer: React.FC<{ seconds: number; baseSeconds?: number; running: boolean; onToggle: () => void; onComplete: () => void }> = ({ seconds, baseSeconds = 0, running, onToggle, onComplete }) => (
+export const OrganizationTimer: React.FC<{ seconds: number; baseSeconds?: number; running: boolean; pauseAlert?: boolean; onToggle: () => void; onComplete: () => void }> = ({ seconds, baseSeconds = 0, running, pauseAlert = false, onToggle, onComplete }) => (
   <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
     <div className="min-w-0 flex-1">
       <h3 className="text-xl font-black text-slate-900">막힌 부분 정리</h3>
@@ -188,7 +189,8 @@ export const OrganizationTimer: React.FC<{ seconds: number; baseSeconds?: number
       <p className="mt-1 font-mono text-4xl font-black tabular-nums text-slate-900">{formatTime(baseSeconds + seconds)}</p>
       <p className="mt-1 text-sm font-bold text-slate-500">풀이 {formatTime(baseSeconds)} · 정리 {formatTime(seconds)}</p>
     </div>
-    <button type="button" onClick={onToggle} className={`rounded-xl px-5 py-3.5 text-sm font-black ${running ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+    <button type="button" onClick={onToggle} data-pause-alert={pauseAlert ? 'true' : undefined}
+      className={`rounded-xl px-5 py-3.5 text-sm font-black ${running ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'} ${pauseAlert ? 'animate-pause-alert' : ''}`}>
       {running ? '일시정지' : '다시 시작'}
     </button>
     <button type="button" onClick={onComplete} className="rounded-xl bg-rose-500 px-5 py-3.5 text-sm font-black text-white hover:bg-rose-600">완료</button>
@@ -235,7 +237,6 @@ interface GateReviewQuestion {
 
 type GateReviewResult = ReviewGrade;
 
-const REVIEW_SESSION_PREF_KEY = 'swp_session_review_preferences';
 const SESSION_MEMO_COLLAPSED_KEY = 'swp_session_memo_collapsed';
 const DEFAULT_SESSION_TIMER: SessionTimer = {
   id: 'none',
@@ -264,6 +265,9 @@ const unlockChime = () => {
   const context = getChimeContext();
   if (context && context.state === 'suspended') void context.resume().catch(() => undefined);
 };
+
+/** 9일: 일시정지 버튼으로 멈춘 채 이만큼 지나면 알람(뽀모도로 끝 알람과 같은 소리)과 다시 시작 버튼 깜박임 */
+export const PAUSE_ALERT_MS = 5 * 60 * 1000;
 
 /** 뽀모도로가 끝났을 때의 알람: "삐삐삐삐"(짧은 삐 소리 4번)를 이만큼 되풀이한다(30일 요청, 예전 세 음 종소리 대신) */
 export const POMODORO_ALARM_REPEATS = 3;
@@ -467,20 +471,6 @@ const formatMergedReviewRanges = (logs: StudyLog[], label = DEFAULT_PAGE_LABEL) 
 
   if (merged.length === 0) return logs.map(log => formatReviewRange(log, label)).join(', ');
   return merged.map(range => `${formatPageNumber(range.start)}~${formatPageNumber(range.end)}`).join(', ');
-};
-
-const readReviewSessionPreferences = (): Record<string, boolean> => {
-  try {
-    return JSON.parse(localStorage.getItem(REVIEW_SESSION_PREF_KEY) || '{}') || {};
-  } catch {
-    return {};
-  }
-};
-
-const writeReviewSessionPreference = (subjectId: string, skipReview: boolean) => {
-  const preferences = readReviewSessionPreferences();
-  preferences[subjectId] = skipReview;
-  localStorage.setItem(REVIEW_SESSION_PREF_KEY, JSON.stringify(preferences));
 };
 
 const readSessionMemoCollapsed = () => {
@@ -938,7 +928,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 기본 복습(복습과목 없음)을 마칠 때 고른 난도. 고르지 않으면 추천(없으면 보통)
   const [basicFeedbackChoice, setBasicFeedbackChoice] = useState<SubjectGrade | null>(null);
   const [initialReadAmount, setInitialReadAmount] = useState('');
-  const [skipReview, setSkipReview] = useState(false);
+  // 9일: 학습량 입력 창의 복습 고르기. 복습과목이 있으면 제외를 한 번 누르면 기본 복습만, 한 번 더 누르면 복습과목까지 뺀다
+  const [planRefreshResult, setPlanRefreshResult] = useState<PlanRefreshSummary | null>(null);
+  // 9일: 측정 · 정리 타이머를 일시정지 버튼으로 멈춘 채 5분이 지나면 알람이 울리고 다시 시작 버튼이 깜박인다(누를 때마다 새로 잰다)
+  const [pausedByUserAt, setPausedByUserAt] = useState<number | null>(null);
+  const [pauseAlert, setPauseAlert] = useState(false);
+  const [reviewChoice, setReviewChoice] = useState<'include' | 'skipBasic' | 'skipAll'>('include');
   const [minutes, setMinutes] = useState(0);
   const [timerMode, setTimerMode] = useState<TimerMode>('remainingPages');
   const [seconds, setSeconds] = useState(0);
@@ -1561,13 +1556,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   }, [gateRemovalNotice]);
 
   useEffect(() => {
-    if (!subjectId) return;
-    const savedPreference = readReviewSessionPreferences()[subjectId];
-    const isLinkedReviewSubject = reviewSubjectIdSet.has(subjectId);
-    setSkipReview(savedPreference ?? (isSubjectReviewDisabled || isLinkedReviewSubject));
-  }, [subjectId, isSubjectReviewDisabled, reviewSubjectIdSet]);
-
-  useEffect(() => {
     if (!subjectId) {
       setSessionMemo(readSessionMemos().global || '');
       setSelectedSessionTimerId('none');
@@ -1686,13 +1674,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setIsReviewNotePanelOpen(false);
     setIsReviewCondensePanelOpen(false);
     setActiveReviewRun(null);
-  };
-
-  const handleToggleSkipReview = () => {
-    if (!subjectId) return;
-    const nextSkipReview = !skipReview;
-    setSkipReview(nextSkipReview);
-    writeReviewSessionPreference(subjectId, nextSkipReview);
   };
 
   const handleMemoChange = (memo: string) => {
@@ -1949,23 +1930,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (!onUpdateSubjects) return;
 
     const resetDateKey = getLocalDateKey();
-    // 갱신은 계획을 다시 세우는 것: 단계별 계획 시간(직접 공부 시간, 재기 전이면 임시값)을 새로 적고 — 복습 일정(기록의 다음 복습 시각)은 건드리지 않는다
-    // 그 비율로 하루 시간이 고르게 나눈다(31일 요청). 요일 사이 비율은 저장된 요일별 페이지 비율 그대로
-    const updatedSubjects = subjects.map(subject => {
-      const planned = withPlanTimes(subjects, logs, subject);
-      return {
-        ...planned,
-        planResetDate: resetDateKey,
-        planStageId: currentPlanStageId(planned),
-        scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
-          planned,
-          getSubjectRemainingPageCount(planned),
-          getDiffDays(planned.targetDate)
-        )
-      };
-    });
+    // 9일: 계획 갱신은 날짜만 따진다 — 오늘부터 새 계획으로 남은 양(밀린 양 · 미리 한 양 포함)을 마감까지 다시 나눈다.
+    // 한 장당 계획 시간은 속도 · 임시값이 바뀔 때 이미 자동으로 적히므로 여기서는 같은 값이다. 복습 일정(기록의 다음 복습 시각)은 건드리지 않는다.
+    // 요일 사이 비율은 저장된 요일별 페이지 비율 그대로
+    const updatedSubjects = subjects.map(subject => replanSubject(subjects, logs, subject, resetDateKey));
 
     onUpdateSubjects(updatedSubjects);
+    // 9일: 요일별 공부 시간이 어떻게 바뀌었는지와 갱신 후 하루 평균 필요 시간을 보여 준다
+    setPlanRefreshResult(planRefreshSummary(subjects, updatedSubjects, logs));
   };
 
   const handleGateLevelChange = (level: number) => {
@@ -2234,6 +2206,24 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     startMeasurementNow();
   }, [pendingImmediateStartSubjectId, step, subjectId]);
 
+  const toggleTimerByUser = () => {
+    unlockSounds();
+    const pausing = isTimerRunning;
+    setIsTimerRunning(!pausing);
+    setPausedByUserAt(pausing ? Date.now() : null);
+  };
+  const pausedWaiting = pausedByUserAt !== null && !isTimerRunning && (step === 'timer' || step === 'organize');
+  useEffect(() => {
+    setPauseAlert(false);
+    if (!pausedWaiting) {
+      if (pausedByUserAt !== null && (isTimerRunning || (step !== 'timer' && step !== 'organize'))) setPausedByUserAt(null);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => { setPauseAlert(true); playPomodoroEndSound(); }, Math.max(0, pausedByUserAt! + PAUSE_ALERT_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pausedWaiting, pausedByUserAt]);
+
   const handleTimerComplete = () => {
     let elapsedSeconds = accumulatedSecondsRef.current;
     if (startTimeRef.current !== null) {
@@ -2299,32 +2289,59 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setIsTimerRunning(true);
   };
 
-  const createCurrentSessionLog = () => {
-    const sPage = parseFloat(startPage);
-    const endPage = parseFloat(readAmount);
-    const measurement = createPageMeasurement(sPage, endPage, Number(solvedPageCount), remainingSubjectPages, stageChapters);
-    const shouldSkipReview = skipReview;
-
-    if (measurement === null) {
-      alert('끝 페이지와 푼 장수를 확인해주세요.');
-      return null;
-    }
-
+  /** 이번 기록에 저장할 노트와, 노트지로 이어 쓴 이전 기록들의 고친 노트(저장하지 않고 계산만 한다) */
+  const splitSessionMemo = () => {
     // 이어 쓴 노트지라면 새로 쓴 부분만 이번 기록의 노트로 저장하고, 고쳐진 이전 기록의 노트는 따로 모아 둔다.
     const carriedParts = sheetPartsRef.current;
     const sheet = carriedParts.length > 0 ? splitNoteSheet(carriedParts, reviewMemo) : null;
-    sheetUpdatesRef.current = sheet ? sheet.updates : [];
+    let updates = sheet ? sheet.updates : [];
     let savedMemo = sheet ? sheet.added : reviewMemo;
     // 6일: 복습과목에서 가져온 노트지에 새로 쓴 줄은 복습 기록이 아니라 복습하던 마지막 기록의 정리노트에 더한다(그래야 문제로 나온다)
     // (복습하는 기록에 노트가 하나도 없었으면 범위가 가장 뒤인 기록에 쓴다)
     const lastReviewed = activeReviewRun ? sortReviewLogsByRange(activeReviewRunLogs).at(-1) : undefined;
     const target = carriedParts.length > 0 ? carriedParts[carriedParts.length - 1] : lastReviewed ? { logId: lastReviewed.id, memo: lastReviewed.reviewMemo ?? '' } : null;
     if (activeReviewRun && target && savedMemo.trim()) {
-      const base = sheetUpdatesRef.current.find(update => update.logId === target.logId)?.memo ?? target.memo;
+      const base = updates.find(update => update.logId === target.logId)?.memo ?? target.memo;
       const merged = base.trim() ? `${base.replace(/\s+$/, '')}\n${savedMemo.replace(/^\n+/, '')}` : savedMemo.replace(/^\n+/, '');
-      sheetUpdatesRef.current = [...sheetUpdatesRef.current.filter(update => update.logId !== target.logId), { logId: target.logId, memo: merged }];
+      updates = [...updates.filter(update => update.logId !== target.logId), { logId: target.logId, memo: merged }];
       savedMemo = '';
     }
+    return { savedMemo, updates };
+  };
+
+  // 9일: 복습 포함 · 제외는 측정 중이 아니라 학습량 입력 창에서 고른다. 창이 열릴 때마다 이번 기록의 노트에 글이 있으면 포함,
+  // 없으면 기본 복습만 제외(복습과목이 없으면 그냥 제외)로 골라 둔다(과목 설정에서 복습을 끈 과목 · 복습과목을 잴 때는 전처럼 모두 제외)
+  const sessionHasReviewSubjects = Boolean(selectedSubject) && !activeReviewRun
+    && getReviewSubjectIdsForLog({ subjectId, subjectStageId: activeSubjectStage?.id } as StudyLog, selectedSubject!, subjects).length > 0;
+  const defaultReviewChoice = (): 'include' | 'skipBasic' | 'skipAll' => {
+    if (isSubjectReviewDisabled || activeReviewRun || reviewSubjectIdSet.has(subjectId)) return 'skipAll';
+    if (splitSessionMemo().savedMemo.trim()) return 'include';
+    return sessionHasReviewSubjects ? 'skipBasic' : 'skipAll';
+  };
+  useEffect(() => {
+    if (step === 'pages') setReviewChoice(defaultReviewChoice());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+  /** 제외 버튼: 복습과목이 있으면 기본 복습만 → 복습과목까지 → 다시 기본 복습만, 없으면 그냥 제외 */
+  const pressSkipReview = () => setReviewChoice(current => (!sessionHasReviewSubjects ? 'skipAll' : current === 'skipBasic' ? 'skipAll' : 'skipBasic'));
+
+  const createCurrentSessionLog = () => {
+    const sPage = parseFloat(startPage);
+    const endPage = parseFloat(readAmount);
+    const measurement = createPageMeasurement(sPage, endPage, Number(solvedPageCount), remainingSubjectPages, stageChapters);
+    const shouldSkipReview = reviewChoice === 'skipAll' || (reviewChoice === 'skipBasic' && !sessionHasReviewSubjects);
+    const skipBasicOnly = reviewChoice === 'skipBasic' && sessionHasReviewSubjects;
+
+    if (measurement === null) {
+      alert('끝 페이지와 푼 장수를 확인해주세요.');
+      return null;
+    }
+
+    const carriedParts = sheetPartsRef.current;
+    const split = splitSessionMemo();
+    const sheet = carriedParts.length > 0;
+    sheetUpdatesRef.current = split.updates;
+    const savedMemo = split.savedMemo;
 
     return {
       id: Math.random().toString(36).substr(2, 9),
@@ -2341,7 +2358,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       isCondensed: shouldSkipReview,
       reviewMemo: savedMemo || undefined,
       reviewMemoDocument: sheet ? undefined : reviewMemoDocument,
-      reviewEnabled: !shouldSkipReview
+      reviewEnabled: !shouldSkipReview,
+      ...(skipBasicOnly ? { basicReviewSkipped: true } : {})
     };
   };
 
@@ -2439,7 +2457,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         : calculateEndPageValue(cutStartPage, expectedReadAmount)
       : cutStartPage)
     : '';
-  const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !skipReview;
+  // 9일: 복습 포함 · 제외는 측정이 끝난 뒤 고르므로 재는 동안의 바로 복습 넣기는 과목 설정(복습을 끈 과목 · 복습과목이 아니면)만 본다
+  const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !isSubjectReviewDisabled && !reviewSubjectIdSet.has(subjectId);
   // 바로 복습 넣기로 복습에 넣으면 노트지의 조각이 바뀐 기록과 어긋날 수 있다(4일 점검): 기록이 1시간 안 앞 기록에 합쳐져 없어지거나(자동 복습),
   // 넣을 때 새 노트가 이전 쪽 노트에 연결 · 첨가로 합쳐져 그 기록의 노트가 바뀐다. 어긋나면 넣기가 끝난 뒤 오늘 노트로 노트지를 다시 채우고,
   // 그사이 새로 쓴 글은 뒤에 그대로 둔다(바뀐 기록에 옛 글로 고친 것을 덮어쓰지 않는다)
@@ -2469,7 +2488,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   }, [logs]);
 
   const handleCutReview = () => {
-    if (!selectedSubject || activeReviewRun || skipReview) return;
+    if (!canCutReview) return;
     const end = Number(cutEndPage ?? cutDefaultEnd);
     const solved = stageChapters.length > 0 ? pagesBetween(stageChapters, cutStartPage, end) : getAutoSolvedPageCount(cutStartPage, end);
     const measurement = Number.isFinite(end) ? createPageMeasurement(cutStartPage, end, Number(solved), remainingSubjectPages, stageChapters) : null;
@@ -2922,11 +2941,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     .reduce((sum, summary) => ({ pages: sum.pages + summary.pages, minutes: sum.minutes + summary.minutes }), { pages: 0, minutes: 0 });
   const formatTotal = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, ''));
   const taskSelector = (
+    <>
+    {planRefreshResult && <PlanRefreshDialog summary={planRefreshResult} onClose={() => setPlanRefreshResult(null)} />}
     <TaskQueueList items={taskCards} currentKey={currentDetailKey} currentRowKey={currentChipKey} onRefresh={handleRefreshStudyPlans}
       stats={{ minutes: runQueueItems.reduce((sum, item) => sum + Math.max(0, item.estimatedMinutes), 0),
         completedLabel: `${formatTotal(completedTotals.pages)}P · ${formatDoneMinutes(completedTotals.minutes)}` }}
       stepper={{ position: taskCards.findIndex(card => card.key === currentChipKey) + 1, total: taskCards.length,
         done: Boolean(viewingDoneCard), onStep: stepTaskRow }} />
+    </>
   );
 
   if (step === 'idle') {
@@ -2960,6 +2982,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           : startStudyOrderItem(selectedRunQueueItem.studyItem)} />
       ) : null,
       currentRowDone: Boolean(viewingDoneCard),
+      reviewTaskLogs: selectedReviewGroup && !viewingDoneCard ? selectedReviewGroup.logs : undefined,
       laterMembers, memberChoices, currentMemberKey: currentReviewItem && memberChoices ? rangeTabKey(currentReviewItem.key, currentRangeIndex) : '', onPickMember: pickTaskMember,
       reviewScope,
       extraReviewKeys: doneCards.filter(card => card.kind === 'review' && extraReviewGroups.has(card.detailKey)).map(card => card.detailKey),
@@ -3051,7 +3074,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                   )}
                 </div>
                 {/* 6일: 복습과목을 잴 때는 복습하는 기록들의 정리노트를 가져와 보여 준다(복습 기록 자체는 복습하지 않아도) */}
-                {(!skipReview || step === 'organize' || Boolean(activeReviewRun)) && (
+                {/* 9일: 복습 포함 · 제외는 측정 뒤 학습량 입력 창에서 고르므로 재는 동안 정리노트는 늘 보인다 */}
                   <div className="rounded-2xl border border-rose-200 bg-white p-5 shadow-sm">
                     <div className="mb-4 flex items-center gap-2">
                       <label className="text-base font-black text-rose-700">정리노트</label>
@@ -3140,7 +3163,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                     </NoteSetEditContext.Provider>
                     </NoteSetSourceContext.Provider>
                   </div>
-                )}
                 {activeReviewRun && activeReviewRunMemoItems.length > 0 && isReviewCondensePanelOpen && timerMode !== 'sessionMemo' && (
                   <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <label className="text-xs font-black uppercase tracking-widest text-slate-500">축약</label>
@@ -3204,7 +3226,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                 onDismiss={() => setDismissedPomodoroRound(studyPomodoroRound)} />
             )}
             {step === 'organize' ? <OrganizationTimer seconds={seconds} baseSeconds={studySeconds} running={isTimerRunning}
-              onToggle={() => setIsTimerRunning(current => !current)} onComplete={handleTimerComplete} /> : (
+              pauseAlert={pauseAlert} onToggle={toggleTimerByUser} onComplete={handleTimerComplete} /> : (
             <div className="flex flex-wrap items-stretch gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
                 {/* 넓은 화면에서 한 줄에 놓되, 측정 묶음은 글보다 좁아지지 않는다(좁으면 진척도가 아래 줄로 내려간다: 1일 "이번 측정이 진척도에 가려짐") */}
                 <div data-testid="measurement-group" className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-slate-50 px-3 py-3 sm:gap-x-4 sm:px-4 lg:w-auto lg:flex-[2_0_auto] lg:flex-nowrap">
@@ -3250,20 +3272,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               </div>
             <div className="flex w-full min-w-0 items-center gap-2 lg:w-auto lg:min-w-[16.5rem] lg:flex-1">
               <button
-                onClick={() => setIsTimerRunning(!isTimerRunning)}
-                className={`flex-1 rounded-xl px-3 py-3.5 text-sm font-black shadow-sm ${isTimerRunning ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                onClick={toggleTimerByUser}
+                data-pause-alert={pauseAlert ? 'true' : undefined}
+                className={`flex-1 rounded-xl px-3 py-3.5 text-sm font-black shadow-sm ${isTimerRunning ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-indigo-600 text-white hover:bg-indigo-700'} ${pauseAlert ? 'animate-pause-alert' : ''}`}
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
-              </button>
-              <button
-                onClick={handleToggleSkipReview}
-                className={`shrink-0 rounded-xl border-2 px-3 py-3.5 text-sm font-black shadow-sm transition-all ${
-                  skipReview
-                    ? 'bg-rose-50 text-rose-700 border-rose-400'
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-500'
-                }`}
-              >
-                <span>{skipReview ? '복습 제외' : '복습 포함'}</span>
               </button>
               <button onClick={handleTimerComplete} className="flex-1 rounded-xl bg-rose-500 px-3 py-3.5 text-sm font-black text-white shadow-sm transition-colors hover:bg-rose-600">완료</button>
             </div>
@@ -3362,6 +3375,32 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                 )}
               </div>
             </div>
+
+            {!activeReviewRun && (
+              <section aria-label="복습 포함 여부" data-testid="session-review-choice" className="mb-4 w-full rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" aria-pressed={reviewChoice === 'include'} data-review-choice="include" onClick={() => setReviewChoice('include')}
+                    className={`rounded-xl border-2 px-3 py-3.5 text-base font-black transition-all ${reviewChoice === 'include'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-2 ring-emerald-300' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    복습 포함
+                  </button>
+                  <button type="button" aria-pressed={reviewChoice !== 'include'} data-review-choice={reviewChoice === 'include' ? 'skip' : reviewChoice} onClick={pressSkipReview}
+                    className={`rounded-xl border-2 px-3 py-3.5 text-base font-black transition-all ${reviewChoice !== 'include'
+                      ? 'border-rose-400 bg-rose-50 text-rose-700 ring-2 ring-rose-300' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    {!sessionHasReviewSubjects ? '복습 제외' : reviewChoice === 'skipAll' ? '복습과목까지 제외' : '기본 복습만 제외'}
+                  </button>
+                </div>
+                <p data-testid="session-review-choice-note" className="mt-2 text-center text-[13px] font-bold text-slate-500">
+                  {reviewChoice !== defaultReviewChoice() ? '직접 골랐어요.'
+                    : isSubjectReviewDisabled ? '이 과목은 복습을 꺼 두어 제외로 골라 두었어요.'
+                    : reviewSubjectIdSet.has(subjectId) ? '복습과목이라 제외로 골라 두었어요.'
+                    : reviewChoice === 'include' ? '이번 정리노트에 쓴 글이 있어 포함으로 골라 두었어요.'
+                    : reviewChoice === 'skipBasic' ? '이번 정리노트가 비어 있어 기본 복습만 제외로 골라 두었어요. 복습과목은 해요.'
+                    : '이번 정리노트가 비어 있어 제외로 골라 두었어요.'}
+                  {sessionHasReviewSubjects && reviewChoice !== 'include' && <span className="block text-slate-400">{reviewChoice === 'skipBasic' ? '제외를 한 번 더 누르면 복습과목까지 빼요.' : '제외를 한 번 더 누르면 기본 복습만 빼요.'}</span>}
+                </p>
+              </section>
+            )}
 
             {feedbackInfo && activeReviewRun && (() => {
               const { summary, recommended, fromQuestions } = feedbackInfo;

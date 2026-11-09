@@ -138,8 +138,9 @@ export const registerAutoReview = (
   const incoming0 = logs.find(log => log.id === logId);
   if (!incoming0 || !incoming0.unitReviewPending) return logs;
   const atMs = endMs(incoming0);
-  // 예전 판에서 모으던 기록이 남아 있으면 먼저 넣는다(그 마지막 공부 때에)
-  let next = flushFilledAutoGroups(logs, incoming0.subjectId, 0, beforeRegister, logId);
+  // 9일 "자동으로 넣기를 켜면 이전 기록은 넣지 말고 남기고 새로 들어오는 것만": 남아 있는 대기 기록(켜기 전에 저장한 것 · 예전 판에서 모으던 것)은
+  // 건드리지 않는다. 복습에 넣기 창에서 직접 넣는다
+  let next = logs;
   const simplified = simplifyAutoLog(next, logId);
   next = simplified.logs;
   const incoming = next.find(log => log.id === simplified.id)!;

@@ -6004,7 +6004,8 @@ test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked w
   assert.ok(!play.includes('playPageTurnSound') && play.includes('ringChime(context)') && play.includes('context.resume()'));
   assert.ok(!logger.includes('page-turn.mp3') && !logger.includes('new Audio(') && !fs.existsSync(path.resolve(__dirname, '../public/sounds/page-turn.mp3')));
   // 학습·복습 모두 회차가 끝나면 이 종소리를 낸다. 측정 중 장마다 나던 소리(반쯤 · 1분 전 · 장 넘김)는 없다(29일)
-  assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 2);
+  // 9일: 일시정지한 채 5분이 지날 때도 같은 소리를 낸다
+  assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 3);
   assert.ok(!logger.includes('pageTurnSoundPagesRef') && !logger.includes('playHalfwayPenSound') && !logger.includes('playMarkerSound') && !logger.includes('marker.mp3'));
   // 도중에 시간을 바꿔 끝난 회차 수가 줄면 그 값부터 다시 센다
   assert.ok(logger.includes('reviewRoundsSeenRef.current = reviewCompletedRounds;\n      setDismissedReviewRound(current => Math.min(current, reviewCompletedRounds));'));
@@ -6539,7 +6540,7 @@ test('plan by time (30th/31st): weekday editor shows the day time with review; p
   const owner = { ...subject, id: 'o', totalPages: 4, followUpSubjects: [{ id: 'f', sourceSubjectId: 'src', name: '기출', startPage: 1, endPage: 40, completedPage: 0 }] };
   assert.equal(getStageMinutesPerPage([owner, source], [], owner, 'f'), 6);
   const fsSrc = name => fs.readFileSync(path.resolve(__dirname, '..', name), 'utf8');
-  assert.ok(fsSrc('components/SessionLogger.tsx').includes('const planned = withPlanTimes(subjects, logs, subject);'), '계획 갱신 writes the stage plan times again');
+  assert.ok(fsSrc('components/SessionLogger.tsx').includes('subjects.map(subject => replanSubject(subjects, logs, subject, resetDateKey))') && fsSrc('utils/weekPlan.ts').includes('const planned = withPlanTimes(subjects, logs, subject);'), '계획 갱신 writes the stage plan times again');
   assert.ok(fsSrc('components/SubjectPlanner.tsx').includes('<PlanPriorityNote />') && fsSrc('components/SubjectPlanner.tsx').includes('(복습 제외)'), 'the new-plan form shows the direct study time a day');
 });
 
@@ -10730,7 +10731,9 @@ test('all-subjects panel: a single review subject takes the full width, several 
 test('the three tabs live in one bottom bar at every screen size, with no side rail', () => {
   const app = fs.readFileSync(path.resolve(__dirname, '..', 'App.tsx'), 'utf8');
   const nav = app.slice(app.indexOf('data-testid="bottom-nav"'), app.indexOf('<main className="mx-auto max-w-6xl'));
-  assert.ok(nav.includes('fixed bottom-0 left-0 right-0') && !nav.includes('hidden') && !nav.includes('md:hidden'));
+  // 9일: 화면 키보드가 올라와 있는 동안만 키보드 위로 따라 뜨지 않게 감춘다(크기에 따라 숨기지는 않는다)
+  assert.ok(nav.includes('fixed bottom-0 left-0 right-0') && !/className="[^"]*\bhidden\b/.test(nav) && !nav.includes('md:hidden'));
+  assert.ok(nav.includes("style={keyboardOpen ? { visibility: 'hidden' } : undefined}"));
   ['학습 실행', '학습 설정', '추이 분석'].forEach(label => assert.ok(nav.includes(label), label));
   assert.ok(!app.includes('left-0 top-0') && !app.includes('md:pl-24') && !app.includes('xl:pl-64') && !app.includes('isSidebarCollapsed'), 'the side rails and their offsets are gone');
   assert.ok(app.includes('pb-24'), 'the page leaves room so the bar never covers the content');
@@ -11320,9 +11323,12 @@ test('8일: auto review puts each saved study in at once; studies put in within 
   // 단계가 다르면 같은 때여도 다른 묶음
   logs = registerAutoReview([...logs, pending('f', '2026-11-04T02:30:00.000Z', 10, 1, 2, { subjectStageId: 'f' })], 'f');
   assert.equal(logs.find(log => log.id === 'f').reviewRegisteredAt, '2026-11-04T02:30:00.000Z');
-  // 예전 판에서 모으던 기록은 다음 저장 때 먼저 넣는다
+  // 9일: 켜기 전 · 예전 판에서 남은 대기 기록은 넣지 않고 새로 저장한 것만 넣는다
   const legacy = registerAutoReview([pending('w', '2026-11-06T01:00:00.000Z', 10, 1, 1, { autoReviewQueued: undefined, autoReviewWaiting: true }), pending('x', '2026-11-06T05:00:00.000Z', 5, 2, 2)], 'x');
-  assert.ok(legacy.every(log => log.autoReviewRegistered && !log.unitReviewPending));
+  assert.ok(legacy.find(log => log.id === 'w').unitReviewPending && !legacy.find(log => log.id === 'w').autoReviewRegistered, 'the earlier record stays pending');
+  assert.ok(legacy.find(log => log.id === 'x').autoReviewRegistered && !legacy.find(log => log.id === 'x').unitReviewPending, 'only the new one goes in');
+  const before = registerAutoReview([pending('o', '2026-11-06T04:30:00.000Z', 10, 1, 1, { autoReviewQueued: undefined }), pending('n', '2026-11-06T05:00:00.000Z', 5, 2, 2)], 'n');
+  assert.deepEqual(before.map(log => [log.id, Boolean(log.unitReviewPending), Boolean(log.autoReviewRegistered)]), [['o', true, false], ['n', false, true]], 'a record saved before auto was on is not merged or put in');
 });
 
 test('4일: 바로 복습 넣기 during measurement and the auto review hours setting', () => {
@@ -11484,8 +11490,9 @@ test('4일 점검: auto review does not fold a study into one from another study
   assert.ok(flushed.every(log => log.autoReviewRegistered && !log.unitReviewPending));
   assert.equal(flushed[0].reviewRegisteredAt, '2026-11-04T15:30:00.000Z');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
-  assert.ok(app.includes('flushFilledAutoGroups(next, subject.id') && app.includes('if (!subject) { next = next.map'), 'App flushes on a settings change and never loops on a missing subject');
-  assert.ok(app.includes('}, [logs, autoHoursKey]);') && (app.match(/flushFilledAutoGroups\(/g) || []).length === 1, 'one effect does both so neither overwrites the other');
+  // 9일: App은 예전 판에서 모으던 기록을 넣지 않고 보통 대기 기록으로 바꾼다
+  assert.ok(!app.includes('flushFilledAutoGroups(') && app.includes('if (!subject) { next = next.map'), 'App never puts earlier records in and never loops on a missing subject');
+  assert.ok(app.includes('}, [logs, autoHoursKey]);') && app.includes('log.autoReviewWaiting ? { ...log, autoReviewWaiting: undefined } : log'), 'old collecting records become plain pending ones');
   // 복습에 넣기 창으로 직접 넣으면 모으는 중 표시가 남지 않는다
   const { registerPendingLog } = loadSource('utils/review.ts');
   assert.equal(registerPendingLog(mk('w', '2026-11-04T01:00:00.000Z', 10, 1, 1, { autoReviewWaiting: true }), Date.parse('2026-11-04T02:00:00.000Z')).autoReviewWaiting, undefined);
@@ -11764,7 +11771,8 @@ test('6일 20:53: 복습과목을 재는 동안 복습하는 기록들의 정리
   const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   const seed = logger.slice(logger.indexOf('const seedCarriedNoteSheet = () => {'), logger.indexOf('const startMeasurementNow = () => {'));
   assert.ok(/if \(activeReviewRun\) \{[\s\S]*sortReviewLogsByRange\(activeReviewRunLogs\)[\s\S]*setReviewMemo\(mergeSheetParts\(parts\)\);[\s\S]*return;/.test(seed));
-  assert.ok(logger.includes("(!skipReview || step === 'organize' || Boolean(activeReviewRun))"), 'the note sheet shows during a review subject run');
+  // 9일: 복습 포함 · 제외는 측정 뒤에 고르므로 재는 동안 정리노트는 늘 보인다(복습과목을 잴 때도)
+  assert.ok(logger.includes('재는 동안 정리노트는 늘 보인다') && !logger.includes("(!skipReview || step === 'organize'"), 'the note sheet always shows while measuring');
   assert.ok(/if \(activeReviewRun && target && savedMemo\.trim\(\)\) \{[\s\S]{0,400}savedMemo = '';/.test(logger), 'new lines go into the last reviewed record, not the review record');
   assert.ok(!logger.includes('isReviewNotePanelOpen ? \'노트 닫기\' : \'노트 보기\''), 'the separate review note panel is gone');
   // 고친 노트는 updateReviewGateMemo(고친 부분을 복습에 넣기)로 들어가 바뀐 문제만 새로 복습에 든다
@@ -11969,4 +11977,93 @@ test('8일 점검: 복습한 자동 묶음은 다시 넣거나 묻지 않음, �
     shorthand.setNoteShorthand(false);
     assert.deepEqual(ns.upperSetsOf(ns.buildNoteSetIndex(['[a] X-ray = 엑스선']), 'ray'), []);
   } finally { shorthand.setNoteShorthand(true); }
+});
+
+test('9일: 복습 포함 · 제외는 측정 뒤 학습량 입력 창에서 고르고, 이번 노트가 비면 제외 · 글이 있으면 포함으로 골라 둔다', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(!logger.includes('handleToggleSkipReview'), 'no include/exclude toggle while measuring');
+  assert.ok(!logger.includes('swp_session_review_preferences'), 'the per-subject saved choice is gone: the note decides');
+  const pages = logger.slice(logger.indexOf("{step === 'pages' && ("));
+  assert.ok(pages.includes('data-testid="session-review-choice"'), 'the choice is in the record window');
+  const rule = logger.slice(logger.indexOf('const defaultReviewChoice = ()'), logger.indexOf('const pressSkipReview'));
+  assert.ok(rule.includes("if (isSubjectReviewDisabled || activeReviewRun || reviewSubjectIdSet.has(subjectId)) return 'skipAll';"));
+  assert.ok(rule.includes("if (splitSessionMemo().savedMemo.trim()) return 'include';") && rule.includes("return sessionHasReviewSubjects ? 'skipBasic' : 'skipAll';"),
+    'an empty note leaves out only the basic review when there are review subjects');
+  assert.ok(/if \(step === 'pages'\) setReviewChoice\(defaultReviewChoice\(\)\);/.test(logger), 'chosen again each time the record window opens');
+  // 제외를 한 번 누르면 기본 복습만, 한 번 더 누르면 복습과목까지(복습과목이 없으면 그냥 제외)
+  assert.ok(logger.includes("setReviewChoice(current => (!sessionHasReviewSubjects ? 'skipAll' : current === 'skipBasic' ? 'skipAll' : 'skipBasic'))"));
+  assert.ok(logger.includes("...(skipBasicOnly ? { basicReviewSkipped: true } : {})"));
+  // 기본 복습만 뺀 기록은 복습 문제를 묻지 않는다(복습과목은 그대로)
+  const { getDueReviewGateQuestionKeys } = loadSource('utils/reviewGate.ts');
+  const log = { id: 'a', subjectId: 's', reviewMemo: '사과 : 빨강', reviewEnabled: true, nextReviewDate: '2026-11-01T00:00:00.000Z' };
+  assert.ok(getDueReviewGateQuestionKeys(log, Date.parse('2026-11-09T00:00:00.000Z')).length > 0);
+  assert.deepEqual(getDueReviewGateQuestionKeys({ ...log, basicReviewSkipped: true }, Date.parse('2026-11-09T00:00:00.000Z')), []);
+});
+
+test('9일: 복습 삭제는 고른 기록을 복습 제외로 바꾸고 공부 기록 · 노트는 남긴다', () => {
+  const { excludeLogFromReview, reviewDeleteUnits } = loadSource('utils/reviewDelete.ts');
+  const manual = { id: 'a', subjectId: 's', pagesRead: 10, timeSpentMinutes: 30, startPage: 1, endPage: 10, timestamp: '2026-11-08T01:00:00.000Z',
+    reviewEnabled: true, isCondensed: false, reviewStep: 2, nextReviewDate: '2026-11-09T00:00:00.000Z', reviewRegisteredAt: '2026-11-08T02:00:00.000Z',
+    reviewFsrs: { stability: 1, difficulty: 5, reps: 1, lapses: 0, lastReviewMs: 1 }, reviewQuestionSchedules: { k: { step: 1 } }, reviewMemo: '사과 : 빨강',
+    basicReviewTimeRecords: [{ minutes: 5, pages: 10, timestamp: '2026-11-08T03:00:00.000Z' }] };
+  const out = excludeLogFromReview(manual);
+  assert.equal(out.reviewEnabled, false);
+  assert.equal(out.isCondensed, true);
+  ['reviewStep', 'nextReviewDate', 'reviewFsrs', 'reviewQuestionSchedules'].forEach(key => assert.ok(!(key in out), key));
+  assert.equal(out.reviewMemo, '사과 : 빨강');
+  assert.equal(out.pagesRead, 10);
+  assert.equal(out.reviewRegisteredAt, manual.reviewRegisteredAt, 'a manual registration keeps its unit boundary');
+  assert.equal(out.basicReviewTimeRecords.length, 1);
+  const auto = excludeLogFromReview({ ...manual, id: 'b', autoReviewRegistered: true, autoReviewAsk: true });
+  assert.ok(!('reviewRegisteredAt' in auto) && !('autoReviewRegistered' in auto) && !('autoReviewAsk' in auto), 'an auto one leaves the 3-hour group');
+  const { isNoteInReview } = loadSource('utils/noteUnits.ts');
+  assert.equal(isNoteInReview(out), false);
+  const units = reviewDeleteUnits([manual, { ...manual, id: 'c', startPage: 11, endPage: 20 }, { ...manual, id: 'd', reviewRegisteredAt: undefined, startPage: 21, endPage: 25 }]);
+  assert.deepEqual(units.map(unit => [unit.logIds, unit.startPage, unit.endPage]), [[['a', 'c'], 1, 20], [['d'], 21, 25]]);
+  const gap = reviewDeleteUnits([manual, { ...manual, id: 'e', startPage: 15, endPage: 18 }]);
+  assert.deepEqual(gap[0].ranges, [{ start: 1, end: 10 }, { start: 15, end: 18 }], 'a unit with a gap shows both ranges');
+});
+
+test('9일: 자동으로 넣기를 켜도 이전 대기 기록은 남기고 새로 저장한 것만 넣는다 · 기호 막대는 키보드 때 제자리 · 탭은 키보드 위로 뜨지 않는다', () => {
+  const bar = fs.readFileSync(path.join(__dirname, '..', 'components/NoteSymbolBar.tsx'), 'utf8');
+  const component = bar.slice(bar.indexOf('export const NoteSymbolBar'));
+  assert.ok(!component.includes('useKeyboardInset()') && component.includes('data-floating="false"') && !component.includes('fixed inset-x-0'), 'the symbol bar never floats above the keyboard');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
+  assert.ok(app.includes('const keyboardOpen = useKeyboardInset() >= KEYBOARD_MIN_INSET;'));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('html, body { overscroll-behavior-y: none; }'), 'pulling past the page end does not drag the tab bar');
+});
+
+test('9일: 한 장당 계획 시간은 속도 · 임시값이 바뀌면 그 과목만 바로 새로 적고, 계획 갱신은 날짜만 따져 다시 나누며 요일별 시간 전→후와 하루 평균을 보여 준다', () => {
+  const wp = loadSource('utils/weekPlan.ts');
+  assert.equal(wp.ceilToTenMinutes(63), 70, '1시간 3분 → 1시간 10분');
+  assert.equal(wp.ceilToTenMinutes(60), 60);
+  assert.equal(wp.ceilToTenMinutes(0), 0);
+  const subject = { id: 'm', name: '수학', startPage: 1, totalPages: 70, completedPages: 0, targetDate: '2026-11-22', createdAt: '2026-11-01T00:00:00.000Z', planResetDate: '2026-11-01',
+    scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6], scheduledWeekdayPages: { 0: 2, 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2 }, initialAverageTimePerPage: 6, reviewEnabled: true, reviewSubjectIds: [] };
+  const logs = [{ id: 'l', subjectId: 'm', startPage: 1, endPage: 4, pagesRead: 4, timeSpentMinutes: 40, timestamp: '2026-11-08T01:00:00.000Z', studyDate: '2026-11-08' }];
+  assert.equal(wp.planTimesChanged([subject], logs, subject), true, 'no stored plan time yet');
+  const synced = wp.withPlanTimes([subject], logs, subject);
+  assert.equal(wp.planTimesChanged([synced], logs, synced), false, 'stable once written');
+  const now = new Date('2026-11-09T10:00:00+09:00');
+  const after = wp.replanSubject([synced], logs, synced, '2026-11-09');
+  assert.equal(after.planResetDate, '2026-11-09');
+  const summary = wp.planRefreshSummary([synced], [after], logs, now);
+  assert.deepEqual(summary.days.map(day => day.label), ['월', '화', '수', '목', '금', '토', '일']);
+  assert.ok(summary.days.every(day => day.after % 10 === 0 && day.before % 10 === 0), 'ten-minute steps');
+  assert.equal(summary.afterDailyAverage % 10, 0);
+  const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
+  assert.ok(app.includes('subjects.filter(subject => planTimesChanged(subjects, logs, subject))') && app.includes('withPlanTimes(prev, logs, subject)'), 'App writes the new plan time for that subject only');
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('setPlanRefreshResult(planRefreshSummary(subjects, updatedSubjects, logs));'));
+});
+
+test('9일: 일시정지 버튼으로 멈춘 채 5분이 지나면 알람과 다시 시작 버튼 깜박임', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('export const PAUSE_ALERT_MS = 5 * 60 * 1000;'));
+  assert.ok(logger.includes("setPauseAlert(true); playPomodoroEndSound();"));
+  assert.equal((logger.match(/onClick=\{toggleTimerByUser\}|onToggle=\{toggleTimerByUser\}/g) || []).length, 2, 'both the measuring and the organizing pause buttons');
+  assert.equal((logger.match(/pauseAlert \? 'animate-pause-alert' : ''/g) || []).length, 2);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.ok(html.includes('.animate-pause-alert'));
 });

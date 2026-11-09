@@ -35,6 +35,7 @@ import { NoteSheet } from './NoteSheet';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
+import { ReviewDeleteDialog } from './ReviewDeleteDialog';
 import { AutoReviewFeedbackDialog } from './AutoReviewFeedbackDialog';
 import { autoReviewAskOf, autoReviewHoursOf } from '../utils/autoReview';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
@@ -66,6 +67,8 @@ interface Props {
   activeStudyDate: string;
   onAddLog: (log: StudyLog) => void;
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
+  /** 9일: 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다 */
+  onExcludeFromReview?: (logIds: string[]) => void;
   onDeleteLogs: (logIds: string[]) => void;
   /** 주면 학습과목 위쪽에 "임시값" 버튼이 생긴다: 측정 전인 지금 과목과 남은 후행과목의 한 장당 시간(임시값)을 고친다 */
   onUpdateSubjects?: (subjects: Subject[]) => void;
@@ -515,7 +518,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -804,6 +807,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const canRegisterHere = Boolean(detailData && !detailData.owner);
   const pendingReviewCount = useMemo(() => (detailData && canRegisterHere ? logs.filter(log => log.unitReviewPending && log.subjectId === detailData.subject.id).length : 0), [logs, detailData, canRegisterHere]);
   const [choosingReview, setChoosingReview] = useState(false);
+  // 9일: 오늘 할 일에 들어온 복습 칸에서만 "복습 삭제"(그 칸의 기록들). 끝낸 칸 · 다른 칸을 보고 있으면 없다
+  const [deletingReview, setDeletingReview] = useState(false);
+  const reviewTaskLogs = detailData && onExcludeFromReview && idle?.reviewTaskLogs?.length && idle.selectedDetailKey === detailSubjectId ? idle.reviewTaskLogs : null;
+  useEffect(() => { if (!reviewTaskLogs) setDeletingReview(false); }, [reviewTaskLogs]);
   // 단원별 복습에 넣기(1일 요청): 아직 복습에 넣지 않은 기록을 단원으로 묶는다. 창을 열 때 처음 고를 단원과 알림 글
   const chapterGroups = useMemo(() => (detailData && canRegisterHere && pendingReviewCount > 0 ? pendingChapterGroups(detailData.subject, logs, pagePos) : []), [detailData, canRegisterHere, pendingReviewCount, logs, pagePos]);
   /** prompted: 단원을 끝내 자동으로 띄운 창이면 그 단원들(창을 닫거나 고를 때 "띄웠음"으로 기억한다) */
@@ -1132,6 +1139,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               <span aria-hidden="true" className="text-base leading-none">+</span>추가
             </button>
           )}
+          {reviewTaskLogs && (
+            <button type="button" data-testid="review-delete" onClick={() => setDeletingReview(true)} aria-label="복습 삭제"
+              className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 text-sm font-black text-rose-700 transition-colors hover:bg-rose-100">
+              <span aria-hidden="true">🗑</span>복습 삭제
+            </button>
+          )}
         </div>
       </div>
 
@@ -1147,6 +1160,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
           onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}
           onChoose={(grade, logIds) => { rememberChapterPrompt(); onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />
+      )}
+
+      {deletingReview && reviewTaskLogs && onExcludeFromReview && detailData && (
+        <ReviewDeleteDialog logs={reviewTaskLogs} pagePos={pagePos} title={idle?.selectedName || detailData.subject.name}
+          onDelete={onExcludeFromReview} onClose={() => setDeletingReview(false)} />
       )}
 
       {autoAsk && onChooseAutoReviewGrade && detailData && !choosingReview && (

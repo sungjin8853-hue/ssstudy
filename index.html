@@ -8,12 +8,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', 'Noto Sans KR', sans-serif; }
+        /* 9일: 패드에서 화면 끝을 넘겨 당겨도 화면 전체(맨 아래 탭 포함)가 튕겨 움직이지 않게 */
+        html, body { overscroll-behavior-y: none; }
         .animate-fade-in { animation: fadeIn 0.3s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .animate-cut-done { animation: cutDone 3.5s ease-out forwards; }
         .animate-cut-check { animation: cutCheck 0.6s cubic-bezier(.34,1.56,.64,1) both; }
         @keyframes cutDone { 0% { opacity: 0; transform: translateY(-6px) scale(.96); } 8% { opacity: 1; transform: translateY(0) scale(1.02); } 14% { transform: scale(1); } 85% { opacity: 1; } 100% { opacity: 0; } }
         @keyframes cutCheck { 0% { transform: scale(0) rotate(-45deg); } 100% { transform: scale(1) rotate(0); } }
+        /* 9일: 일시정지한 채 5분이 지나면 다시 시작 버튼이 깜박인다 */
+        .animate-pause-alert { animation: pauseAlert 1s ease-in-out infinite; }
+        @keyframes pauseAlert { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); } 50% { opacity: 0.35; box-shadow: 0 0 0 6px rgba(244, 63, 94, 0.55); } }
         @media (prefers-reduced-motion: reduce) { .animate-cut-done, .animate-cut-check { animation: none; } }
     </style>
 <script type="importmap">

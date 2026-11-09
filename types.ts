@@ -233,6 +233,8 @@ export interface StudyLog {
   reviewEditIntake?: { base: { memo: string; schedules?: Record<string, ReviewQuestionSchedule>; nextReviewDate?: string }; keys: string[]; at: string };
   reviewQuestionFormat?: 2;
   reviewGateLevel?: number;
+  /** 9일: 학습량 입력 창에서 "기본 복습만 제외"로 저장한 기록(복습과목이 있을 때). 기본 복습(복습 문제)은 묻지 않고 복습과목만 한다 */
+  basicReviewSkipped?: boolean;
   reviewGatePendingSchedules?: Record<string, ReviewQuestionSchedule>;
   reviewGatePendingSteps?: Record<string, number>;
   reviewGateRetry?: {
