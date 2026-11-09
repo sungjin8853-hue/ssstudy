@@ -34,6 +34,9 @@ import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pa
 import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
 import { currentPlanStageId, planRefreshSummary, PlanRefreshSummary, replanSubject, withPlanTimes } from '../utils/weekPlan';
 import { PlanRefreshDialog } from './PlanRefreshDialog';
+import { RestTimer } from './RestTimer';
+import { aheadFinishPlan, buildAheadDays } from '../utils/aheadDay';
+import { startRest, useRestTimer, writeRestEndsAt } from '../utils/restTimer';
 import { formatPageSpans, unsolvedPagesAfter } from '../utils/unsolvedPages';
 import { hasLogicMark, memoLineText } from '../utils/noteLogicMarks';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
@@ -266,8 +269,12 @@ const unlockChime = () => {
   if (context && context.state === 'suspended') void context.resume().catch(() => undefined);
 };
 
-/** 9일: 일시정지 버튼으로 멈춘 채 이만큼 지나면 알람(뽀모도로 끝 알람과 같은 소리)과 다시 시작 버튼 깜박임 */
+/** 9일: 일시정지 버튼으로 멈춘 채 이만큼 지날 때마다 3초 알람, 처음 알람부터 다시 시작 버튼 깜박임 */
 export const PAUSE_ALERT_MS = 5 * 60 * 1000;
+/** 9일: 일시정지한 지 이만큼 지난 뒤로는 알람을 울리지 않는다(5 · 10 · 15 · 20분에 울린다) */
+export const PAUSE_ALERT_LAST_MS = 20 * 60 * 1000;
+/** 9일: 일시정지 · 쉬는 시간 알람은 3초 동안 "삐삐삐삐"를 1초마다 되풀이한다 */
+export const SHORT_ALARM_SECONDS = 3;
 
 /** 뽀모도로가 끝났을 때의 알람: "삐삐삐삐"(짧은 삐 소리 4번)를 이만큼 되풀이한다(30일 요청, 예전 세 음 종소리 대신) */
 export const POMODORO_ALARM_REPEATS = 3;
@@ -298,6 +305,24 @@ const ringBeep = (context: AudioContext, startAt: number) => {
   gain.connect(context.destination);
   oscillator.start(startAt);
   oscillator.stop(startAt + BEEP_SECONDS + 0.01);
+};
+
+const ringShortAlarm = (context: AudioContext) => {
+  const firstAt = context.currentTime + 0.04;
+  for (let second = 0; second < SHORT_ALARM_SECONDS; second += 1) {
+    for (let beep = 0; beep < POMODORO_BEEPS; beep += 1) ringBeep(context, firstAt + second + beep * (BEEP_SECONDS + BEEP_GAP_SECONDS));
+  }
+};
+
+/** 3초 알람(일시정지 5분마다 · 쉬는 시간 끝) */
+export const playShortAlarm = () => {
+  const context = getChimeContext();
+  if (!context) return;
+  if (context.state === 'running') {
+    ringShortAlarm(context);
+    return;
+  }
+  context.resume().then(() => ringShortAlarm(context), () => undefined);
 };
 
 const unlockSounds = () => {
@@ -932,6 +957,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [planRefreshResult, setPlanRefreshResult] = useState<PlanRefreshSummary | null>(null);
   // 9일: 측정 · 정리 타이머를 일시정지 버튼으로 멈춘 채 5분이 지나면 알람이 울리고 다시 시작 버튼이 깜박인다(누를 때마다 새로 잰다)
   const [pausedByUserAt, setPausedByUserAt] = useState<number | null>(null);
+  // 9일: 쉬는 시간이 끝나면 3초 알람(측정 화면 · 학습 실행 어디서든 한 번)
+  const { endsAt: restEndsAt } = useRestTimer();
+  useEffect(() => {
+    if (restEndsAt === null) return undefined;
+    const timer = window.setTimeout(() => { writeRestEndsAt(null); playShortAlarm(); }, Math.max(0, restEndsAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [restEndsAt]);
   const [pauseAlert, setPauseAlert] = useState(false);
   const [reviewChoice, setReviewChoice] = useState<'include' | 'skipBasic' | 'skipAll'>('include');
   const [minutes, setMinutes] = useState(0);
@@ -1179,6 +1211,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const completedStudySubjectIds = useMemo(() => buildCompletedStudySubjectIds(
     ordinarySubjects, logs, activeWeekday, activeStudyDate
   ), [ordinarySubjects, logs, activeWeekday, activeStudyDate]);
+
+  // 9일: 오늘 몫을 지난날 미리 끝낸 과목(빨간 할 일). 오늘 할 일 목록 · 오늘 끝낸 과목에 있으면 빼고, 복습과목은 따지지 않는다
+  const aheadDays = useMemo(() => {
+    const skip = new Set<string>([...todayStudyOrder.map(item => item.subject.id), ...completedStudySubjectIds]);
+    return buildAheadDays(ordinarySubjects, logs, activeWeekday, activeStudyDate, new Date(), skip);
+  }, [ordinarySubjects, logs, activeWeekday, activeStudyDate, todayStudyOrder, completedStudySubjectIds]);
+  const aheadIdSet = useMemo(() => new Set(aheadDays.map(day => day.subjectId)), [aheadDays]);
 
   const selectSubjectForMeasurement = (subject: Subject) => {
     setSubjectId(subject.id);
@@ -1487,7 +1526,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const reviewSoundRoundsRef = useRef(0);
   useEffect(() => {
     if (reviewFullRounds === 0) { reviewSoundRoundsRef.current = 0; return; }
-    if (reviewFullRounds > reviewSoundRoundsRef.current) playPomodoroEndSound();
+    // 9일: 뽀모도로가 끝날 때마다 쉬는 시간 타이머도 시작한다
+    if (reviewFullRounds > reviewSoundRoundsRef.current) { playPomodoroEndSound(); startRest(); }
     reviewSoundRoundsRef.current = reviewFullRounds;
   }, [reviewFullRounds]);
   useEffect(() => {
@@ -1517,6 +1557,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (studyPomodoroRound > studyPomodoroSeenRef.current) {
       studyPomodoroSeenRef.current = studyPomodoroRound;
       playPomodoroEndSound();
+      startRest();
     } else if (studyPomodoroRound < studyPomodoroSeenRef.current) {
       // 공부 도중 뽀모도로 시간을 바꿔 끝난 회차 수가 줄었다: 그 값부터 다시 센다.
       studyPomodoroSeenRef.current = studyPomodoroRound;
@@ -1601,10 +1642,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       || (detailSubjectId === `basic-review:${log.subjectId}` && log.basicReviewTimeRecords?.some(record => getLocalDateKey(new Date(record.timestamp)) === activeStudyDate))
       || log.reviewSubjectTimeRecords?.some(record => record.subjectId === detailSubjectId && record.completed && getLocalDateKey(new Date(record.timestamp)) === activeStudyDate)
     ));
-    if (hasCompletedRecord && inspectedRecordDetailId === detailSubjectId) return;
+    if ((hasCompletedRecord || aheadIdSet.has(detailSubjectId)) && inspectedRecordDetailId === detailSubjectId) return;
     if (detailSubjectId !== nextDetailKey) onDetailSubjectChange(nextDetailKey);
   }, [detailSubjectId, logs, onDetailSubjectChange, pendingAutoAdvanceLogId, pendingImmediateStartSubjectId,
-      preSessionReviewLogs.length, selectedRunQueueItem, selectedTaskKey, completedStudySubjectIds, activeStudyDate, inspectedRecordDetailId, step]);
+      preSessionReviewLogs.length, selectedRunQueueItem, selectedTaskKey, completedStudySubjectIds, activeStudyDate, inspectedRecordDetailId, step, aheadIdSet]);
 
   const resetPageAttackTimer = (targetSeconds = 0) => {
     setPageAttackTargetSeconds(targetSeconds > 0 ? targetSeconds : 0);
@@ -2219,8 +2260,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       if (pausedByUserAt !== null && (isTimerRunning || (step !== 'timer' && step !== 'organize'))) setPausedByUserAt(null);
       return undefined;
     }
-    const timer = window.setTimeout(() => { setPauseAlert(true); playPomodoroEndSound(); }, Math.max(0, pausedByUserAt! + PAUSE_ALERT_MS - Date.now()));
-    return () => window.clearTimeout(timer);
+    // 5 · 10 · 15 · 20분에 3초씩 울리고 그 뒤로는 울리지 않는다. 깜박임은 처음 울린 뒤로 다시 시작할 때까지
+    const timers: number[] = [];
+    for (let at = PAUSE_ALERT_MS; at <= PAUSE_ALERT_LAST_MS; at += PAUSE_ALERT_MS) {
+      const wait = pausedByUserAt! + at - Date.now();
+      if (wait < -1000) { setPauseAlert(true); continue; }
+      timers.push(window.setTimeout(() => { setPauseAlert(true); playShortAlarm(); }, Math.max(0, wait)));
+    }
+    return () => timers.forEach(timer => window.clearTimeout(timer));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pausedWaiting, pausedByUserAt]);
 
@@ -2835,9 +2882,20 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     meta: '', required: row.kind === 'study' && isSubjectRequiredNow(subjects.find(subject => subject.id === row.detailId)),
     timeLabel: '', state: 'done', done: toDoneData(row)
   }));
-  const allCards: TaskCardData[] = [...pendingCards, ...doneCards];
+  // 9일: 오늘 몫을 미리 끝낸 과목은 빨간 칸(누르면 완료 카드처럼 보이고 "오늘 학습"으로 이어서 할 수 있다)
+  const aheadCards: TaskCardData[] = aheadDays.filter(day => !pendingDetailKeys.has(day.subjectId)).map(day => {
+    const subject = subjects.find(item => item.id === day.subjectId);
+    const label = getPageLabel(subject);
+    return {
+      key: `ahead-${day.subjectId}`, detailKey: day.subjectId, kind: 'study', kindLabel: '학습', title: subject?.name ?? '',
+      meta: `미리 끝냄 · ${formatPageNumber(day.dayTarget)}${label}`, required: false, timeLabel: '', state: 'ahead',
+      done: { summary: `오늘 몫 ${formatPageNumber(day.dayTarget)}${label}을 미리 끝냈어요`, short: `미리 끝냄 · ${formatPageNumber(day.dayTarget)}${label}` }
+    };
+  });
+  const allCards: TaskCardData[] = [...pendingCards, ...aheadCards, ...doneCards];
   // 지금 보고 있는 칸(고유 키). 같은 과목 키를 가진 칸이 여럿이어도(과목 복습이 범위별로 나뉜 경우) 정확히 하나를 가리킨다.
-  const viewingDoneCard = doneCards.find(card => card.detailKey === detailSubjectId && inspectedRecordDetailId === detailSubjectId);
+  const viewingDoneCard = doneCards.find(card => card.detailKey === detailSubjectId && inspectedRecordDetailId === detailSubjectId)
+    ?? aheadCards.find(card => card.detailKey === detailSubjectId && inspectedRecordDetailId === detailSubjectId);
   const currentRowKey = viewingDoneCard?.key ?? selectedRunQueueItem?.key ?? '';
   // 같은 과목은 한 칸이다: 일반 과목의 기본 복습은 현재 과목 칸에, 복습과목의 기본 복습은 복습과목 칸에 들어간다.
   // 칸 안 순서는 기본 복습 → 과목이고, 칸에는 지금 할 차례의 할 일이 대표로 보이며(시작 버튼도 그 할 일), 나머지는 상세 칸에 한 줄 정보로만 나온다.
@@ -2861,6 +2919,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const taskCards: TaskCardData[] = cellIds.map(id => {
     const raw = cellBuckets.get(id)!;
     const bucket = [...raw.filter(card => card.state === 'pending').sort((a, b) => cellRankOfCard(a) - cellRankOfCard(b)),
+      ...raw.filter(card => card.state === 'ahead'),
       ...raw.filter(card => card.state === 'done').sort((a, b) => cellRankOfCard(a) - cellRankOfCard(b))];
     bucket.forEach(card => cellOfKey.set(card.key, bucket));
     if (bucket.length === 1) return bucket[0];
@@ -2877,8 +2936,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       kindLabel: Array.from(new Set((pending.length ? pending : [lead]).map(card => card.kindLabel))).join('·'),
       required: pending.some(card => card.required),
       timeLabel: pending.length ? (minutes > 0 ? formatPlanMinutes(minutes) : '측정 필요') : '',
-      state: pending.length ? 'pending' : 'done',
-      done: pending.length ? undefined : { ...lead.done!, summary: `${doneNumber(doneTotal.pages)}${pageLabel} · ${formatDoneMinutes(doneTotal.minutes)}`, short: `${doneNumber(doneTotal.pages)}${pageLabel} · ${formatDoneMinutes(doneTotal.minutes)}`, pages: doneTotal.pages, minutes: doneTotal.minutes }
+      state: pending.length ? 'pending' : lead.state === 'ahead' ? 'ahead' : 'done',
+      done: pending.length ? undefined : lead.state === 'ahead' ? lead.done : { ...lead.done!, summary: `${doneNumber(doneTotal.pages)}${pageLabel} · ${formatDoneMinutes(doneTotal.minutes)}`, short: `${doneNumber(doneTotal.pages)}${pageLabel} · ${formatDoneMinutes(doneTotal.minutes)}`, pages: doneTotal.pages, minutes: doneTotal.minutes }
     };
   });
   const currentCell = cellOfKey.get(currentRowKey);
@@ -2886,15 +2945,15 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const currentChipKey = currentCell ? currentCell[0].key : currentRowKey;
   // 같은 칸의 나머지 할 일(뒷순서 · 끝낸 것)은 한 줄 정보로만 둔다.
   const laterMembers: LaterMemberData[] = (currentCell ?? []).filter(card => card.key !== currentRowKey).map(card => ({
-    key: card.key, kind: card.kind, label: card.kindLabel, state: card.state,
-    text: card.state === 'done' ? `✓ ${card.done?.short ?? '완료'}` : [card.meta, card.timeLabel].filter(Boolean).join(' · ')
+    key: card.key, kind: card.kind, label: card.kindLabel, state: card.state === 'pending' ? 'pending' : 'done',
+    text: card.state === 'done' ? `✓ ${card.done?.short ?? '완료'}` : card.state === 'ahead' ? card.done?.short ?? '미리 끝냄' : [card.meta, card.timeLabel].filter(Boolean).join(' · ')
   }));
   // 화살표 한 번의 이동은 칸 하나씩이다(칸 안의 뒷순서 할 일은 그 차례가 되어야 자세히 보인다).
   const stepTaskRow = (delta: -1 | 1) => {
     const targetKey = stepRowKey(taskCards.map(card => card.key), currentChipKey, delta);
     const target = taskCards.find(card => card.key === targetKey);
     if (!target) return;
-    if (target.state === 'done') {
+    if (target.state === 'done' || target.state === 'ahead') {
       setInspectedRecordDetailId(target.detailKey);
     } else {
       setInspectedRecordDetailId('');
@@ -2943,7 +3002,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const taskSelector = (
     <>
     {planRefreshResult && <PlanRefreshDialog summary={planRefreshResult} onClose={() => setPlanRefreshResult(null)} />}
-    <TaskQueueList items={taskCards} currentKey={currentDetailKey} currentRowKey={currentChipKey} onRefresh={handleRefreshStudyPlans}
+    <TaskQueueList leading={<RestTimer />} items={taskCards} currentKey={currentDetailKey} currentRowKey={currentChipKey} onRefresh={handleRefreshStudyPlans}
       stats={{ minutes: runQueueItems.reduce((sum, item) => sum + Math.max(0, item.estimatedMinutes), 0),
         completedLabel: `${formatTotal(completedTotals.pages)}P · ${formatDoneMinutes(completedTotals.minutes)}` }}
       stepper={{ position: taskCards.findIndex(card => card.key === currentChipKey) + 1, total: taskCards.length,
@@ -2983,6 +3042,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       ) : null,
       currentRowDone: Boolean(viewingDoneCard),
       reviewTaskLogs: selectedReviewGroup && !viewingDoneCard ? selectedReviewGroup.logs : undefined,
+      // 9일: 지금 보는 칸이 미리 끝낸 과목이면 그 몫과 "오늘 학습"을 눌렀을 때의 계산
+      ahead: viewingDoneCard?.state === 'ahead' ? (() => {
+        const day = aheadDays.find(item => item.subjectId === viewingDoneCard.detailKey);
+        const subject = subjects.find(item => item.id === viewingDoneCard.detailKey);
+        return day && subject ? { ...day, plan: aheadFinishPlan(subject, logs, day) } : undefined;
+      })() : undefined,
       laterMembers, memberChoices, currentMemberKey: currentReviewItem && memberChoices ? rangeTabKey(currentReviewItem.key, currentRangeIndex) : '', onPickMember: pickTaskMember,
       reviewScope,
       extraReviewKeys: doneCards.filter(card => card.kind === 'review' && extraReviewGroups.has(card.detailKey)).map(card => card.detailKey),
@@ -3204,6 +3269,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                   </div>
                 ) : <p className="text-xl font-black text-slate-900 md:text-2xl">{selectedSubject?.name}</p>
               )}
+                {/* 9일: 뽀모도로가 끝나 돌아가는 쉬는 시간(측정 화면에서도 보이게) */}
+                <RestTimer compact />
                 {activeReviewRun && (
                   <div className="ml-auto flex gap-2">
                     <button

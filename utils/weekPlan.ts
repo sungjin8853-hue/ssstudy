@@ -13,6 +13,7 @@ import {
   getDiffDays,
   getLocalDateKey,
   getLogStudyDate,
+  getPastPlanBalance,
   getPlanningDayCount,
   getStudyDateForWeekday,
   getSubjectDayRemainingPages,
@@ -163,6 +164,29 @@ export const mergeWeekCells = (parts: Array<Record<number, WeekCell>>): Record<n
   return cells;
 };
 
+/**
+ * 9일 "오늘 할당치 이상 했다면 다음 학습날 하는 양에서 빼, 다 빼면 그다음 학습날에서": 오늘까지(오늘 포함) 할당보다 더 한 양을
+ * 내일부터 학습일 차례로 그날 할 양에서 뺀다. 요일 → 뺄 양(앞으로 6일). 학습 실행의 그날 할 일도 같은 셈이다(getPastPlanBalance가 지난날의 더 한 양을 센다).
+ */
+export const getAheadDeductions = (subject: Subject, logs: StudyLog[], plan: Record<number, number>, now = new Date()): Record<number, number> => {
+  const tomorrow = parseStudyDate(getLocalDateKey(now));
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowKey = getLocalDateKey(tomorrow);
+  let ahead = Math.max(0, -getPastPlanBalance(subject, logs, tomorrowKey, tomorrowKey));
+  const scheduled = normalizeWeekdays(subject.scheduledWeekdays);
+  const out: Record<number, number> = {};
+  for (let offset = 0; offset < 6 && ahead > 0; offset += 1) {
+    const day = new Date(tomorrow);
+    day.setDate(day.getDate() + offset);
+    const weekday = day.getDay();
+    if (!scheduled.includes(weekday)) continue;
+    const take = Math.min(ahead, Math.max(0, plan[weekday] || 0));
+    out[weekday] = take;
+    ahead -= take;
+  }
+  return out;
+};
+
 export const buildWeekPlan = (subjects: Subject[], logs: StudyLog[], now = new Date()): WeekPlan => {
   const todayKey = getLocalDateKey(now);
   const todayWeekday = now.getDay();
@@ -188,10 +212,12 @@ export const buildWeekPlan = (subjects: Subject[], logs: StudyLog[], now = new D
       return date >= weekStartKey && date <= todayKey;
     });
     const cells: Record<number, WeekCell> = {};
+    const aheadByWeekday = getAheadDeductions(subject, logs, plan, now);
     WEEKDAYS.forEach(({ id }) => {
       const isToday = id === todayWeekday;
       const planned = Math.max(0, plan[id] || 0);
-      const pages = isToday ? Math.max(0, todayPages) : planned;
+      // 9일: 오늘까지 할당보다 더 한 양은 다음 학습일 할 양에서 빼고, 그날 몫을 다 빼면 그다음 학습일에서 뺀다
+      const pages = isToday ? Math.max(0, todayPages) : Math.max(0, planned - (aheadByWeekday[id] || 0));
       cells[id] = {
         weekday: id,
         pages,

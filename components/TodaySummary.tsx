@@ -36,6 +36,7 @@ import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
 import { ReviewDeleteDialog } from './ReviewDeleteDialog';
+import { AheadFinishPanel, AheadSummary } from './AheadDayCard';
 import { AutoReviewFeedbackDialog } from './AutoReviewFeedbackDialog';
 import { autoReviewAskOf, autoReviewHoursOf } from '../utils/autoReview';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
@@ -437,14 +438,17 @@ export const GrowthCell: React.FC<{
   done?: React.ReactNode;
   /** 과목이 "페이지"를 부르는 글자(기본 P) */
   label?: string;
-}> = ({ efficiency, attackEfficiency, growthTop, efficiencySlot, growth, main, done, label = DEFAULT_PAGE_LABEL }) => {
-  const divide = done ? 'divide-green-300' : 'divide-slate-300';
+  /** 9일: 미리 끝낸 과목의 카드는 빨간 빛(완료 카드와 같은 모양) */
+  tone?: 'green' | 'rose';
+}> = ({ efficiency, attackEfficiency, growthTop, efficiencySlot, growth, main, done, label = DEFAULT_PAGE_LABEL, tone = 'green' }) => {
+  const rose = tone === 'rose';
+  const divide = done ? (rose ? 'divide-rose-300' : 'divide-green-300') : 'divide-slate-300';
   return (
     <section aria-label="성장" data-testid={done ? 'done-layout' : undefined} data-done={done ? 'true' : undefined}
       className={`flex min-w-0 flex-col rounded-2xl border-2 ${done
-        ? 'border-green-500 bg-[#d0f9de]'
+        ? rose ? 'border-rose-400 bg-rose-100' : 'border-green-500 bg-[#d0f9de]'
         : 'border-slate-500 bg-white'} px-5 pb-1.5 pt-3.5`}>
-      <CellTitle>{done ? <span className="text-green-900">성장</span> : '성장'}</CellTitle>
+      <CellTitle>{done ? <span className={rose ? 'text-rose-900' : 'text-green-900'}>성장</span> : '성장'}</CellTitle>
       <div className={done ? 'grid flex-1 gap-x-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]' : 'flex flex-1 flex-col'}>
         <div className={`flex min-w-0 flex-1 flex-col divide-y ${divide} [&>*]:py-3 [&>*:first-child]:pt-1`}>
           {main ?? <>
@@ -454,7 +458,7 @@ export const GrowthCell: React.FC<{
             {growth && <div className="flex flex-1 flex-col justify-center">{growth}</div>}
           </>}
         </div>
-        {done && <div className="min-w-0 border-t border-green-300 pb-3 lg:border-l lg:border-t-0 lg:pl-6">{done}</div>}
+        {done && <div className={`min-w-0 border-t ${rose ? 'border-rose-300' : 'border-green-300'} pb-3 lg:border-l lg:border-t-0 lg:pl-6`}>{done}</div>}
       </div>
     </section>
   );
@@ -778,8 +782,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     : idle.extraReviewKeys?.includes(detailSubjectId)));
   const reopened = Boolean(doneRow && reopenedId === detailSubjectId);
   const showDoneCard = Boolean(doneRow && !reopened);
+  // 9일: 오늘 몫을 미리 끝낸 과목(빨간 칸)을 보는 중이면 빨간 카드, "오늘 학습"을 누르면 계산과 학습 시작
+  const aheadView = idle?.ahead && idle.ahead.subjectId === detailSubjectId ? idle.ahead : null;
+  const aheadOpened = Boolean(aheadView && reopenedId === detailSubjectId);
+  const showAheadCard = Boolean(aheadView && !aheadOpened);
   // 시작 버튼 자리: 끝낸 과목을 열어 둔 동안은 눌러지지 않는 "오늘 학습 완료", 추가 학습을 연 뒤에는 그 과목의 "학습 시작".
   const startSlot = idle ? (showDoneCard ? <DoneStartButton />
+    : aheadOpened && idle.onExtraStudy ? <StartButton kind="study" onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
     : reopened && canExtraStudy && idle.onExtraStudy ? <StartButton kind={doneRow?.kind === 'review' ? 'review' : 'study'} onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
     : idle.startButton ?? (
       <div className="flex h-[68px] items-center justify-center rounded-2xl bg-slate-100 px-3 text-center text-base font-black text-slate-700">오늘 할 일을 모두 마쳤어요</div>
@@ -1084,8 +1093,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
 
   const detailPanel = detailData ? (
     <section id="subject-live-detail" aria-label="선택한 할 일"
-      data-done={showDoneCard && doneRow ? 'true' : undefined}
-      className={`relative flex min-w-0 flex-col gap-3 rounded-2xl border-2 ${showDoneCard && doneRow ? 'border-green-200 bg-green-50' : 'border-slate-500 bg-slate-100'} p-5`}>
+      data-done={showDoneCard && doneRow ? 'true' : undefined} data-ahead={showAheadCard ? 'true' : undefined}
+      className={`relative flex min-w-0 flex-col gap-3 rounded-2xl border-2 ${showDoneCard && doneRow ? 'border-green-200 bg-green-50' : showAheadCard ? 'border-rose-300 bg-rose-50' : 'border-slate-500 bg-slate-100'} p-5`}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-col gap-1">
           {/* 제목 오른쪽에 분류 하나만: 학습 / 기본 복습 / 복습과목 (+필수) */}
@@ -1114,6 +1123,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           {reopened && (
             <button type="button" onClick={() => setReopenedId('')} className={headerButton}>
               <span aria-hidden="true">✓</span>완료 기록 보기
+            </button>
+          )}
+          {aheadOpened && (
+            <button type="button" onClick={() => setReopenedId('')} className={headerButton}>
+              미리 끝낸 카드 보기
             </button>
           )}
           {onUpdateReviewMemo && (
@@ -1182,7 +1196,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         <ReviewScopeStrip scope={idle.reviewScope} all={Boolean(idle.memberChoices?.find(member => member.key === idle.currentMemberKey)?.all)} />
       )}
 
-      {showDoneCard && doneRow ? (
+      {aheadOpened && aheadView && <AheadFinishPanel plan={aheadView.plan} label={pageLabel} />}
+
+      {showAheadCard && aheadView && !showDoneCard ? (
+        <GrowthCell efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency}
+          growthTop={progressBlock} efficiencySlot={efficiencyNode} growth={growthNode} tone="rose"
+          done={<AheadSummary ahead={aheadView} label={pageLabel} onStudyToday={() => setReopenedId(detailSubjectId)} />} />
+      ) : showDoneCard && doneRow ? (
         // 오늘 할 양을 끝낸 과목: "공부 시작" 칸은 사라지고 "성장" 칸 하나가 가로로 넓어진다. 칸 전체가 연한 초록이다.
         // 왼쪽에는 평소 성장 내용, 오른쪽에는 한 일 · 최근 하루 평균 공부 시간 · "추가 학습하기"가 있다.
         <GrowthCell efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency}

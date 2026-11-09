@@ -6004,8 +6004,7 @@ test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked w
   assert.ok(!play.includes('playPageTurnSound') && play.includes('ringChime(context)') && play.includes('context.resume()'));
   assert.ok(!logger.includes('page-turn.mp3') && !logger.includes('new Audio(') && !fs.existsSync(path.resolve(__dirname, '../public/sounds/page-turn.mp3')));
   // 학습·복습 모두 회차가 끝나면 이 종소리를 낸다. 측정 중 장마다 나던 소리(반쯤 · 1분 전 · 장 넘김)는 없다(29일)
-  // 9일: 일시정지한 채 5분이 지날 때도 같은 소리를 낸다
-  assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 3);
+  assert.equal((logger.match(/playPomodoroEndSound\(\);/g) || []).length, 2);
   assert.ok(!logger.includes('pageTurnSoundPagesRef') && !logger.includes('playHalfwayPenSound') && !logger.includes('playMarkerSound') && !logger.includes('marker.mp3'));
   // 도중에 시간을 바꿔 끝난 회차 수가 줄면 그 값부터 다시 센다
   assert.ok(logger.includes('reviewRoundsSeenRef.current = reviewCompletedRounds;\n      setDismissedReviewRound(current => Math.min(current, reviewCompletedRounds));'));
@@ -12061,9 +12060,47 @@ test('9일: 한 장당 계획 시간은 속도 · 임시값이 바뀌면 그 과
 test('9일: 일시정지 버튼으로 멈춘 채 5분이 지나면 알람과 다시 시작 버튼 깜박임', () => {
   const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   assert.ok(logger.includes('export const PAUSE_ALERT_MS = 5 * 60 * 1000;'));
-  assert.ok(logger.includes("setPauseAlert(true); playPomodoroEndSound();"));
+  assert.ok(logger.includes('export const PAUSE_ALERT_LAST_MS = 20 * 60 * 1000;') && logger.includes('export const SHORT_ALARM_SECONDS = 3;'));
+  assert.ok(logger.includes("for (let at = PAUSE_ALERT_MS; at <= PAUSE_ALERT_LAST_MS; at += PAUSE_ALERT_MS)") && logger.includes("setPauseAlert(true); playShortAlarm();"), '5분마다 3초, 20분까지');
   assert.equal((logger.match(/onClick=\{toggleTimerByUser\}|onToggle=\{toggleTimerByUser\}/g) || []).length, 2, 'both the measuring and the organizing pause buttons');
   assert.equal((logger.match(/pauseAlert \? 'animate-pause-alert' : ''/g) || []).length, 2);
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('.animate-pause-alert'));
+});
+
+test('9일: 오늘 할당보다 더 한 양은 다음 학습일부터 빼고, 오늘 몫을 미리 끝낸 날은 빨간 할 일과 "오늘 학습" 계산', () => {
+  const { buildWeekPlan } = loadSource('utils/weekPlan.ts');
+  const { buildAheadDays, aheadFinishPlan } = loadSource('utils/aheadDay.ts');
+  const subject = { id: 'x', name: 'X', startPage: 1, totalPages: 60, completedPages: 22, targetDate: '2026-12-31', createdAt: '2026-11-01T00:00:00.000Z', planResetDate: '2026-11-09',
+    initialAverageTimePerPage: 4, scheduledWeekdays: [1, 2, 3, 4, 5], scheduledWeekdayPages: { 1: 7, 2: 7, 3: 7, 4: 7, 5: 7 }, reviewEnabled: false, reviewSubjectIds: [] };
+  const logs = [{ id: 'l', subjectId: 'x', startPage: 1, endPage: 22, pagesRead: 22, timeSpentMinutes: 60, timestamp: '2026-11-09T01:00:00.000Z', studyDate: '2026-11-09' }];
+  // 월요일에 22쪽(몫 7): 화 7 · 수 7 · 목 1을 빼서 목요일은 6
+  const week = buildWeekPlan([subject], logs, new Date('2026-11-09T12:00:00+09:00'));
+  const cells = week.rows[0].cells;
+  assert.deepEqual([cells[2].pages, cells[3].pages, cells[4].pages, cells[5].pages], [0, 0, 6, 7]);
+  // 화요일: 몫 7을 미리 끝냈다 → 빨간 할 일
+  const tuesday = new Date('2026-11-10T09:00:00+09:00');
+  const ahead = buildAheadDays([subject], logs, 2, '2026-11-10', tuesday);
+  assert.deepEqual(ahead, [{ subjectId: 'x', dayTarget: 7, aheadPages: 15 }]);
+  const plan = aheadFinishPlan(subject, logs, ahead[0], tuesday);
+  assert.equal(plan.remainingPages, 38);
+  assert.equal(plan.studyDaysNeeded, 6, '7쪽씩 학습일 6일');
+  assert.equal(plan.plainFinishDate, '2026-11-17');
+  assert.deepEqual(plan.skippedDates, ['2026-11-11'], '수요일은 미리 끝낸 날이라 쉰다');
+  assert.equal(plan.finishDate, '2026-11-18');
+  // 오늘 공부한 과목 · 몫이 남은 과목은 빨간 할 일이 아니다
+  assert.deepEqual(buildAheadDays([subject], logs, 1, '2026-11-09', new Date('2026-11-09T12:00:00+09:00')), []);
+  assert.deepEqual(buildAheadDays([subject], logs, 2, '2026-11-10', tuesday, new Set(['x'])), []);
+});
+
+test('9일: 쉬는 시간 타이머는 5분 단위, 뽀모도로가 끝날 때마다 시작하고 끝나면 3초 알람', () => {
+  const rest = loadSource('utils/restTimer.ts');
+  assert.equal(rest.normalizeRestMinutes(7), 5);
+  assert.equal(rest.normalizeRestMinutes(8), 10);
+  assert.equal(rest.normalizeRestMinutes(0), 5);
+  assert.equal(rest.normalizeRestMinutes(100), 60);
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('playPomodoroEndSound();\n      startRest();') && logger.includes('{ playPomodoroEndSound(); startRest(); }'), 'study and review pomodoros both start a rest');
+  assert.ok(logger.includes('writeRestEndsAt(null); playShortAlarm();'));
+  assert.ok(logger.includes('<TaskQueueList leading={<RestTimer />}'), 'left of 오늘 할 일');
 });

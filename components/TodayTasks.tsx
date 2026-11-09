@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { StudyLog } from '../types';
+import type { AheadDay, AheadFinishPlan } from '../utils/aheadDay';
 
 /** 학습 실행 화면(태블릿)에서 쓰는 작은 표시 컴포넌트 모음. 계산은 하지 않고 받은 값만 보여준다. */
 
@@ -30,8 +31,8 @@ export interface TaskCardData {
   required: boolean;
   /** 예: "1시간 12분" 또는 "측정 필요" (할 일이 남아 있을 때만 쓴다) */
   timeLabel: string;
-  /** pending: 아직 할 일이 남아 있음, done: 오늘 할 양을 모두 끝냄(회색 셀) */
-  state: 'pending' | 'done';
+  /** pending: 아직 할 일이 남아 있음, done: 오늘 할 양을 모두 끝냄(회색 셀), ahead: 오늘 몫을 지난날 미리 끝냄(빨간 셀, 9일) */
+  state: 'pending' | 'done' | 'ahead';
   /** 오늘 할 양을 모두 끝낸 과목에만 들어온다. 셀에는 짧은 요약(pages·minutes)만 보이고 나머지는 상세 칸에서 본다. */
   done?: { summary: string; growth?: string | null; pages?: number; minutes?: number; short?: string };
 }
@@ -111,6 +112,8 @@ export interface IdleSummaryContext {
   currentRowDone?: boolean;
   /** 9일: 지금 고른 할 일이 복습이면 그 복습 칸의 기록들(복습 칸 제목 오른쪽 "복습 삭제"로 고른 것을 복습 제외로 바꾼다) */
   reviewTaskLogs?: StudyLog[];
+  /** 9일: 지금 보는 칸이 오늘 몫을 미리 끝낸 과목(빨간 칸)이면 그 몫과 "오늘 학습" 계산 */
+  ahead?: AheadDay & { plan: AheadFinishPlan };
 }
 
 /** 화살표 한 번의 이동 대상. 목록 밖에 있으면(처음 상태) 오른쪽 화살표는 맨 위 줄로 간다. 끝을 넘으면 undefined. */
@@ -368,16 +371,19 @@ export const TaskQueueCells: React.FC<{
         {items.map(item => {
           const current = currentRowKey !== undefined ? item.key === currentRowKey : item.detailKey === currentKey;
           const review = item.kind === 'review';
-          const done = item.state === 'done';
+          const ahead = item.state === 'ahead';
+          const done = item.state === 'done' || ahead;
           const frame = current
-            ? `border-slate-900 shadow-md ${done ? 'bg-slate-100 ring-2 ring-slate-400' : review ? 'bg-white ring-2 ring-amber-300' : 'bg-white ring-2 ring-indigo-300'}`
-            : done
-              ? 'border-slate-300 bg-slate-100'
-              : 'border-slate-300 bg-white';
-          const accent = done ? 'bg-slate-400' : review ? 'bg-amber-700' : 'bg-indigo-600';
+            ? `border-slate-900 shadow-md ${ahead ? 'bg-rose-50 ring-2 ring-rose-400' : done ? 'bg-slate-100 ring-2 ring-slate-400' : review ? 'bg-white ring-2 ring-amber-300' : 'bg-white ring-2 ring-indigo-300'}`
+            : ahead
+              ? 'border-rose-400 bg-rose-50'
+              : done
+                ? 'border-slate-300 bg-slate-100'
+                : 'border-slate-300 bg-white';
+          const accent = ahead ? 'bg-rose-600' : done ? 'bg-slate-400' : review ? 'bg-amber-700' : 'bg-indigo-600';
           const nameClass = current
             ? `${packed ? (density.level === 1 ? 'text-[16px]' : 'text-[14px]') : 'text-[19px]'} font-black text-slate-950`
-            : `${packed ? (density.level === 1 ? 'text-[14px]' : 'text-[13px]') : 'text-[15px]'} font-bold ${done ? 'text-slate-500' : 'text-slate-600'}`;
+            : `${packed ? (density.level === 1 ? 'text-[14px]' : 'text-[13px]') : 'text-[15px]'} font-bold ${ahead ? 'text-rose-700' : done ? 'text-slate-500' : 'text-slate-600'}`;
           const pick = onSelect ? {
             onClick: () => onSelect(item), tabIndex: 0, 'data-selectable': 'true',
             onKeyDown: (event: React.KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(item); } }
@@ -392,9 +398,9 @@ export const TaskQueueCells: React.FC<{
                 <span aria-hidden="true" className={`shrink-0 rounded-full ${accent} ${density.level === 1 ? 'h-2.5 w-2.5' : 'h-2 w-2'}`} />
                 <span data-testid={current ? 'task-name-current' : 'task-name'} className={`min-w-0 flex-1 truncate leading-none ${nameClass}`}>{item.title}</span>
                 {density.level === 1 && (done
-                  ? <span data-testid="task-done-data" className="shrink-0 text-[13px] font-bold leading-none text-slate-600">✓</span>
+                  ? <span data-testid="task-done-data" className={`shrink-0 text-[13px] font-bold leading-none ${ahead ? 'text-rose-700' : 'text-slate-600'}`}>{ahead ? '미리' : '✓'}</span>
                   : <span className="shrink-0 text-[13px] font-bold leading-none tabular-nums text-slate-800">{item.timeLabel}</span>)}
-                {density.level > 1 && done && <span data-testid="task-done-data" className="shrink-0 text-[12px] font-bold leading-none text-slate-500">✓</span>}
+                {density.level > 1 && done && <span data-testid="task-done-data" className={`shrink-0 text-[12px] font-bold leading-none ${ahead ? 'text-rose-700' : 'text-slate-500'}`}>{ahead ? '미리' : '✓'}</span>}
               </li>
             );
           }
@@ -408,8 +414,8 @@ export const TaskQueueCells: React.FC<{
                 {item.required && !done && <span className="shrink-0 rounded border border-slate-900 px-1 text-[11px] font-black leading-4 text-slate-900">필수</span>}
               </span>
               {done ? (
-                <span data-testid="task-done-data" className="truncate pl-4 text-[13px] font-bold leading-tight text-slate-600">
-                  ✓ {item.done?.short ?? '완료'}{current ? ' · 보는 중' : ''}
+                <span data-testid="task-done-data" className={`truncate pl-4 text-[13px] font-bold leading-tight ${ahead ? 'text-rose-700' : 'text-slate-600'}`}>
+                  {ahead ? '' : '✓ '}{item.done?.short ?? '완료'}{current ? ' · 보는 중' : ''}
                 </span>
               ) : (
                 <span className="flex min-w-0 items-center gap-1.5 pl-4 text-[13px] font-semibold leading-tight text-slate-600">
@@ -441,9 +447,12 @@ export const TaskQueueList: React.FC<{
   stepper?: StepperData;
   /** 주면 화살표 대신 셀을 눌러 과목을 고른다 */
   onSelect?: (item: TaskCardData) => void;
-}> = ({ items, currentKey, currentRowKey, onRefresh, stats, stepper, onSelect }) => (
+  /** 9일: "오늘 할 일" 제목 왼쪽에 놓는 것(쉬는 시간 타이머) */
+  leading?: React.ReactNode;
+}> = ({ items, currentKey, currentRowKey, onRefresh, stats, stepper, onSelect, leading }) => (
   <section aria-labelledby="today-task-label" className="flex min-w-0 flex-col gap-2">
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {leading}
       <h2 id="today-task-label" className="text-lg font-black text-slate-900">오늘 할 일</h2>
       {stats && <div className="order-last w-full lg:order-none lg:w-auto"><SummaryTiles minutes={stats.minutes} completedLabel={stats.completedLabel} stepper={stepper} /></div>}
       <div className="ml-auto flex items-center gap-2">
