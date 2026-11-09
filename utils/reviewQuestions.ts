@@ -363,6 +363,31 @@ const readCell = (column: Expression) => {
   return readConvertCell(cellTextOf(column));
 };
 /**
+ * 9일 "[] 내용은 문제 출제 조건으로 무조건 반드시 나와야": `,`로 이은 칸 안에서 값마다 집합을 따로 붙였으면(`[A] B:[D] C,[F] S`)
+ * 그 칸을 집합마다 나눠 따로 묻는다(`[A] B:[D] C`와 `[A] B:[F] S`). 그래야 집합(D · F)이 문제 조건으로 보이고 정답에는 값만 남는다.
+ * 집합 없이 이어 쓴 값은 앞 집합에 붙는다(`[D] C, E, [F] S` → D: C, E · F: S). 그런 칸이 여럿이면 앞 칸부터 차례로 나눈다.
+ */
+const splitMarkedCells = (expression: Expression): Expression[] => {
+  if (expression.type !== 'relation') return [expression];
+  const marked = (item: Expression) => cellTextOf(item).trim().startsWith('[');
+  const index = expression.fields.findIndex(field => field.type !== 'text' && field.type !== 'relation' && field.items.slice(1).some(marked));
+  if (index < 0) return [expression];
+  const field = expression.fields[index];
+  if (field.type === 'text' || field.type === 'relation') return [expression];
+  const groups: Expression[][] = [];
+  field.items.forEach(item => {
+    if (!groups.length || marked(item)) groups.push([item]);
+    else groups[groups.length - 1].push(item);
+  });
+  const parts = groups.flatMap(group => splitMarkedCells({ ...expression, fields: expression.fields.map((item, at) => (at === index ? combine(field.type, group) : item)) }));
+  // `-`·`=`로 이은 칸(`[D] C-[F] S` · `[D] C=[F] S`)은 칸 안의 순서 · 같음도 집합끼리의 관계로 따로 묻는다(`-`는 분류기준 없는 `;`, `=`는 `:`)
+  if ((field.type === 'sequence' || field.type === 'equal') && field.items.every(marked)) {
+    parts.push({ type: 'relation', fields: field.items, separators: field.items.slice(1).map(() => (field.type === 'equal' ? ':' : ';')),
+      classifications: field.items.map((_, at) => (at === 0 ? 0 : '')) });
+  }
+  return parts;
+};
+/**
  * 모든 칸에 집합이 있는 관계의 칸들. 칸의 집합은 칸 앞에 직접 쓴 `[ ]`와 그 칸 번호의 상위 속성(위쪽 토글 제목이 이어 주는 집합)의 교집합이다.
  * `[A] k`라고만 써도 점 없이 언제나 상위 속성과 교집합이고, 토글 밑 토글도 바깥 것부터 차례로 쌓인다(`implicit`).
  */
@@ -1445,8 +1470,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (close === undefined || close >= end) continue;
       // 괄호 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙). 안에서 직접 쓴 기준이 먼저다
       const inner = parseExpression(source, node.id, index + 1, close, inheritedByNode.get(node.id) ?? new Map(), typeof column === 'number' ? column : 0);
-      if (inner.type !== 'text') {
-        const { expression: scopedInner, scope: innerScope } = scopeOf(inner, sets);
+      if (inner.type !== 'text') splitMarkedCells(inner).forEach(innerPart => {
+        const { expression: scopedInner, scope: innerScope } = scopeOf(innerPart, sets);
         const scoped = labelLoneSets(scopedInner, sets);
         if (scoped.type === 'relation' && sets.some(item => item.length)) implicitByExpression.set(scoped, sets);
         const fields = scoped.type === 'relation' ? convertFieldsOf(scoped.fields.map(head), sets) : [];
@@ -1454,7 +1479,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         const placed = joinSets(fields.length >= 2 && fields.every(Boolean) ? scope : [...scope, ...(sets[0] ?? [])]);
         visit(scoped, [...ancestorConditions(node), ...(placed ? [{ text: placed, columns: [], spans: [], place: 'position' as const }] : []),
           ...(innerScope ? [{ text: innerScope, columns: [], spans: [], place: 'position' as const }] : [])]);
-      }
+      });
       visitGroups(inner, node, scope, sets, column);
       index = close;
     }
@@ -1525,7 +1550,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   nodes.forEach(node => {
     const context = ancestorConditions(node);
     const nodeImplicit = implicitSetsOf(node);
-    (expressions.get(node.id) || []).forEach(original => {
+    (expressions.get(node.id) || []).forEach(whole => splitMarkedCells(whole).forEach((original, part) => {
       const implicit = linkedSetsOf(original, nodeImplicit);
       const { expression: scopedExpression, scope } = scopeOf(original, implicit);
       const expression = labelLoneSets(scopedExpression, implicit);
@@ -1533,8 +1558,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 줄 앞 `[할로젠]`이 바로 위 토글 이름과 같으면 조건을 한 번만 준다(`‘할로젠’, ‘할로젠’에서` 방지)
       const repeated = scope && context.length > 0 && normSetName(context[context.length - 1].text) === normSetName(scope);
       visit(expression, scope && !repeated ? [...context, { text: scope, columns: [], spans: [], place: 'position' as const }] : context, offsetByNode.get(node.id) ?? 0);
-      visitGroups(original, node, scope ? [scope] : [], original.type === 'relation' ? implicit : [readCell(original)?.sets ?? []]);
-    });
+      // `( )` 안쪽은 원래 줄에서 한 번만 읽는다
+      if (part === 0) visitGroups(whole, node, scope ? [scope] : [], whole.type === 'relation' ? implicit : [readCell(whole)?.sets ?? []]);
+    }));
   });
   // 8일: 논리어 · 연결어가 없는 노트로 문제를 만들지 않는다. 전에는 문제가 하나도 없으면 아무 값도 보여 주지 않고
   // 노트 전체를 떠올리게 하는 '정리노트' 회상 문제(kind 'recall')를 하나 넣었는데 없앴다("전체 상기 문제 … 있으면 없애라")

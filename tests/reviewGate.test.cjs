@@ -8112,8 +8112,9 @@ test('a logic chunk is one cell: A:B,C is the cells A and "B,C", and its inside 
   const plan = planConvertReview(candidates);
   assert.equal(plan.planned.length, 1, 'the two units sharing the cell "B, C" still combine');
   assert.ok(!plan.planned[0].covered.some(item => item.questionKey.startsWith('cvv:')));
-  // 집합이 첫 항목 말고 다른 항목에도 있으면 한 칸이 아니다
-  assert.equal(units('[a] A ; [b] B, [c] C').length, 0);
+  // 집합이 첫 항목 말고 다른 항목에도 있으면 한 칸이 아니다: 9일부터 집합마다 칸을 나눠 따로 묻는다(집합이 문제 조건으로 보이게)
+  assert.deepEqual(units('[a] A ; [b] B, [c] C').map(q => [q.prompt, q.answer, q.convert.steps.map(step => step.set).join('>')]).sort(),
+    [['A', 'B', 'a>b'], ['A', 'C', 'a>c']]);
   // 한 줄 전체의 빈칸: 집합은 가리지 않고 값만 가린다. 두 칸만 남는 것은 단위 문제와 같아서 내지 않는다.
   const rows = questionsFor('[a] b ; [c] d ; [e] f').filter(q => q.convert?.variation === 'row');
   assert.deepEqual(rows.map(q => q.prompt).sort(), [`b → ${MASK} → ${MASK}`, `b → ${MASK} → f`, `b → d → ${MASK}`].sort());
@@ -12103,4 +12104,18 @@ test('9일: 쉬는 시간 타이머는 5분 단위, 뽀모도로가 끝날 때�
   assert.ok(logger.includes('playPomodoroEndSound();\n      startRest();') && logger.includes('{ playPomodoroEndSound(); startRest(); }'), 'study and review pomodoros both start a rest');
   assert.ok(logger.includes('writeRestEndsAt(null); playShortAlarm();'));
   assert.ok(logger.includes('<TaskQueueList leading={<RestTimer />}'), 'left of 오늘 할 일');
+});
+
+test('9일: 칸 안의 값마다 [집합]을 붙이면 집합마다 나눠 묻고 집합은 늘 문제 조건으로 보인다', () => {
+  const shape = memo => questionsFor(memo).map(q => [q.kind, q.prompt, q.answer, q.convert ? q.convert.steps.map(step => step.set).join('>') : ''].join('|')).sort();
+  assert.deepEqual(shape('[A] B:[D] C,[F] S'), ['convert|B|C|A>D', 'convert|B|S|A>F', 'convert|C|B|D>A', 'convert|S|B|F>A']);
+  // 집합 없이 이어 쓴 값은 앞 집합에 붙는다
+  assert.ok(shape('[A] B:[D] C, E,[F] S').includes('convert|B|C, E|A>D'));
+  // `-` · `=` 칸은 칸 안의 순서 · 같음도 집합끼리의 관계로 묻는다
+  assert.ok(shape('[A] B:[D] C-[F] S').includes('convert|C|S|D>F') && !shape('[A] B:[D] C-[F] S').includes('convert|S|C|F>D'));
+  assert.ok(shape('[A] B:[D] C=[F] S').includes('convert|S|C|F>D'));
+  // 정답에 [ ]가 글자로 남는 문제가 없다
+  ['[A] B:[D] C,[F] S', 'B:[D] C,[F] S', '[A] B: C,[F] S', '[A] B:[D] C-[F] S', '[A] B:[D] C=[F] S'].forEach(memo => questionsFor(memo).forEach(q => {
+    assert.ok(!/\[/.test(q.answer) && !/\[/.test(q.prompt), `${memo}: ${q.prompt} → ${q.answer}`);
+  }));
 });
