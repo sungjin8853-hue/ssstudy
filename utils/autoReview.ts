@@ -74,7 +74,8 @@ export const simplifyAutoLog = (logs: StudyLog[], logId: string): { logs: StudyL
     .filter(log => log.id !== incoming.id && log.subjectId === incoming.subjectId && isStudyLog(log) && stageOf(log) === stageOf(incoming) && endMs(log) <= endMs(incoming))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const previous = before[before.length - 1];
-  if (!previous || !(isAutoWaiting(previous) || isFreshAutoRegistered(previous)) || previous.manualEntry || incoming.manualEntry) return { logs, id: logId };
+  // 10일: 모으는 중인 앞 기록에만 합친다(이미 넣은 기록에 합치던 8일 방식은 되돌림)
+  if (!previous || !isAutoWaiting(previous) || previous.manualEntry || incoming.manualEntry) return { logs, id: logId };
   // 공부한 날이 다르면(자정을 넘김) 합치지 않는다: 합치면 뒤 공부가 앞 날짜로 세어져 그날 계획에서 빠진다
   if (getLogStudyDate(previous) !== getLogStudyDate(incoming)) return { logs, id: logId };
   if (startMs(incoming) - endMs(previous) > AUTO_REVIEW_SAME_TIME_MS) return { logs, id: logId };
@@ -126,43 +127,49 @@ export const registerAutoGroup = (logs: StudyLog[], memberIds: readonly string[]
 };
 
 /**
- * 막 저장한 기록 하나(logId)를 자동 복습에 바로 넣는다(8일): 1시간 안에 이어 한 공부면 앞 기록에 합치고, 아직 복습하지 않은 같은 단계의 자동 묶음을
- * 넣은 때로부터 3시간 안이면 그 묶음에 더해 묶음의 넣은 때로 넣는다(묶음 전체 난도를 다시 매긴다). 아니면 새 묶음이다.
- * hours · force는 예전 "모을 시간"용이라 쓰지 않는다(부르는 쪽 호환). 대기 중이 아니면 그대로 돌려준다.
+ * 막 저장한 기록 하나(logId)를 자동 복습에 넣는다(10일 "이전처럼": 4일 방식으로 되돌림): 1시간 안에 이어 한 공부면 앞 기록에 합치고, 같은 단계에 모은 공부 시간이
+ * hours만큼 차면(또는 force: 바로 복습 넣기 · 과목을 다 끝냄) 모은 기록을 한 묶음으로 넣는다. 아니면 모으는 중으로 둔다.
+ * 다른 단계에 모으던 기록은 단계가 바뀐 것이니 먼저 넣는다. 대기 중이 아니면 그대로 돌려준다.
+ * 켜기 전에 저장한 대기 기록(autoReviewWaiting이 아닌 것)은 건드리지 않는다(9일).
+ * 저장할 때마다 그 묶음(모으는 중이든 이번에 넣었든)의 난도를 묻는다(8일): 마지막에 고른 난도가 묶음의 실제 난도다.
  */
 export const registerAutoReview = (
-  logs: StudyLog[], logId: string, _hours = DEFAULT_AUTO_REVIEW_HOURS, _force = false,
-  /** 넣기 직전에 할 일(노트 합치기: 복습에 넣을 때 이전 쪽 노트에 합친다) */
+  logs: StudyLog[], logId: string, hours = DEFAULT_AUTO_REVIEW_HOURS, force = false,
+  /** 묶음을 넣기 직전에 할 일(노트 합치기: 복습에 넣을 때 이전 쪽 노트에 합친다) */
   beforeRegister: (logs: StudyLog[], ids: string[]) => StudyLog[] = current => current
 ): StudyLog[] => {
   const incoming0 = logs.find(log => log.id === logId);
   if (!incoming0 || !incoming0.unitReviewPending) return logs;
   const atMs = endMs(incoming0);
-  // 9일 "자동으로 넣기를 켜면 이전 기록은 넣지 말고 남기고 새로 들어오는 것만": 남아 있는 대기 기록(켜기 전에 저장한 것 · 예전 판에서 모으던 것)은
-  // 건드리지 않는다. 복습에 넣기 창에서 직접 넣는다
-  let next = logs;
-  const simplified = simplifyAutoLog(next, logId);
-  next = simplified.logs;
+  const register = (current: StudyLog[], ids: string[]) => registerAutoGroup(beforeRegister(current, ids), ids, atMs);
+  const cut = force || Boolean(incoming0.autoReviewCut);
+  const simplified = simplifyAutoLog(logs, logId);
+  let next = simplified.logs;
   const incoming = next.find(log => log.id === simplified.id)!;
-  if (incoming.unitReviewPending) next = beforeRegister(next, [incoming.id]);
-  const current = next.find(log => log.id === incoming.id) ?? incoming;
-  // 같은 때(3시간 단위)의 아직 복습하지 않은 자동 묶음
-  const groups = [...new Set(next.filter(log => log.id !== current.id && log.subjectId === current.subjectId && stageOf(log) === stageOf(current) && isFreshAutoRegistered(log))
-    .map(log => log.reviewRegisteredAt!))]
-    .filter(at => { const ms = Date.parse(at); return Number.isFinite(ms) && ms <= atMs && atMs - ms <= AUTO_REVIEW_GROUP_MS; })
-    .sort();
-  const groupAt = groups[groups.length - 1];
-  const groupMs = groupAt ? Date.parse(groupAt) : (current.unitReviewPending ? atMs : Date.parse(current.reviewRegisteredAt ?? '') || atMs);
-  // 이미 복습한 기록은 다시 넣지 않는다(넣으면 복습 단계가 처음으로 돌아간다)
-  const memberIds = [...new Set([...(groupAt ? next.filter(log => log.subjectId === current.subjectId && log.reviewRegisteredAt === groupAt && isFreshAutoRegistered(log)).map(log => log.id) : []), current.id])];
-  // 8일: 넣은 묶음의 난도를 물어본다(같은 묶음에 공부가 더해져도 다시 묻는다)
-  const askIds = new Set(memberIds);
-  return registerAutoGroup(next, memberIds, groupMs).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
+  const waiting = next.filter(log => log.id !== incoming.id && log.subjectId === incoming.subjectId && log.unitReviewPending && log.autoReviewWaiting);
+  const otherStage = waiting.filter(log => stageOf(log) !== stageOf(incoming));
+  if (otherStage.length) next = register(next, otherStage.map(log => log.id));
+  const group = [...waiting.filter(log => stageOf(log) === stageOf(incoming)), incoming];
+  const askIds = new Set(group.map(log => log.id));
+  const minutes = group.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0);
+  if (cut || minutes >= hours * 60 - 1e-9) {
+    return register(next, group.map(log => log.id)).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
+  }
+  return next.map(log => (log.id === incoming.id
+    ? { ...log, autoReviewQueued: undefined, autoReviewCut: undefined, autoReviewWaiting: true, autoReviewAsk: true }
+    : askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
 };
 
-/** 8일: 물어볼 자동 묶음(과목 하나에 가장 최근 것). 넣은 때와 기록들 */
+/** 모으는 중인 묶음을 가리키는 키(넣은 때가 아직 없다) */
+export const AUTO_WAITING_GROUP = 'waiting';
+
+/**
+ * 8일: 물어볼 자동 묶음(과목 하나에 가장 최근 것). 모으는 중인 묶음이면 groupAt이 AUTO_WAITING_GROUP, 넣은 묶음이면 넣은 때.
+ * 그사이 복습을 해 버린 묶음은 묻지 않는다.
+ */
 export const autoReviewAskOf = (logs: readonly StudyLog[], subjectId: string): { groupAt: string; members: StudyLog[] } | null => {
-  // 그사이 복습을 해 버린 묶음은 묻지 않는다(고를 수 있는 기록이 없다)
+  const waiting = logs.filter(log => log.subjectId === subjectId && log.unitReviewPending && log.autoReviewWaiting);
+  if (waiting.some(log => log.autoReviewAsk)) return { groupAt: AUTO_WAITING_GROUP, members: waiting };
   const asking = logs.filter(log => log.subjectId === subjectId && log.autoReviewAsk && isFreshAutoRegistered(log));
   if (!asking.length) return null;
   const groupAt = asking.map(log => log.reviewRegisteredAt!).sort().at(-1)!;
@@ -171,9 +178,16 @@ export const autoReviewAskOf = (logs: readonly StudyLog[], subjectId: string): {
 
 /**
  * 8일: 자동 묶음의 난도를 고른 것으로 정한다(마지막에 고른 난도가 실제 종합 난도). grade가 없으면(닫기) 그대로 두고 묻기만 끝낸다.
- * 이미 복습한 기록은 바꾸지 않는다. 기억(FSRS)은 묶음의 넣은 때에 그 난도로 평가한 것이다.
+ * 모으는 중인 묶음이면 고른 난도를 적어 두었다가 넣을 때 쓴다. 넣은 묶음이면 넣은 때에 그 난도로 평가한 기억(FSRS)으로 바꾼다. 이미 복습한 기록은 바꾸지 않는다.
  */
 export const chooseAutoReviewGrade = (logs: StudyLog[], subjectId: string, groupAt: string, grade?: SubjectGrade): StudyLog[] => {
+  if (groupAt === AUTO_WAITING_GROUP) {
+    return logs.map(log => {
+      if (log.subjectId !== subjectId) return log;
+      if (log.unitReviewPending && log.autoReviewWaiting) return { ...log, autoReviewAsk: undefined, ...(grade ? { autoReviewChosenGrade: grade } : {}) };
+      return log.autoReviewAsk ? { ...log, autoReviewAsk: undefined } : log;
+    });
+  }
   const atMs = Date.parse(groupAt);
   const card = grade ? fsrsReview(null, SUBJECT_GRADE_RATING[grade], atMs) : null;
   return logs.map(log => {

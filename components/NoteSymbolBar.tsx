@@ -38,7 +38,8 @@ export const useKeyboardInset = () => {
   useEffect(() => {
     const viewport = typeof window === 'undefined' ? undefined : window.visualViewport;
     if (!viewport) return undefined;
-    const update = () => setInset(Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop)));
+    // 10일 점검: 두 손가락으로 확대한 동안은 보이는 영역이 줄어도 키보드가 아니다(탭이 사라지지 않게)
+    const update = () => setInset(viewport.scale > 1.01 ? 0 : Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop)));
     update();
     viewport.addEventListener('resize', update);
     viewport.addEventListener('scroll', update);

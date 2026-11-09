@@ -2,12 +2,12 @@ import React, { useMemo } from 'react';
 import type { StudyLog } from '../types';
 import { formatReviewInterval } from './ReviewPracticeScreen';
 import { fsrsIntervalMs, fsrsReview } from '../utils/fsrs';
-import { autoReviewGradeOf } from '../utils/autoReview';
+import { AUTO_WAITING_GROUP, autoReviewGradeOf } from '../utils/autoReview';
 import { formatSpeed, pastSessions, previousUnitSpeed, speedPerHour, SUBJECT_GRADE_LABELS, SUBJECT_GRADE_RATING, SUBJECT_GRADES, summarizeSpeedFeedback } from '../utils/subjectFeedback';
 import type { SubjectGrade } from '../utils/subjectFeedback';
 
 /**
- * 8일: 자동 복습이 켜진 과목에서 학습을 저장하면(같은 3시간 묶음에 공부가 더해져도) 넣은 묶음의 난도를 묻는다.
+ * 8일: 자동 복습이 켜진 과목에서 학습을 저장할 때마다 그 묶음의 난도를 묻는다(10일: 모으는 중인 묶음이면 고른 난도를 적어 두었다가 정한 시간이 차서 넣을 때 쓴다).
  * 추천 난도가 표시되고, 고른 난도가 그 묶음의 실제 종합 난도가 된다(같은 묶음이면 마지막에 고른 것). 닫으면 지금 난도(고른 것, 없으면 추천) 그대로다.
  */
 export const AutoReviewFeedbackDialog: React.FC<{
@@ -24,7 +24,7 @@ export const AutoReviewFeedbackDialog: React.FC<{
     const pages = members.reduce((sum, log) => sum + (Number.isFinite(log.pagesRead) ? log.pagesRead : 0), 0);
     const minutes = members.reduce((sum, log) => sum + (Number.isFinite(log.timeSpentMinutes) ? log.timeSpentMinutes : 0), 0);
     const summary = summarizeSpeedFeedback(pastSessions(logs.filter(log => !ids.has(log.id)), subjectId, 'study'));
-    const atMs = Date.parse(groupAt);
+    const atMs = Number.isFinite(Date.parse(groupAt)) ? Date.parse(groupAt) : Date.now();
     const intervals = Object.fromEntries(SUBJECT_GRADES.map(grade => [grade, fsrsIntervalMs(fsrsReview(null, SUBJECT_GRADE_RATING[grade], atMs))])) as Record<SubjectGrade, number>;
     const starts = members.map(log => log.startPage ?? log.endPage).filter((page): page is number => Number.isFinite(page));
     const ends = members.map(log => log.endPage ?? log.startPage).filter((page): page is number => Number.isFinite(page));
@@ -32,7 +32,7 @@ export const AutoReviewFeedbackDialog: React.FC<{
       speed: speedPerHour(pages, minutes), summary, previous: previousUnitSpeed(logs, subjectId, members),
       recommended: autoReviewGradeOf(logs, members.map(log => ({ ...log, autoReviewChosenGrade: undefined }))),
       current: members.map(log => log.autoReviewChosenGrade).find(Boolean) ?? null,
-      intervals, range: starts.length && ends.length ? `${Math.min(...starts)}~${Math.max(...ends)}` : '', count: members.length
+      intervals, range: starts.length && ends.length ? `${Math.min(...starts)}~${Math.max(...ends)}` : '', count: members.length, minutes
     };
   }, [logs, members, groupAt]);
   return (
@@ -46,7 +46,9 @@ export const AutoReviewFeedbackDialog: React.FC<{
             className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-lg font-black text-slate-600">✕</button>
         </div>
         <p className="mt-1 text-[13px] font-bold text-slate-600">
-          자동으로 복습에 넣었어요 · {pageLabel}.{info.range}{info.count > 1 ? ` · 3시간 안에 넣은 공부 ${info.count}개가 한 묶음` : ''} · 고른 난도가 이 묶음의 난도예요
+          {groupAt === AUTO_WAITING_GROUP
+            ? <>자동 복습에 모으는 중이에요 · {pageLabel}.{info.range} · 모은 공부 {Math.round(info.minutes)}분{info.count > 1 ? `(${info.count}개)` : ''} · 정한 시간이 차면 마지막에 고른 난도로 넣어요</>
+            : <>자동으로 복습에 넣었어요 · {pageLabel}.{info.range}{info.count > 1 ? ` · 모은 공부 ${info.count}개가 한 묶음` : ''} · 고른 난도가 이 묶음의 난도예요</>}
         </p>
         <p className="mt-2 text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(info.speed, pageLabel)}</span></p>
         <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Subject, StudyLog, TagDefinition, ReviewMemoDocument, ReviewMeasurement } from './types';
 import { dedupeIdenticalQuestions } from './utils/reviewDuplicates';
 import { withReviewMemoDocument } from './utils/reviewMemoDocument';
-import { SessionLogger } from './components/SessionLogger';
+import { playShortAlarm, SessionLogger } from './components/SessionLogger';
 import { Analytics } from './components/Analytics';
 import { HistoryCharts } from './components/HistoryCharts';
 import { TodaySummary } from './components/TodaySummary';
@@ -21,9 +21,10 @@ import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, co
 import { readEditIntake } from './utils/reviewEditIntake';
 import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
-import { autoReviewHoursOf, chooseAutoReviewGrade, registerAutoReview } from './utils/autoReview';
+import { autoReviewHoursOf, chooseAutoReviewGrade, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
 import { excludeLogFromReview } from './utils/reviewDelete';
 import { planTimesChanged, withPlanTimes } from './utils/weekPlan';
+import { useRestTimer, writeRestEndsAt } from './utils/restTimer';
 import { KEYBOARD_MIN_INSET, useKeyboardInset } from './components/NoteSymbolBar';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
@@ -772,11 +773,18 @@ const App: React.FC = () => {
       .map(log => (log.autoReviewCut ? { ...log, autoReviewCut: undefined } : log));
   };
 
-  // 자동 복습 넣기(8일): 저장하면 바로 복습에 넣고, 3시간 안에 넣은 것은 같은 때의 한 묶음이다(노트 합치기는 넣을 때 복습에 넣기와 같다).
+  // 자동 복습 넣기(3일, 4일 바꿈, 10일 되돌림): 저장한 기록을 모으다가 정한 공부 시간이 차면 한 묶음으로 복습에 넣는다(노트 합치기는 넣을 때 복습에 넣기와 같다).
   // 1시간 안에 이어 한 공부는 앞 기록에 합친다. 측정 도중 "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다(자동이 꺼진 과목은 추천 난도로)
-  // 켜기 전에 저장한 기록 · 예전 판에서 모으던 기록은 넣지 않고 남긴다(9일). 한 효과에서 차례로 해 서로 덮어쓰지 않는다
+  // 켜기 전에 저장한 기록은 넣지 않고 남긴다(9일). 한 효과에서 차례로 해 서로 덮어쓰지 않는다
   // 9일 "계획 갱신은 사용자가 미룬 것만(날짜만) 고려, 나머지는 자동으로": 한 장당 계획 시간(잰 속도 · 임시값 · 학습 설정에서 바뀐 단계)이
   // 바뀌면 그 과목만 바로 새로 적는다. 요일별 할당(페이지)과 계획 시작일 · 밀린 양은 건드리지 않는다(밀린 양을 새로 나누는 것은 계획 갱신)
+  // 10일 점검: 쉬는 시간이 끝나면 3초 알람 — 학습 실행 화면을 떠나 있어도(학습 설정 · 추이 분석) 제때 울리도록 늘 떠 있는 App에서 잰다
+  const { endsAt: restEndsAt } = useRestTimer();
+  useEffect(() => {
+    if (restEndsAt === null) return undefined;
+    const timer = window.setTimeout(() => { writeRestEndsAt(null); playShortAlarm(); }, Math.max(0, restEndsAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [restEndsAt]);
   const planTimesGuard = React.useRef(0);
   useEffect(() => {
     const stale = subjects.filter(subject => planTimesChanged(subjects, logs, subject));
@@ -799,8 +807,10 @@ const App: React.FC = () => {
       const finished = subject ? getSubjectRemainingPageCount(subject) <= 0 : false;
       next = registerAutoReview(next, log.id, autoReviewHoursOf(subject), finished, (current, ids) => mergePendingNotes(current, log.subjectId, ids));
     });
-    // 9일: 예전 판에서 시간이 차기를 기다리며 모으던 기록은 자동으로 넣지 않고 보통 대기 기록으로 남긴다(켜기 전에 저장한 기록과 같다)
-    if (next.some(log => log.autoReviewWaiting)) next = next.map(log => (log.autoReviewWaiting ? { ...log, autoReviewWaiting: undefined } : log));
+    // 10일 "이전처럼": 모을 시간을 줄이거나 모으는 기록을 고쳐 이미 찬 묶음도 다음 저장을 기다리지 않고 넣는다. 켜기 전에 저장한 대기 기록은 모으는 기록이 아니라 그대로다(9일)
+    subjects.filter(subject => subject.autoReviewRegister).forEach(subject => {
+      next = flushFilledAutoGroups(next, subject.id, autoReviewHoursOf(subject), (current, ids) => mergePendingNotes(current, subject.id, ids));
+    });
     if (next !== logs) setLogs(next);
   }, [logs, autoHoursKey]);
 

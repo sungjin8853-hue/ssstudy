@@ -36,7 +36,7 @@ import { currentPlanStageId, planRefreshSummary, PlanRefreshSummary, replanSubje
 import { PlanRefreshDialog } from './PlanRefreshDialog';
 import { RestTimer } from './RestTimer';
 import { aheadFinishPlan, buildAheadDays } from '../utils/aheadDay';
-import { startRest, useRestTimer, writeRestEndsAt } from '../utils/restTimer';
+import { startRest } from '../utils/restTimer';
 import { formatPageSpans, unsolvedPagesAfter } from '../utils/unsolvedPages';
 import { hasLogicMark, memoLineText } from '../utils/noteLogicMarks';
 import { NoteSetEditContext, NoteSetSourceContext, ReviewMemoEditor } from './ReviewMemoEditor';
@@ -957,13 +957,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [planRefreshResult, setPlanRefreshResult] = useState<PlanRefreshSummary | null>(null);
   // 9일: 측정 · 정리 타이머를 일시정지 버튼으로 멈춘 채 5분이 지나면 알람이 울리고 다시 시작 버튼이 깜박인다(누를 때마다 새로 잰다)
   const [pausedByUserAt, setPausedByUserAt] = useState<number | null>(null);
-  // 9일: 쉬는 시간이 끝나면 3초 알람(측정 화면 · 학습 실행 어디서든 한 번)
-  const { endsAt: restEndsAt } = useRestTimer();
-  useEffect(() => {
-    if (restEndsAt === null) return undefined;
-    const timer = window.setTimeout(() => { writeRestEndsAt(null); playShortAlarm(); }, Math.max(0, restEndsAt - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [restEndsAt]);
   const [pauseAlert, setPauseAlert] = useState(false);
   const [reviewChoice, setReviewChoice] = useState<'include' | 'skipBasic' | 'skipAll'>('include');
   const [minutes, setMinutes] = useState(0);
