@@ -1503,7 +1503,12 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const fields = convertFieldsOf(expression.fields.map(head), implicit);
       if (fields.length >= 2 && fields.every(Boolean)) return { expression };
     }
-    return { expression: mapFirstLeaf(expression, text => readConvertCell(text)?.cell ?? text), scope: joinSets(sets) };
+    const stripped = mapFirstLeaf(expression, text => readConvertCell(text)?.cell ?? text);
+    // 9일 "[]는 상위와 구별된 항목 — 해당 항목만 분리": 첫 칸에 `[A]`를 쓰면 그 칸은 세션 · 노트 분류기준(첫째 이름)에서 떨어져 나온다.
+    // `[A] B : C`(기준 개념:정의) → ‘A’에서 ‘B’의 정의는? — B 앞에 "개념"을 붙이지 않고, 뒤 칸의 기준 이름(정의)은 그대로다
+    const separated = stripped.type === 'relation' && typeof stripped.classifications[0] === 'number' && sets.some(set => !looksLikeCriterion(set))
+      ? { ...stripped, classifications: ['', ...stripped.classifications.slice(1)] } : stripped;
+    return { expression: separated, scope: joinSets(sets) };
   };
   /**
    * 위쪽 분류기준도 없고 모든 칸에 집합도 없는 줄에서 뒤 칸 하나에만 `[기능] 보호`처럼 `[ ]`를 쓰면(18:36 결정),

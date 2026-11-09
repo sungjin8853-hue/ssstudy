@@ -1154,9 +1154,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
             </button>
           )}
           {reviewTaskLogs && (
-            <button type="button" data-testid="review-delete" onClick={() => setDeletingReview(true)} aria-label="복습 삭제"
-              className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 text-sm font-black text-rose-700 transition-colors hover:bg-rose-100">
-              <span aria-hidden="true">🗑</span>복습 삭제
+            // 9일: 회색 쓰레기통 아이콘 버튼(글자 없이, 누르면 복습 삭제 창)
+            <button type="button" data-testid="review-delete" onClick={() => setDeletingReview(true)} aria-label="복습 삭제" title="복습 삭제"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" />
+              </svg>
             </button>
           )}
         </div>

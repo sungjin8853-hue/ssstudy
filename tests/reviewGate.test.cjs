@@ -7216,21 +7216,22 @@ test('ability-convert cards are sentences too: the given values are in the sente
   const { convertStatement } = loadSource('utils/questionProse.ts');
   const { ConvertQuestionContent } = loadSource('components/ConvertQuestionContent.tsx');
   const statements = memo => questionsFor(memo).filter(q => q.convert).map(q => [convertStatement(q.convert), q.answer]);
-  assert.deepEqual(statements('[a] b ; [c] d'), [['집합 ‘a’의 ‘b’에 대응하는 집합 ‘c’의 값은?', 'd']]);
-  assert.deepEqual(statements('[a] b < [c] d'), [['집합 ‘c’의 ‘d’에 대응하는 집합 ‘a’의 값은?', 'b']]);
+  // 9일: "~에서 ~의" 꼴. `;`(충분)는 앞으로만, `<`(필요)는 거꾸로만 묻는 것은 그대로
+  assert.deepEqual(statements('[a] b ; [c] d'), [['‘a’에서 ‘b’의 c은(는)?', 'd']]);
+  assert.deepEqual(statements('[a] b < [c] d'), [['‘c’에서 ‘d’의 a은(는)?', 'b']]);
   const chain = statements('[a] b ; [c] d ; [u] e').map(item => item[0]);
-  assert.ok(chain.includes('집합 ‘a’의 ‘b’, 집합 ‘u’의 ‘e’ 사이의 집합 ‘c’의 값은?'), 'a row with the middle hidden');
-  assert.ok(chain.includes('집합 ‘a’의 ‘b’, 집합 ‘c’의 ‘d’ 다음의 집합 ‘u’의 값은?'), 'a row with the last hidden');
-  assert.ok(chain.includes('집합 ‘a’의 ‘b’에 대응하는 집합 ‘c’, ‘u’의 값을 차례로 쓰시오.'), 'two answers in order');
+  assert.ok(chain.includes('‘a’에서 ‘b’, ‘u’에서 ‘e’ 사이의 c은(는)?'), 'a row with the middle hidden');
+  assert.ok(chain.includes('‘a’에서 ‘b’, ‘c’에서 ‘d’ 다음의 u은(는)?'), 'a row with the last hidden');
+  assert.ok(chain.includes('‘a’에서 ‘b’의 c · u을(를) 차례로 쓰시오.'), 'two answers in order');
   // 칸 안을 가린 변주
   const cell = statements('[과정] 풀이 ; [단계] 읽기-정리-확인').map(item => item[0]);
-  assert.ok(cell.includes('집합 ‘과정’의 ‘풀이’에 대응하는 집합 ‘단계’의 ‘( ㉠ )-( ㉡ )-확인’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.'));
+  assert.ok(cell.includes('‘과정’에서 ‘풀이’의 단계 ‘( ㉠ )-( ㉡ )-확인’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.'));
   assert.ok(statements('[과정] 풀이 ; [단계] B, C, D').some(item => item[0].endsWith('에서 ㉠, ㉡에 알맞은 것을 쓰시오. (순서는 상관없다)')));
   // 카드: 문장 + 정답 칸만. 주어진 값이 따로 칸으로 놓이지 않고, 정답은 확인할 때만 보인다.
   const unit = questionsFor('[a] b ; [c] d').find(q => q.convert);
   const hidden = renderToStaticMarkup(React.createElement(ConvertQuestionContent, { question: unit, revealed: false }));
   const shown = renderToStaticMarkup(React.createElement(ConvertQuestionContent, { question: unit, revealed: true }));
-  assert.ok(hidden.includes('data-question-statement="true"') && hidden.includes('집합 ‘a’의 ‘b’에 대응하는 집합 ‘c’의 값은?'));
+  assert.ok(hidden.includes('data-question-statement="true"') && hidden.includes('‘a’에서 ‘b’의 c은(는)?'));
   assert.ok(!hidden.includes('data-convert-given') && (hidden.match(/data-convert-slot="answer"/g) ?? []).length === 1);
   assert.ok(!hidden.includes('>d<') && shown.includes('>d<'));
 });
@@ -8449,7 +8450,8 @@ test('prose sentences carry the attribute of every value (given, conditions, ask
   assert.ok(cell.statement.startsWith('‘자동차’ 다음 자리의 ‘엔진’에서는 ‘'), 'without the criterion the condition is still in the sentence');
   // 능력 변환 카드
   const convert = questionsFor('[a] b ; [c] d').find(q => q.kind === 'convert');
-  assert.ok(getReviewQuestionSentence('대상:설명:예시', convert).statement.includes('값은?'));
+  // 9일: 능력 변환도 기본 관계와 같은 "~에서 ~의" 꼴(집합 · 대응이라는 말을 쓰지 않는다)
+  assert.equal(getReviewQuestionSentence('대상:설명:예시', convert).statement, '‘a’에서 ‘b’의 c은(는)?');
 });
 
 test('flash look: conditions, the given attribute and the asked attribute are big and separate', () => {
@@ -10242,12 +10244,12 @@ test('layers: a same-set unit conversion says 다음/앞 by the connector direct
   const { getReviewQuestionSentence } = questionBuilder;
   const units = questionsFor('[번호] 1 : @+1').filter(q => q.convert && !q.convert.variation);
   assert.deepEqual(units.map(q => [getReviewQuestionSentence(null, q).statement, q.answer]), [
-    ['집합 ‘번호’의 ‘1’ 다음의 집합 ‘번호’의 값은?', '1+1'],
-    ['집합 ‘번호’의 ‘1+1’ 앞의 집합 ‘번호’의 값은?', '1']
+    ['‘번호’에서 ‘1’ 다음 값은?', '1+1'],
+    ['‘번호’에서 ‘1+1’ 앞 값은?', '1']
   ]);
-  // 다른 집합 사이의 변환은 전처럼 대응
+  // 다른 집합 사이의 변환은 "~에서 ~의"(9일)
   const [go] = questionsFor('[기본형] go ; [과거형] went');
-  assert.equal(getReviewQuestionSentence(null, go).statement, '집합 ‘기본형’의 ‘go’에 대응하는 집합 ‘과거형’의 값은?');
+  assert.equal(getReviewQuestionSentence(null, go).statement, '‘기본형’에서 ‘go’의 과거형은?');
 });
 
 test("quotes: , - = stay letters even inside ( ) within the quote, so a formula '(f(x+h)-f(x))/h' makes no order question", () => {
@@ -12118,4 +12120,15 @@ test('9일: 칸 안의 값마다 [집합]을 붙이면 집합마다 나눠 묻�
   ['[A] B:[D] C,[F] S', 'B:[D] C,[F] S', '[A] B: C,[F] S', '[A] B:[D] C-[F] S', '[A] B:[D] C=[F] S'].forEach(memo => questionsFor(memo).forEach(q => {
     assert.ok(!/\[/.test(q.answer) && !/\[/.test(q.prompt), `${memo}: ${q.prompt} → ${q.answer}`);
   }));
+});
+
+test('9일: [ ]는 상위와 구별된 항목 — 첫 칸 [A]는 그 칸만 분류기준에서 떨어지고, {A}는 분류기준과 합쳐진다', () => {
+  const { getReviewQuestionSentence } = questionBuilder;
+  const said = (memo, criterion) => questionsFor(memo).map(q => [getReviewQuestionSentence(criterion, q).statement, q.answer]);
+  assert.ok(said('[A] B : C', '개념:정의').some(([s, a]) => s === '‘A’에서 ‘B’의 정의는?' && a === 'C'));
+  assert.ok(said('[A] B : [D] C', '개념:정의').some(([s, a]) => s === '‘A’에서 ‘B’의 D은(는)?' && a === 'C'));
+  assert.ok(said('B : C', '개념:정의').some(([s]) => s === '개념 ‘B’의 정의는?'));
+  assert.ok(said('{A} B : C', '개념:정의').some(([s]) => s === '개념 ‘A B’의 정의는?'));
+  // 노트 맨 앞의 분류기준 줄([개념:정의])은 집합이 아니라 기준이다
+  assert.ok(said('[개념:정의] 증기기관:열기관').some(([s]) => s === '‘개념:정의’에서 개념 ‘증기기관’의 정의는?'));
 });

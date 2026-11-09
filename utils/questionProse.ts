@@ -236,30 +236,33 @@ export interface ConvertProseInput {
 }
 /** 능력 변환 카드의 속성 이름: 주어진 값들 · 맞힐 값들이 세션 노트 분류기준에서 어떤 속성인지 */
 export interface ConvertAttrs { given: string[]; required: string[] }
-export const convertStatement = (convert: ConvertProseInput, attrs?: ConvertAttrs): string => {
+/**
+ * 능력 변환 문제의 줄글. 9일 "집합이었다 ~의였다 일관성이 없어, ~의로 처리하자고 했잖아(집합은 내부 논리상의 처리 방식)":
+ * 기본 관계 문제와 같은 꼴로 쓴다 — 주어진 칸은 "‘집합’에서 ‘값’의", 묻는 칸은 그 집합 이름(`[A] B : [D] C` → ‘A’에서 ‘B’의 D은(는)?).
+ * 칸에 `[ ]`를 쓴 집합은 상위(세션 · 토글 분류기준)와 따로인 항목이라 분류기준 이름(attrs)은 붙이지 않는다.
+ */
+export const convertStatement = (convert: ConvertProseInput, _attrs?: ConvertAttrs): string => {
   const given = convert.given ?? [0];
-  const givenKind = attrs?.given.length ? `${attrs.given.join('·')} ` : '';
-  const noun = attrs?.required.length ? `${attrs.required.join('·')} 값` : '값';
-  const refs = given.map(index => `집합 ${quote(convert.steps[index].set)}의 ${givenKind}${quote(convert.steps[index].cell)}`).join(', ');
-  const sets = convert.required.map(index => quote(convert.steps[index].set)).join(', ');
+  const refs = given.map(index => `${quote(convert.steps[index].set)}에서 ${quote(convert.steps[index].cell)}`).join(', ');
+  const names = convert.required.map(index => convert.steps[index].set);
+  const asked = names.join(' · ');
   const first = convert.required[0];
   const partial = convert.partial?.[first];
   if (partial !== undefined) {
     let order = 0;
     const shown = partial.replace(/＿/g, () => `( ${blankMark(order++)} )`);
     const marks = Array.from({ length: Math.max(1, order) }, (_, index) => blankMark(index)).join(', ');
-    const what = attrs?.required.length ? `${attrs.required.join('·')} 값` : '것';
-    const tail = order <= 1 ? `${marks}에 알맞은 ${what}은?` : `${marks}에 알맞은 ${what}을 ${partial.includes(', ') ? '쓰시오. (순서는 상관없다)' : '차례로 쓰시오.'}`;
-    return `${refs}에 대응하는 집합 ${quote(convert.steps[first].set)}의 ${quote(shown)}에서 ${tail}`;
+    const tail = order <= 1 ? `${marks}에 알맞은 것은?` : `${marks}에 알맞은 것을 ${partial.includes(', ') ? '쓰시오. (순서는 상관없다)' : '차례로 쓰시오.'}`;
+    return `${refs}의 ${convert.steps[first].set} ${quote(shown)}에서 ${tail}`;
   }
   if (given.length === 1) {
-    // 같은 집합 안의 단위 변환(`[번호] 1 : @+1`)은 "대응"만으로는 앞뒤가 안 드러나, 연결어 방향대로 다음/앞을 쓴다
+    // 같은 집합 안의 단위 변환(`[번호] 1 : @+1`)은 연결어 방향대로 다음/앞을 쓴다
     const sameSet = convert.direction && convert.required.length === 1 && convert.steps.every(step => step.set === convert.steps[0].set);
-    if (sameSet) return `${refs} ${convert.direction === 'reverse' ? '앞' : '다음'}의 집합 ${sets}의 ${noun}은?`;
-    return convert.required.length === 1 ? `${refs}에 대응하는 집합 ${sets}의 ${noun}은?` : `${refs}에 대응하는 집합 ${sets}의 ${noun}을 차례로 쓰시오.`;
+    if (sameSet) return `${refs} ${convert.direction === 'reverse' ? '앞' : '다음'} ${topic('값')}?`;
+    return convert.required.length === 1 ? `${refs}의 ${topic(asked)}?` : `${refs}의 ${object(asked)} 차례로 쓰시오.`;
   }
   const lowest = Math.min(...given);
   const highest = Math.max(...given);
   const place = convert.required.every(index => index > highest) ? '다음' : convert.required.every(index => index < lowest) ? '앞' : '사이';
-  return `${refs} ${place}의 집합 ${sets}의 ${noun}${convert.required.length === 1 ? '은?' : '을 차례로 쓰시오.'}`;
+  return `${refs} ${place}의 ${convert.required.length === 1 ? `${topic(asked)}?` : `${object(asked)} 차례로 쓰시오.`}`;
 };
