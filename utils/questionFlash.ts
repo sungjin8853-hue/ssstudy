@@ -117,6 +117,9 @@ const flashBody = (input: ProseInput & { cell?: { given: string; kind: CellKind;
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') {
     return { ...base, relation: { word: '같은', arrow: 'equal' }, ask: { label: askLabel, mode: answerOperator === 'and' ? '모두' : null } };
   }
+  if (kind === 'direct' && input.form === 'together') {
+    return { ...base, relation: { word: '함께', arrow: 'equal' }, ask: { label: askLabel, mode: answerOperator === 'and' ? '모두' : null } };
+  }
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') {
     return { ...base, relation: { word: '대응하는', arrow: 'equal' }, ask: { label: askLabel, mode: null } };
   }

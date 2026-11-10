@@ -28,7 +28,7 @@ export interface QuestionNoteNode { id: string; parentId: string | null; type: '
 type QuestionColumn = number | string;
 type Expression =
   /** raw: 칸 글 사이의 `( )`를 그 자리의 값으로 바꾸기 전 글(바꾼 칸에만 있다) */
-  | { type: 'text'; text: string; raw?: string; span: AnswerSpan }
+  | { type: 'text'; text: string; raw?: string; span: AnswerSpan; spelled?: string[] }
   | { type: 'and' | 'or' | 'sequence' | 'equal'; items: Expression[] }
   | { type: 'relation'; fields: Expression[]; separators: string[]; classifications: QuestionColumn[]; skips?: number[] };
 
@@ -48,7 +48,7 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   /** 한 칸 안의 `=`로 이은 이웃 쌍이면 'equal'(문장에서 "대응하는 것"으로 묻는다) */
   /** `components`: 홀로 쓴 `=` 뒤에 `,`로 여러 값이 온 것(구성요소로 묻는다). `=` 뒤가 값 하나면 'equal'(같은 것) */
   /** equal: 홀로 쓴 `=`(같은 것) · components: 홀로 쓴 `=` 뒤 여러 값(구성요소) · match: 칸 안의 `=`(대응하는 것, 1일: 예전 그대로) */
-  form?: 'equal' | 'components' | 'match';
+  form?: 'equal' | 'components' | 'match' | 'together';
   /** 남은 조건을 한 걸음 더 간 문제(2일): 주어진 값들로 남은 값을 머릿속으로 찾고, 그 남은 값의 다음 값을 맞힌다(남은 값은 보이지 않는다) */
   beyond?: boolean;
   /** 다른 연결어 없이 `=`·`-`만으로 이은 줄의 문제(2일): 능력 집합 칸에 앞 값의 상위 집합을 알려 준다 */
@@ -393,16 +393,22 @@ const splitMarkedCells = (expression: Expression): Expression[] => {
  */
 const convertFieldsOf = (columns: Expression[], implicit: string[][]) => columns.map((column, position) => {
   const read = readCell(column);
-  const sets = read ? [...(implicit[position] ?? []), ...read.sets] : [];
-  return read && sets.length ? { set: joinSets(sets), cell: read.cell } : null;
+  if (!read) return null;
+  // 10일 "[C] p ; q라면 [C] p ; [F.g] q": 칸 앞에 직접 쓴 `[ ]`는 위쪽 토글 제목이 그 칸 번호에 이어 주는 집합을 버리고 그 집합만 쓴다(구별된 항목).
+  // `[ ]`가 없는 칸은 위쪽 집합을 이어받고, 이어받을 것이 없을 때만 분류기준 이름(`spellOutColumnSets`가 붙인 것)을 집합으로 쓴다.
+  const spelled = leavesOf(column)[0]?.spelled ?? [];
+  const written = read.sets.filter(set => !spelled.includes(set));
+  const inherited = implicit[position] ?? [];
+  const sets = written.length ? written : inherited.length ? inherited : read.sets;
+  return sets.length ? { set: joinSets(sets), cell: read.cell } : null;
 });
-const mapFirstLeaf = (expression: Expression, change: (text: string) => string): Expression => {
+const mapFirstLeaf = (expression: Expression, change: (text: string) => string, spelled?: string[]): Expression => {
   if (expression.type === 'text') {
     const text = change(expression.text);
-    return text === expression.text ? expression : { ...expression, text };
+    return text === expression.text ? expression : { ...expression, text, ...(spelled ? { spelled: [...(expression.spelled ?? []), ...spelled] } : {}) };
   }
-  if (expression.type === 'relation') return { ...expression, fields: [mapFirstLeaf(expression.fields[0], change), ...expression.fields.slice(1)] };
-  return { ...expression, items: [mapFirstLeaf(expression.items[0], change), ...expression.items.slice(1)] };
+  if (expression.type === 'relation') return { ...expression, fields: [mapFirstLeaf(expression.fields[0], change, spelled), ...expression.fields.slice(1)] };
+  return { ...expression, items: [mapFirstLeaf(expression.items[0], change, spelled), ...expression.items.slice(1)] };
 };
 /**
  * 칸 앞에 `[A]`를 직접 쓴 칸은 그 칸의 분류기준을 새로 쓴 것이다(27일 요청): 분류기준 `개념:정의` 아래에서 `[A] k : j`는 `[A] k : [정의] j`이고
@@ -437,7 +443,7 @@ const spellOutColumnSets = (expression: Expression, criteria: readonly string[])
     // 칸 앞에 `[V]`를 직접 쓴 칸은 그 칸의 분류기준을 새로 쓴 것이라 위쪽 기준과 겹치지 않는다(27일 요청: `[A]:[B]` 아래 `M:[V] N`의 N은 B가 아니라 V)
     if (!names.length || hasSet(field)) return field;
     const prefix = names.map(name => `[${name}]`).join('');
-    return mapFirstLeaf(field, text => (text.startsWith('[') ? `${prefix}${text}` : `${prefix} ${text}`));
+    return mapFirstLeaf(field, text => (text.startsWith('[') ? `${prefix}${text}` : `${prefix} ${text}`), names);
   }) };
 };
 
@@ -1110,6 +1116,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
    * 끝이 열린 제목(`A:`)과 `[ ]`가 하나도 없는 제목(`A:C`)은 분류 집합을 만들지 않는다.
    */
   const titleParts = new Map<string, string[][] | null>();
+  /** 토글 제목의 칸마다 `[ ]`를 직접 썼는가(분류기준 이름만 붙은 칸은 아니다) */
+  const titleWritten = new Map<string, boolean[]>();
   const titlePartsOf = (parent: QuestionNoteNode): string[][] | null => {
     if (frameNodes.has(parent.id)) return null;
     if (titleParts.has(parent.id)) return titleParts.get(parent.id)!;
@@ -1119,7 +1127,15 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (parsed.type === 'relation') {
         const reads = parsed.fields.map(field => (nonempty(field) ? readCell(head(field)) : null));
         if (reads.filter(Boolean).length >= 2 && reads.some(read => read && read.sets.length)) {
-          result = reads.map(read => (read ? [...read.sets, read.cell] : []));
+          // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨": 둘째 칸부터는 제목에 `[ ]`를 직접 쓴 칸만 아래 줄의 그 칸 번호로 이어진다
+          // (분류기준 이름만 붙은 칸은 직접 쓴 것이 아니다). 첫 칸은 토글 아래 줄들이 들어 있는 곳이라 그대로 이어진다.
+          result = reads.map((read, position) => {
+            if (!read) return [];
+            const spelled = leavesOf(parsed.fields[position])[0]?.spelled ?? [];
+            if (position > 0 && !read.sets.some(set => !spelled.includes(set))) return [];
+            return [...read.sets, read.cell];
+          });
+          titleWritten.set(parent.id, reads.map((read, position) => !!read && read.sets.some(set => !(leavesOf(parsed.fields[position])[0]?.spelled ?? []).includes(set))));
         }
       }
     }
@@ -1130,10 +1146,30 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     const chain: QuestionNoteNode[] = [];
     for (let parentId = node.parentId; parentId; parentId = byId.get(parentId)!.parentId) chain.unshift(byId.get(parentId)!);
     const merged: string[][] = [];
-    chain.forEach(parent => (titlePartsOf(parent) ?? []).forEach((parts, position) => { merged[position] = [...(merged[position] ?? []), ...parts]; }));
+    // 10일: 안쪽 토글 제목도 "밑"이라, 칸 앞에 `[ ]`를 직접 쓴 칸은 바깥 제목이 그 칸 번호에 이어 준 집합을 버리고 새로 시작한다
+    chain.forEach(parent => (titlePartsOf(parent) ?? []).forEach((parts, position) => {
+      merged[position] = titleWritten.get(parent.id)?.[position] ? [...parts] : [...(merged[position] ?? []), ...parts];
+    }));
     return merged;
   };
   const implicitByExpression = new Map<Expression, string[][]>();
+  /**
+   * 10일 "한 행에서 다른 논리어 없이 쓰였다면 만들라고": 다른 논리어 없이 `,`로만 이은 줄(`사과, 배`)도 문제를 낸다.
+   * `,`는 순서 없는 "그리고"라서 값마다 함께 쓴 나머지를 모두 묻는다(‘사과’와 함께 쓴 것을 모두 쓰시오 → 배).
+   * 능력 집합(위 집합 · 분류기준)은 `-` · `=`만 쓴 줄처럼 문제 위에 보인다(lone).
+   */
+  const togetherLine = (expression: Expression, context: QuestionCondition[], column: QuestionColumn) => {
+    // 연결어로 끝난 줄(`세종 :`) 아래의 값 줄은 그 관계의 값이라(칸 번호가 0이 아님) 여기서 따로 묻지 않는다
+    if (column !== 0 || expression.type !== 'and' || expression.items.length < 2 || !expression.items.every(item => item.type === 'text' && item.text.trim())) return;
+    const items = expression.items;
+    items.forEach((item, index) => {
+      const others = items.filter((_, other) => other !== index);
+      add({ prompt: expressionLabel(item), answer: expressionLabel(combine('and', others)), direction: 'forward', kind: 'direct', form: 'together', lone: true,
+        ...rank(0, 0), conditions: context.map(entry => entry.text), conditionSpans: context.map(entry => entry.spans),
+        answerSpans: others.flatMap(spans), promptSpans: spans(item),
+        columns: { prompt: [column], answer: others.map(() => column), conditions: context.map(entry => entry.columns) } });
+    });
+  };
   const visit = (expression: Expression, context: QuestionCondition[], inheritedColumn: QuestionColumn = 0, baseScore = 0) => {
     const previous = activeAlias;
     const previousPlaces = activePlaceCount;
@@ -1300,7 +1336,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (goesBackward(separator)) plainCellBlanks(index, index + 1, separator);
       // 홀로 쓴 `=` 뒤에 `,`로 여러 값이 오면 구성요소, 값 하나면 같은 것으로 묻는다(31일)
       const equalForm = separator === '=' ? { form: (right.type === 'and' ? 'components' : 'equal') as 'equal' | 'components' } : {};
-      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(separator === '=' || separator === '-' ? { lone: true } : {}),
+      const base = { prompt: expressionLabel(left), answer: expressionLabel(right), direction: 'forward' as const, ...equalForm, ...(expression.separators.every(mark => mark === '=' || mark === '-') ? { lone: true } : {}),
         ...rank(scores[index], scores[index + 1]), conditions, conditionSpans, answerSpans: spans(right), promptSpans: spans(left),
         columns: { prompt: [expression.classifications[index]], answer: [expression.classifications[index + 1]], conditions: conditionColumns } };
       // `;`는 충분조건(앞으로만), `<`는 역관계(거꾸로만)다. `:`·`=`는 앞으로도 거꾸로도 낸다.
@@ -1562,7 +1598,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (implicit.length && expression.type === 'relation') implicitByExpression.set(expression, implicit);
       // 줄 앞 `[할로젠]`이 바로 위 토글 이름과 같으면 조건을 한 번만 준다(`‘할로젠’, ‘할로젠’에서` 방지)
       const repeated = scope && context.length > 0 && normSetName(context[context.length - 1].text) === normSetName(scope);
-      visit(expression, scope && !repeated ? [...context, { text: scope, columns: [], spans: [], place: 'position' as const }] : context, offsetByNode.get(node.id) ?? 0);
+      const lineContext = scope && !repeated ? [...context, { text: scope, columns: [], spans: [], place: 'position' as const }] : context;
+      visit(expression, lineContext, offsetByNode.get(node.id) ?? 0);
+      togetherLine(expression, lineContext, offsetByNode.get(node.id) ?? 0);
       // `( )` 안쪽은 원래 줄에서 한 번만 읽는다
       if (part === 0) visitGroups(whole, node, scope ? [scope] : [], whole.type === 'relation' ? implicit : [readCell(whole)?.sets ?? []]);
     }));

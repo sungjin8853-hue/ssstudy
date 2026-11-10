@@ -42,16 +42,19 @@ export const ReviewQuestionContent: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [question, memo, memoKey]
   );
-  // 다른 연결어 없이 `=`·`-`만 쓴 줄의 문제(2일): 능력 정의가 없으면 앞 값(연결되기 전 값)의 상위 집합을 먼저 알려 준다
+  // 다른 논리어 없이 `=`·`-`·`,`만 쓴 줄의 문제(2일 · 10일): 능력 정의가 없으면 앞 값(연결되기 전 값)의 능력 집합을 반드시 먼저 알려 준다.
+  // 10일 "능력적 집합을 반드시 보여 주고(세션 노트만이 아니라 기존 분류조건까지)": 상위 집합과 함께 걸린 분류기준을 모두 보인다
+  // (토글 제목 · 세션 노트 · 노트 맨 위 기준 순, 같은 것은 한 번).
   const loneSets = useMemo(() => {
     if (!question.lone) return [];
     const beforeIsPrompt = question.direction === 'forward';
     const cell = headCellOf(beforeIsPrompt ? question.prompt : question.answer);
     if (abilities.some(ability => normalizeCell(ability.cell) === normalizeCell(cell))) return [];
     const sets = upperSetsOf(buildNoteSetIndex(setMemos && setMemos.length ? setMemos : [memo]), cell);
-    return sets.length ? [{ cell, sets, hidden: !beforeIsPrompt }] : [];
+    const criteria = [...new Set([question.criterion, criterion, noteCriterionOf(memo)].map(item => (item ?? '').trim()).filter(Boolean))];
+    return sets.length || criteria.length ? [{ cell, sets, criteria, hidden: !beforeIsPrompt }] : [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [question, memo, memoKey, abilities]);
+  }, [question, memo, memoKey, abilities, criterion]);
   // 8일: 맞힐 값에 `{X}`가 있으면 구체적인 값을 써도 맞다: X에 든 값들(여럿이면 모두에 든 값)을 정답 아래에 보인다
   const keywordValues = useMemo(() => {
     const words = question.answerKeywords ?? [];
@@ -73,7 +76,8 @@ export const ReviewQuestionContent: React.FC<{
     <div data-ability-chips="true" className="flex flex-wrap justify-center gap-2.5">
       {loneSets.map(item => <span key={`lone|${item.cell}`} data-ability-chip="true" data-ability-upper="true"
         className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">
-        {item.hidden && !revealed ? <span data-ability-hidden="true" className="text-indigo-400">＿</span> : item.cell} ∈ {item.sets.join(', ')}
+        {item.hidden && !revealed ? <span data-ability-hidden="true" className="text-indigo-400">＿</span> : item.cell}{item.sets.length > 0 && <> ∈ {item.sets.join(', ')}</>}
+        {item.criteria.length > 0 && <> <span className="text-indigo-600">→</span> <span data-ability-criteria="true">{item.criteria.join(' · ')}</span></>}
       </span>)}
       {abilities.map(ability => <span key={`${ability.cell}|${ability.expression}|${ability.criterion}`} data-ability-chip="true"
         className="rounded-xl bg-white px-4 py-2.5 text-lg font-black text-indigo-950 ring-2 ring-indigo-300 md:text-xl">

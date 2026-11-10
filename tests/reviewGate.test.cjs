@@ -7705,22 +7705,29 @@ test('a relation toggle title gives its lines hidden classification sets: > [A] 
   const lines = memo => questionsFor(memo).filter(q => q.kind === 'convert' && ['h', 'j'].includes(q.prompt) && ['h', 'j'].includes(q.answer))
     .map(q => [q.prompt, q.answer, q.convert.steps.map(step => step.set).join('>')]);
   assert.deepEqual(lines(':::toggle [A] B: [C] D\nh:j\n:::end'), [['h', 'j', 'A.B>C.D'], ['j', 'h', 'C.D>A.B']], 'unmarked lines inherit the classification sets');
-  // 줄에 직접 쓴 [p]도 점 없이 그 칸의 상위 분류와 교집합이다: [A.B.p] h : [C.D] j
-  assert.deepEqual(lines(':::toggle [A] B: [C] D\n[p] h:j\n:::end'), [['h', 'j', 'A.B.p>C.D'], ['j', 'h', 'C.D>A.B.p']]);
+  // 10일 "[C] p ; q라면 [C] p ; [F.g] q": 줄에 직접 쓴 [p]는 그 칸의 상위 분류를 버리고 p만 쓴다(구별된 항목). [ ]가 없는 칸은 그대로 이어받는다
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n[p] h:j\n:::end'), [['h', 'j', 'p>C.D'], ['j', 'h', 'C.D>p']]);
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\nh:[q] j\n:::end'), [['h', 'j', 'A.B>q'], ['j', 'h', 'q>A.B']]);
+  // 직접 쓴 꼴과 숨은 꼴은 같은 문제다: [C] p ; q = [C] p ; [F.g] q
+  const pq = memo => questionsFor(memo).filter(q => q.kind === 'convert' && ['p', 'q'].includes(q.prompt)).map(q => [q.prompt, q.answer, q.convert.steps.map(step => step.set).join('>')]);
+  assert.deepEqual(pq(':::toggle [A] b : [F] g\n[C] p ; q\n:::end'), [['p', 'q', 'C>F.g']]);
+  assert.deepEqual(pq(':::toggle [A] b : [F] g\n[C] p ; [F.g] q\n:::end'), pq(':::toggle [A] b : [F] g\n[C] p ; q\n:::end'));
   // 점 줄임 `.[p]`은 없다: 앞의 점은 집합 기호가 아니라서 값의 글자이고, 그 칸의 집합은 상위 분류뿐이다
   assert.deepEqual(lines(':::toggle [A] B: [C] D\n.[p] h:j\n:::end'), []);
   assert.deepEqual(questionsFor(':::toggle [A] B: [C] D\n.[p] h:j\n:::end').filter(q => q.kind === 'convert' && !['B', 'D'].includes(q.prompt)).map(q => [q.prompt, q.answer, q.convert.steps.map(step => step.set).join('>')]), [['.[p] h', 'j', 'A.B>C.D'], ['j', '.[p] h', 'C.D>A.B']]);
-  assert.deepEqual(lines(':::toggle [A] B: [C] D\n[p] h:[q] j\n:::end'), [['h', 'j', 'A.B.p>C.D.q'], ['j', 'h', 'C.D.q>A.B.p']]);
-  // 안쪽 토글의 새 분류 집합도 바깥 토글의 분류와 교집합이다
-  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: [G] H\nh:j\n:::end\n:::end'), [['h', 'j', 'A.B.E.F>C.D.G.H'], ['j', 'h', 'C.D.G.H>A.B.E.F']]);
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n[p] h:[q] j\n:::end'), [['h', 'j', 'p>q'], ['j', 'h', 'q>p']]);
+  // 안쪽 토글 제목에 직접 쓴 [ ]도 그 칸의 바깥 분류를 버린다. [ ]가 없는 칸은 바깥 것을 이어받는다
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: [G] H\nh:j\n:::end\n:::end'), [['h', 'j', 'E.F>G.H'], ['j', 'h', 'G.H>E.F']]);
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: H\nh:j\n:::end\n:::end'), [['h', 'j', 'E.F>C.D'], ['j', 'h', 'C.D>E.F']]);
   // 안쪽 토글 제목에 [ ]가 없으면 바깥 분류만 이어받는다
   assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle E:F\nh:j\n:::end\n:::end'), [['h', 'j', 'A.B>C.D'], ['j', 'h', 'C.D>A.B']]);
   // [ ]가 하나도 없는 제목(A:C)이나 끝이 열린 제목(A:)은 분류 집합을 만들지 않는다: 보통 관계 문제 그대로
   assert.deepEqual(lines(':::toggle A:C\nh:j\n:::end'), []);
   assert.ok(questionsFor(':::toggle A:C\nh:j\n:::end').some(q => q.kind === 'direct' && q.prompt === 'h' && q.answer === 'j'));
   assert.deepEqual(lines(':::toggle [A] B:\nh:j\n:::end'), []);
-  // 한쪽에만 [ ]가 있는 제목은 칸 번호마다 이어받는다
-  assert.deepEqual(lines(':::toggle [A] B: D\nh:j\n:::end'), [['h', 'j', 'A.B>D'], ['j', 'h', 'D>A.B']]);
+  // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨": 둘째 칸 D에 [ ]가 없으면 그 칸은 이어받지 않는다(첫 칸 A.B만): 능력 변환이 아닌 보통 관계
+  assert.deepEqual(lines(':::toggle [A] B: D\nh:j\n:::end'), []);
+  assert.ok(questionsFor(':::toggle [A] B: D\nh:j\n:::end').some(q => q.kind === 'direct' && q.prompt === 'h' && q.answer === 'j'));
   // 줄에 칸이 더 많아도 칸 번호가 맞는 곳만 이어받고, 이어받을 게 없는 칸에 [ ]가 없으면 문제로 만들지 않는다
   const three = questionsFor(':::toggle [A] B: [C] D\nh:j:k\n:::end').filter(q => q.kind === 'convert' && q.prompt === 'j' && q.answer === 'k');
   assert.deepEqual(three, [], 'the third field has no set');
@@ -12162,4 +12169,27 @@ test('10일 fix-119: a line continuing the open line right above it shows only �
   const display = insertGhosts(memo, ghosts);
   assert.equal(stripGhosts(display), memo);
   assert.deepEqual(ghostSpans(display).map(span => span.label), ['↳', '↳', '↳']);
+});
+
+test('10일 fix-120: a line joined only by , asks what goes with each value, and lines with only -=, always show their ability set with every criterion', () => {
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
+  const { setReviewStyle } = loadSource('utils/reviewStyle.ts');
+  const view = (memo, question, criterion) => { setReviewStyle('prose'); return renderToStaticMarkup(React.createElement(ReviewQuestionContent, { memo, question, criterion, revealed: true })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '); };
+  const pairs = memo => questionsFor(memo).map(q => [q.kind, q.prompt, q.answer]);
+  assert.deepEqual(pairs('사과, 배, 감'), [['direct', '사과', '배 AND 감'], ['direct', '배', '사과 AND 감'], ['direct', '감', '사과 AND 배']]);
+  const two = questionsFor(':::toggle [과일]\n배, 감\n:::end');
+  assert.deepEqual(two.map(q => [q.prompt, q.answer, q.form, q.lone]), [['배', '감', 'together', true], ['감', '배', 'together', true]]);
+  const text = view(':::toggle [과일]\n배, 감\n:::end', two[0]);
+  assert.ok(text.includes('능력 집합') && text.includes('배 ∈ 과일') && text.includes('‘과일’에서 ‘배’와 함께 쓴 것은?'), text);
+  // 연결어로 끝난 줄 아래 값 줄은 그 관계의 값이라 따로 묻지 않는다
+  assert.ok(!questionsFor(':::toggle 세종 :\n훈민정음 창제, 집현전 설치\n:::end').some(q => q.form === 'together'));
+  assert.ok(!questionsFor('세종 : 훈민정음 창제, 집현전 설치').some(q => q.form === 'together'));
+  // 능력 집합은 상위 집합이 없어도 분류기준이 있으면 보이고, 세션 노트 기준과 노트의 기준을 모두 말한다
+  const equal = questionsFor('[개념:정의]\n물 = H2O').find(q => q.kind === 'direct');
+  const shown = view('[개념:정의]\n물 = H2O', equal, '원인:결과');
+  assert.ok(shown.includes('능력 집합') && shown.includes('물 → 원인:결과 · 개념:정의'), shown);
+  // 다른 연결어가 섞인 줄은 홀로 쓴 줄이 아니다
+  assert.ok(!questionsFor('A : B - C').some(q => q.lone));
 });

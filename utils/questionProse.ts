@@ -50,7 +50,7 @@ export interface ProseInput {
   direction: 'forward' | 'reverse';
   distance?: number;
   /** 한 칸 안의 `=`로 이은 이웃 쌍 */
-  form?: 'equal' | 'components' | 'match';
+  form?: 'equal' | 'components' | 'match' | 'together';
   /** 남은 값의 다음 값을 묻는 남은 조건 문제(2일) */
   beyond?: boolean;
   /** 8일: 맞힐 값에 쓴 `{X}`들(중복 없이). 있으면 "X에 해당하는 내용이 들어가도록" 부가조건을 붙인다 */
@@ -192,6 +192,8 @@ const proseBody = (input: ProseInput, attrs?: ProseAttrs): Prose | null => {
   }
   // 8일: `=`로만 셋 이상 이은 줄은 한 값과 같은 것을 모두 묻는다(`b = d = c` → ‘b’와 같은 것을 모두 쓰시오 → d, c)
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'equal') return { statement: `${where}${withAnd(givenTag)} ${answerOperator === 'and' ? '같은 것을 모두 쓰시오.' : '같은 것은?'}`, solution };
+  // 10일: `,`로만 이은 줄은 한 값과 함께 쓴 나머지를 묻는다(`사과, 배` → ‘사과’과(와) 함께 쓴 것은? 배)
+  if (kind === 'direct' && input.form === 'together') return { statement: `${where}${withAnd(givenTag)} ${answerOperator === 'and' ? '함께 쓴 것을 모두 쓰시오.' : '함께 쓴 것은?'}`, solution };
   // 칸 안의 `=`(다른 연결어가 있는 줄): 예전처럼 "대응하는 것"으로 묻는다(1일). 같은 것은 홀로 쓴 `=`만
   if ((kind === 'direct' || kind === 'reverse') && input.form === 'match') return { statement: `${where}${givenTag}에 대응하는 ${topic(attr || '것')}?`, solution };
   if (kind === 'direct') return { statement: `${where}${givenTag}${of}${tailOf(ask('forward'), answerOperator)}`, solution };
