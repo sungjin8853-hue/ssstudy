@@ -12144,3 +12144,22 @@ test('10일: {X}를 쓴 칸은 이미 위치를 쓴 칸이라 줄 앞에 [X] 위
   ['{원소}-{원소} ; 회전 운동', '{원소} 수소 : 기체', '{과일} 사과 : 빨강'].forEach(line => assert.deepEqual(ns.ghostLocationsOf(index, line), [], line));
 });
 
+
+test('10일 fix-119: a line continuing the open line right above it shows only ↳; the full place shows when that line is not above', () => {
+  const { buildNoteSetIndex, ghostLocationsOf } = loadSource('utils/noteSets.ts');
+  const { insertGhosts, stripGhosts, ghostSpans } = loadSource('utils/noteGhost.ts');
+  const memo = '인플레이션 : 물가 상승,\n화폐 가치 하락\n광합성 :\n빛 에너지를 화학 에너지로\n[경제] 실업 :\n일자리 없음';
+  const index = buildNoteSetIndex([memo]);
+  assert.deepEqual(ghostLocationsOf(index, memo), [
+    { line: 1, label: '↳', full: '[인플레이션 : 물가 상승,]' },
+    { line: 3, label: '↳', full: '[광합성]' },
+    { line: 5, label: '↳', full: '[[경제] 실업]' }
+  ]);
+  // 이어 주는 윗줄이 같은 칸에 없으면(칸 맨 첫 줄) 위치를 다 보인다
+  assert.deepEqual(ghostLocationsOf(index, '화폐 가치 하락').map(item => item.label), ['[인플레이션 : 물가 상승,]']);
+  // ↳도 끼운 글이라 저장하는 글에는 들지 않는다
+  const ghosts = ghostLocationsOf(index, memo);
+  const display = insertGhosts(memo, ghosts);
+  assert.equal(stripGhosts(display), memo);
+  assert.deepEqual(ghostSpans(display).map(span => span.label), ['↳', '↳', '↳']);
+});

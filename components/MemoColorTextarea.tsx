@@ -1,7 +1,7 @@
 import React, { forwardRef, useLayoutEffect, useRef } from 'react';
 import { getReviewMemoColonColor, getReviewMemoLogicColor, getReviewMemoOperatorColor, markReviewMemoLogicWords, markReviewMemoOperators, splitReviewMemoColonColors } from '../utils/reviewMemoColors';
 import type { MemoColorPart } from '../utils/reviewMemoColors';
-import { GHOST_MARK } from '../utils/noteGhost';
+import { GHOST_CONTINUE, GHOST_MARK } from '../utils/noteGhost';
 import type { GhostInsert } from '../utils/noteGhost';
 
 interface Props extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
@@ -97,7 +97,7 @@ export const MemoColorTextarea = forwardRef<HTMLTextAreaElement, Props>(function
         style={{ ...props.style, height: '100%', width: '100%', margin: 0, background: 'transparent', borderColor: 'transparent', overflow: 'hidden', overflowWrap: 'break-word', resize: 'none' }}>
         {mirrorParts.map((part, index) => {
           // 끼운 위치는 글자 폭을 그대로 두고 색(어둡게)과 점선 밑줄만 다르게 보인다
-          if (part.ghost !== undefined) return <span key={index} data-note-ghost={part.ghost} style={{ color: dark ? GHOST_DARK : GHOST_LIGHT, textDecoration: 'underline dotted', textUnderlineOffset: 4 }}>{part.text}</span>;
+          if (part.ghost !== undefined) return <span key={index} data-note-ghost={part.ghost} style={part.ghost === GHOST_CONTINUE ? { color: dark ? GHOST_DARK : GHOST_LIGHT, opacity: 0.7 } : { color: dark ? GHOST_DARK : GHOST_LIGHT, textDecoration: 'underline dotted', textUnderlineOffset: 4 }}>{part.text}</span>;
           // 논리어(`[ ]` 덩어리)는 안쪽의 `:` 같은 기호까지 논리어 색 하나로 쓴다
           if (part.logic) return <span key={index} data-logic-word="true" style={{ color: getReviewMemoLogicColor(dark) }}>{part.text}</span>;
           // 한 칸 안의 논리어(`,` 그리고 · `-` 다음 · `=` 같음)는 종류마다 색이 달라, 글자 폭은 그대로 두고 색만 바뀐다

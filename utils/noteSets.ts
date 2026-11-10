@@ -8,7 +8,8 @@ import type { NoteSetLine } from './noteDiagram';
 import { matchingBracket, parseSetExpression } from './setExpression';
 import type { SetExprNode } from './setExpression';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
-import { expandOpenLines } from './noteOpenTail';
+import { expandOpenLines, openTailOf } from './noteOpenTail';
+import { GHOST_CONTINUE } from './noteGhost';
 import { expandNestLines } from './noteNest';
 import { isQuoteMark, reviewQuotes } from './reviewQuote';
 import { readReviewFieldOverride } from './reviewFieldOverride';
@@ -1176,16 +1177,38 @@ export interface GhostLocation { line: number; label: string; full: string }
 export const ghostLocationsOf = (index: NoteSetIndex, text: string, enclosing: readonly string[] = []): GhostLocation[] => {
   const result: GhostLocation[] = [];
   const covered = new Set(enclosing.map(normSetName).filter(Boolean));
-  text.split('\n').forEach((line, at) => {
+  const lines = text.split('\n');
+  lines.forEach((line, at) => {
     const segment = segmentsOf(line)[0];
     if (!segment || readNoteSetLine(segment)) return;
     const { cell, marks } = splitHeadMarks(segment);
     // 10일 "{} 자체가 []의 의미도 내포하고 있는데 왜 []가 앞에 붙어 중복되게?": `{X}`를 쓴 칸은 이미 위치(X)를 쓴 칸이라 줄 앞 위치를 보이지 않는다
     if (marks.length || !cell || /\{[^{}]*\}/.test(cell) || !index.display.has(normSetName(plainKeywordText(cell)))) return;
     const locations = displayedLocations(index, plainKeywordText(cell), covered);
-    if (locations.length) result.push({ line: at, label: locations.map(item => `[${item}]`).join(' '), full: displayedLocations(index, cell, covered, true).map(item => `[${item}]`).join(' ') });
+    if (!locations.length) return;
+    const full = displayedLocations(index, cell, covered, true).map(item => `[${item}]`).join(' ');
+    // 10일 "표현 중복 줄이기 1번": 덜 끝난 줄(`A :` · `A,`) 바로 밑에서 이어지는 줄의 위치는 바로 윗줄 그 자체라 되풀이하지 않고 `↳`만 보인다.
+    // 이어 주는 윗줄이 같은 칸에 없을 때(칸의 맨 첫 줄)는 지금처럼 위치를 다 보인다.
+    const label = continuesLineAbove(lines, at, locations) ? GHOST_CONTINUE : locations.map(item => `[${item}]`).join(' ');
+    result.push({ line: at, label, full });
   });
   return result;
+};
+
+/** at번째 줄이 바로 윗줄(덜 끝난 줄)에 이어지는 줄이고, 그 줄의 위치가 바로 그 윗줄인가 */
+const continuesLineAbove = (lines: readonly string[], at: number, locations: readonly string[]): boolean => {
+  const above = lines[at - 1];
+  if (at === 0 || !above?.trim() || above.startsWith(REVIEW_MEMO_TOGGLE_START) || above === REVIEW_MEMO_TOGGLE_END) return false;
+  const tail = openTailOf(above, false);
+  if (!tail) return false;
+  const head = segmentsOf(above)[0] ?? above;
+  const names = [above, above.slice(0, tail.start), head, head.slice(0, Math.max(0, head.length - (above.length - tail.start))), splitHeadMarks(head).cell]
+    .map(name => normSetName(plainKeywordText(name)))
+    .filter(Boolean);
+  return locations.some(item => {
+    const key = normSetName(item);
+    return names.some(name => key === name || key.endsWith(`.${name}`));
+  });
 };
 
 /** 커서가 있는 칸의 맨 앞 셀 */

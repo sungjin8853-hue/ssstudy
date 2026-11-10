@@ -8,13 +8,15 @@
  *  - 그 밖의 MARK는 하나씩 걷는다.
  */
 export const GHOST_MARK = '⁠';
+/** 덜 끝난 바로 윗줄에 이어지는 줄 앞에 위치 대신 보이는 표시(10일: 윗줄을 그대로 되풀이하지 않는다) */
+export const GHOST_CONTINUE = '↳';
 
 export interface GhostInsert { line: number; label: string }
 export interface GhostSpan { start: number; end: number; label: string; line: number }
 interface Range { start: number; end: number }
 
-const HEAD = /^⁠(\[[^⁠\n]*\]) ⁠/;
-const ANY = /⁠(?:\[[^⁠\n]*\] ⁠)?/g;
+const HEAD = /^⁠(\[[^⁠\n]*\]|↳) ⁠/;
+const ANY = /⁠(?:(?:\[[^⁠\n]*\]|↳) ⁠)?/g;
 
 /** 저장하는 글의 줄마다(ghosts의 줄 번호) 맨 앞에 위치를 끼운 보이는 글 */
 export const insertGhosts = (text: string, ghosts: readonly GhostInsert[]): string => {
