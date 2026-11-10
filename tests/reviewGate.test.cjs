@@ -12136,3 +12136,11 @@ test('9일: [ ]는 상위와 구별된 항목 — 첫 칸 [A]는 그 칸만 분�
   // 노트 맨 앞의 분류기준 줄([개념:정의])은 집합이 아니라 기준이다
   assert.ok(said('[개념:정의] 증기기관:열기관').some(([s]) => s === '‘개념:정의’에서 개념 ‘증기기관’의 정의는?'));
 });
+
+test('10일: {X}를 쓴 칸은 이미 위치를 쓴 칸이라 줄 앞에 [X] 위치를 겹쳐 보이지 않는다', () => {
+  const ns = loadSource('utils/noteSets.ts');
+  const memo = '[원소] A,B\n{원소}-{원소} ; 회전 운동\n{원소} 수소 : 기체\n> [과일]\n사과\n{과일} 사과 : 빨강';
+  const index = ns.buildNoteSetIndex([memo]);
+  ['{원소}-{원소} ; 회전 운동', '{원소} 수소 : 기체', '{과일} 사과 : 빨강'].forEach(line => assert.deepEqual(ns.ghostLocationsOf(index, line), [], line));
+});
+

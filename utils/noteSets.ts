@@ -1171,7 +1171,7 @@ export interface GhostLocation { line: number; label: string; full: string }
 
 /**
  * 글의 각 줄 맨 앞 셀의 위치를 `[..B]` 꼴로 계산한다(저장하는 글에는 쓰지 않는 보이기용). 위치 생략 규칙(`displayedLocations`)을 따르므로
- * 관계가 바뀌면 `..`가 풀린다. 빈 줄 · 집합을 적은 줄(`[X]` · `[집합식]:[기준]` · `[개념:정의]`) · 이미 `[ ]`로 위치를 쓴 칸 · 위치를 모르는 셀은 뺀다.
+ * 관계가 바뀌면 `..`가 풀린다. 빈 줄 · 집합을 적은 줄(`[X]` · `[집합식]:[기준]` · `[개념:정의]`) · 이미 `[ ]`나 `{ }`로 위치를 쓴 칸 · 위치를 모르는 셀은 뺀다.
  */
 export const ghostLocationsOf = (index: NoteSetIndex, text: string, enclosing: readonly string[] = []): GhostLocation[] => {
   const result: GhostLocation[] = [];
@@ -1180,7 +1180,8 @@ export const ghostLocationsOf = (index: NoteSetIndex, text: string, enclosing: r
     const segment = segmentsOf(line)[0];
     if (!segment || readNoteSetLine(segment)) return;
     const { cell, marks } = splitHeadMarks(segment);
-    if (marks.length || !cell || !index.display.has(normSetName(plainKeywordText(cell)))) return;
+    // 10일 "{} 자체가 []의 의미도 내포하고 있는데 왜 []가 앞에 붙어 중복되게?": `{X}`를 쓴 칸은 이미 위치(X)를 쓴 칸이라 줄 앞 위치를 보이지 않는다
+    if (marks.length || !cell || /\{[^{}]*\}/.test(cell) || !index.display.has(normSetName(plainKeywordText(cell)))) return;
     const locations = displayedLocations(index, plainKeywordText(cell), covered);
     if (locations.length) result.push({ line: at, label: locations.map(item => `[${item}]`).join(' '), full: displayedLocations(index, cell, covered, true).map(item => `[${item}]`).join(' ') });
   });
