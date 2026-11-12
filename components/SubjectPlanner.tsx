@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AlwaysBasicReviewToggle } from './AlwaysBasicReviewToggle';
 import { Subject, SubjectChapter } from '../types';
 import { DEFAULT_GROWTH_PAGE_UNIT, getGrowthUnitSize } from '../utils/pageGrowth';
 import { parseChapterText } from '../utils/subjectChapters';
@@ -46,6 +47,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
   const [isRequired, setIsRequired] = useState(false);
+  const [alwaysBasicReview, setAlwaysBasicReview] = useState(false);
   const [growthPageUnit, setGrowthPageUnit] = useState(DEFAULT_GROWTH_PAGE_UNIT);
   const [noPageUnit, setNoPageUnit] = useState(false);
   const [pageLabel, setPageLabel] = useState(DEFAULT_PAGE_LABEL);
@@ -78,6 +80,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     onAddSubject({
       ...nextSubject,
       ...(initialMinutes.trim() && Number.isFinite(initial) && initial > 0 ? { initialAverageTimePerPage: initial } : {}),
+      ...(alwaysBasicReview ? { alwaysBasicReview: true } : {}),
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         nextSubject,
         getSubjectRemainingPageCount(nextSubject),
@@ -89,6 +92,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     setPages(100);
     setDate('');
     setIsRequired(false);
+    setAlwaysBasicReview(false);
     setGrowthPageUnit(DEFAULT_GROWTH_PAGE_UNIT);
     setNoPageUnit(false);
     setPageLabel(DEFAULT_PAGE_LABEL);
@@ -220,6 +224,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
               공부하는 날 하루 약 {formatDuration(previewPlan.perDay)} · 한 주 {formatDuration(previewPlan.week)} (복습 제외)
             </p>
           )}
+          <AlwaysBasicReviewToggle value={alwaysBasicReview} onChange={setAlwaysBasicReview} testId="new-plan-always-basic-review" />
           <PlanPriorityNote />
           <p className="px-1 text-[13px] font-bold text-slate-500">
             학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.

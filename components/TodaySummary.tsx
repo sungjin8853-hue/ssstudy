@@ -9,6 +9,7 @@ import { PomodoroMinutesStepper } from './PomodoroMinutesStepper';
 import { usePomodoroMinutes } from '../utils/pomodoroSetting';
 import {
   getActiveSubjectStage,
+  getSubjectStageReviewSubjectIds,
   getAllSubjectReviewIds,
   getLocalDateKey,
   getLogStudyDate,
@@ -531,6 +532,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const [editMinutes, setEditMinutes] = useState('');
   const [editStartPage, setEditStartPage] = useState(1);
   const [includeReview, setIncludeReview] = useState(true);
+  // 12일 "추가에서도 복습 안 함 두 번 누르면 복습과목까지": 복습과목이 있으면 "안 함"을 한 번 누르면 기본 복습만 빼고(복습과목은 함),
+  // 한 번 더 누르면 복습과목까지 뺀다(학습량 입력 창과 같다). basicSkipped는 includeReview가 켜진 채 기본 복습만 뺀 것
+  const [basicSkipped, setBasicSkipped] = useState(false);
   const [showFlowTutorial, setShowFlowTutorial] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   /** "추가 학습하기"를 눌러 원래 정보를 다시 연 끝낸 과목의 키 */
@@ -641,6 +645,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     setEditStartPage(start);
     setEditEndPage(start);
     setIncludeReview(targetSubject.reviewEnabled !== false);
+    setBasicSkipped(false);
     setReviewMemo('');
     setReviewMemoDocument(undefined);
   };
@@ -658,6 +663,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     setEditStartPage(summary.startPage || 1);
     setEditEndPage(summary.endPage || summary.startPage || 1);
     setIncludeReview(reviewLogs.length > 0);
+    setBasicSkipped(reviewLogs.length > 0 && reviewLogs.every(log => log.basicReviewSkipped));
     const singleNote = savedMemos.length === 1 ? reviewLogs.find(log => log.reviewMemo?.trim() === savedMemos[0]) : undefined;
     setReviewMemo(singleNote?.reviewMemo ?? savedMemos.join('\n'));
     setReviewMemoDocument(singleNote?.reviewMemoDocument);
@@ -719,6 +725,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       reviewEnabled: includeReview,
       reviewMemo: includeReview && reviewMemo.trim() ? reviewMemo : undefined,
       reviewMemoDocument: includeReview && reviewMemo.trim() ? reviewMemoDocument : undefined,
+      basicReviewSkipped: includeReview && basicSkipped && recordHasReviewSubjects ? true : undefined,
       ...(includeReview && retainedReviewLog ? {
         reviewStep: retainedReviewLog.reviewStep,
         nextReviewDate: retainedReviewLog.nextReviewDate,
@@ -742,6 +749,18 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   };
 
   const selectedSubject = subjects.find(subject => subject.id === subjectId);
+  // 이 기록(과목 · 단계)에 이어 둔 복습과목이 있는가: 있으면 "안 함"이 두 단계(기본 복습만 → 복습과목까지)다
+  const recordHasReviewSubjects = Boolean(selectedSubject) && getSubjectStageReviewSubjectIds(selectedSubject!, editRangeStageId || getActiveSubjectStage(selectedSubject!)?.id || selectedSubject!.id)
+    .some(id => subjects.some(subject => subject.id === id));
+  const reviewOffPressed = !includeReview || (basicSkipped && recordHasReviewSubjects);
+  const reviewOffLabel = !recordHasReviewSubjects ? null : !includeReview ? '복습과목까지' : basicSkipped ? '기본 복습만' : null;
+  const pressReviewOff = () => {
+    if (!recordHasReviewSubjects) { setIncludeReview(false); setBasicSkipped(false); return; }
+    // 하기 → 기본 복습만 안 함 → 복습과목까지 안 함 → 기본 복습만 안 함 …
+    if (includeReview && basicSkipped) { setIncludeReview(false); setBasicSkipped(false); return; }
+    setIncludeReview(true); setBasicSkipped(true);
+  };
+  const pressReviewOn = () => { setIncludeReview(true); setBasicSkipped(false); };
   // 뽀모도로 장수는 이번 단위의 평균 효율(효율 칸에 보이는 값)로 정한다(4일)
   const detailPomodoroPages = detailData ? pomodoroPlan?.subjectId === detailData.subject.id
     ? pomodoroPlan.pages : getPomodoroPageTarget(getEfficiencyView(detailData.efficiencyScope).shown?.averageTimePerPage || detailData.efficiency,
@@ -946,10 +965,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
                   <input data-testid="amount-end" type="number" step="1" value={editEndPage} onChange={event => setEditEndPage(Number(event.target.value))} className={addField} /></label>
                 <div className="flex flex-col gap-1"><span className="text-[13px] font-bold text-slate-600">복습</span>
                   <div className="grid h-[50px] grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
-                    <button type="button" data-testid="amount-review-off" aria-pressed={!includeReview} onClick={() => setIncludeReview(false)}
-                      className={`rounded-lg text-sm font-black ${!includeReview ? 'bg-slate-700 text-white' : 'text-slate-500'}`}>안 함</button>
-                    <button type="button" data-testid="amount-review-on" aria-pressed={includeReview} onClick={() => setIncludeReview(true)}
-                      className={`rounded-lg text-sm font-black ${includeReview ? 'bg-rose-500 text-white' : 'text-slate-500'}`}>하기</button>
+                    <button type="button" data-testid="amount-review-off" aria-pressed={reviewOffPressed} data-review-off={reviewOffLabel ?? undefined} onClick={pressReviewOff}
+                      className={`rounded-lg text-sm font-black leading-tight ${reviewOffPressed ? 'bg-slate-700 text-white' : 'text-slate-500'}`}>
+                      {reviewOffLabel ? <><span className="block text-[12px]">{reviewOffLabel}</span>안 함</> : '안 함'}</button>
+                    <button type="button" data-testid="amount-review-on" aria-pressed={!reviewOffPressed} onClick={pressReviewOn}
+                      className={`rounded-lg text-sm font-black ${!reviewOffPressed ? 'bg-rose-500 text-white' : 'text-slate-500'}`}>하기</button>
                   </div>
                 </div>
               </div>
@@ -1318,18 +1338,22 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
                 <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-1.5">
                   <button
                     type="button"
-                    onClick={() => setIncludeReview(false)}
+                    data-testid="edit-review-off"
+                    aria-pressed={reviewOffPressed}
+                    onClick={pressReviewOff}
                     className={`rounded-xl py-3 text-sm font-black transition-all ${
-                      !includeReview ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400'
+                      reviewOffPressed ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400'
                     }`}
                   >
-                    복습 안 함
+                    {reviewOffLabel ? `${reviewOffLabel} 복습 안 함` : '복습 안 함'}
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIncludeReview(true)}
+                    data-testid="edit-review-on"
+                    aria-pressed={!reviewOffPressed}
+                    onClick={pressReviewOn}
                     className={`rounded-xl py-3 text-sm font-black transition-all ${
-                      includeReview ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-400'
+                      !reviewOffPressed ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-400'
                     }`}
                   >
                     복습 하기

@@ -2357,6 +2357,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     && getReviewSubjectIdsForLog({ subjectId, subjectStageId: activeSubjectStage?.id } as StudyLog, selectedSubject!, subjects).length > 0;
   const defaultReviewChoice = (): 'include' | 'skipBasic' | 'skipAll' => {
     if (isSubjectReviewDisabled || activeReviewRun) return 'skipAll';
+    // 12일: 과목에서 "기본 복습 늘 넣기"를 켜 두면 노트를 안 써도 포함
+    if (selectedSubject?.alwaysBasicReview) return 'include';
     if (splitSessionMemo().savedMemo.trim()) return 'include';
     return sessionHasReviewSubjects ? 'skipBasic' : 'skipAll';
   };
@@ -3455,6 +3457,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                 <p data-testid="session-review-choice-note" className="mt-2 text-center text-[13px] font-bold text-slate-500">
                   {reviewChoice !== defaultReviewChoice() ? '직접 골랐어요.'
                     : isSubjectReviewDisabled ? '이 과목은 복습을 꺼 두어 제외로 골라 두었어요.'
+                    : reviewChoice === 'include' && selectedSubject?.alwaysBasicReview ? '이 과목은 기본 복습을 늘 넣어 포함으로 골라 두었어요.'
                     : reviewChoice === 'include' ? '이번 정리노트에 쓴 글이 있어 포함으로 골라 두었어요.'
                     : reviewChoice === 'skipBasic' ? '이번 정리노트가 비어 있어 기본 복습만 제외로 골라 두었어요. 복습과목은 해요.'
                     : '이번 정리노트가 비어 있어 제외로 골라 두었어요.'}

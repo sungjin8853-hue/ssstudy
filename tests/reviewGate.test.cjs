@@ -10978,7 +10978,7 @@ test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 �
 
 test('30일: 학습 설정에서 아무것도 고치지 않고 저장하면 아무것도 바뀌지 않는다', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
-  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired };'),
+  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview };'),
     'nothing is saved when nothing changed, and the saved subject is the stored one (not the screen copy with its computed values)');
   const { resolveSavedWeekdayPages } = loadSource('utils/weekPlan.ts');
   const stored = { 0: 0, 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 0 };
@@ -12208,4 +12208,61 @@ test('12일 fix-121: the bottom tabs hide only while a text field is focused and
   assert.equal(isEditableElement(el('BUTTON')), false);
   assert.equal(isEditableElement(el('DIV', { isContentEditable: true })), true);
   assert.equal(isEditableElement(null), false);
+});
+
+test('12일 fix-123: study record rows show the unit and when each review comes, and 복습하기 puts a record into review without moving its unit', () => {
+  const { buildStudyRecord, recordReviewState, addLogToReview, canAddToReview, daysUntil } = loadSource('utils/studyRecord.ts');
+  const H = 3600000;
+  const now = Date.parse('2026-11-12T13:00:00+09:00');
+  const base = { subjectId: 'S', pagesRead: 5, timeSpentMinutes: 30, pageCountIsExplicit: true };
+  const logs = [
+    { ...base, id: 'a', startPage: 1, endPage: 5, timestamp: '2026-11-10T01:00:00.000Z', studyDate: '2026-11-10', reviewEnabled: true, isCondensed: false,
+      reviewRegisteredAt: '2026-11-10T02:00:00.000Z', nextReviewDate: new Date(now + 3 * 24 * H).toISOString() },
+    { ...base, id: 'b', startPage: 6, endPage: 10, timestamp: '2026-11-11T01:00:00.000Z', studyDate: '2026-11-11', reviewEnabled: false, isCondensed: true },
+    { ...base, id: 'c', startPage: 11, endPage: 15, timestamp: '2026-11-12T01:00:00.000Z', studyDate: '2026-11-12', reviewEnabled: false, isCondensed: true, unitReviewPending: true },
+    { ...base, id: 'd', startPage: 16, endPage: 20, timestamp: '2026-11-12T02:00:00.000Z', studyDate: '2026-11-12', reviewEnabled: true, isCondensed: false,
+      basicReviewSkipped: true, nextReviewDate: new Date(now + H).toISOString() },
+    { ...base, id: 'r', subjectId: 'S', reviewParentSubjectId: 'P', timestamp: '2026-11-12T03:00:00.000Z' }
+  ];
+  const days = buildStudyRecord({ id: 'S' }, logs, now);
+  assert.deepEqual(days.map(day => [day.date, day.pages, day.rows.map(row => [row.log.id, row.unit, row.currentUnit, row.state.kind])]), [
+    ['2026-11-12', 10, [['c', 2, true, 'pending'], ['d', 2, true, 'basicSkipped']]],
+    ['2026-11-11', 5, [['b', 2, true, 'excluded']]],
+    ['2026-11-10', 5, [['a', 1, false, 'scheduled']]]
+  ], 'review-subject runs are not study records; the registration at 11/10 11:00 ends unit 1');
+  assert.equal(days[2].rows[0].state.days, 3);
+  // 며칠 뒤는 시각이 아니라 이 기기의 날짜로 센다
+  assert.equal(daysUntil(new Date(2026, 10, 12, 23, 59).getTime(), new Date(2026, 10, 12, 9, 0).getTime()), 0);
+  assert.equal(daysUntil(new Date(2026, 10, 13, 0, 1).getTime(), new Date(2026, 10, 12, 23, 59).getTime()), 1);
+  assert.deepEqual(days.flatMap(day => day.rows).filter(row => canAddToReview(row.state)).map(row => row.log.id).sort(), ['b', 'c', 'd']);
+  // 복습하기: 제외 · 대기 기록은 2시간 뒤 첫 복습으로 들어가고 단위(넣은 때)는 새로 생기지 않는다
+  const added = addLogToReview(logs[1], now);
+  assert.equal(recordReviewState(added, now).kind, 'scheduled');
+  assert.equal(added.nextReviewDate, new Date(now + 2 * H).toISOString());
+  assert.equal(added.reviewRegisteredAt, undefined);
+  const pending = addLogToReview(logs[2], now);
+  assert.equal(pending.unitReviewPending, undefined);
+  assert.equal(recordReviewState(pending, now).kind, 'scheduled');
+  // 기본 복습만 뺀 기록은 그 일정 그대로 기본 복습을 다시 넣는다
+  const basic = addLogToReview(logs[3], now);
+  assert.equal(basic.basicReviewSkipped, undefined);
+  assert.equal(basic.nextReviewDate, logs[3].nextReviewDate);
+  const after = buildStudyRecord({ id: 'S' }, logs.map(log => (log.id === 'b' ? added : log.id === 'c' ? pending : log)), now);
+  assert.deepEqual(after.flatMap(day => day.rows).map(row => [row.log.id, row.unit]).sort(), [['a', 1], ['b', 2], ['c', 2], ['d', 2]]);
+  // 마친 복습은 복습하기가 없다
+  assert.equal(recordReviewState({ ...base, id: 'z', timestamp: logs[0].timestamp, reviewEnabled: false, isCondensed: true, isReviewed: true }, now).kind, 'done');
+});
+
+test('12일 fix-123: "기본 복습 늘 넣기" picks 복습 포함 even with an empty note, and the add window\'s 안 함 is two-step when there are review subjects', () => {
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  const rule = logger.slice(logger.indexOf('const defaultReviewChoice = ()'), logger.indexOf('const pressSkipReview'));
+  assert.ok(rule.indexOf("if (selectedSubject?.alwaysBasicReview) return 'include';") > rule.indexOf("if (isSubjectReviewDisabled || activeReviewRun) return 'skipAll';"));
+  assert.ok(rule.indexOf("if (selectedSubject?.alwaysBasicReview) return 'include';") < rule.indexOf("savedMemo.trim()"));
+  const planner = fs.readFileSync(path.join(__dirname, '..', 'components/SubjectPlanner.tsx'), 'utf8');
+  assert.ok(planner.includes('...(alwaysBasicReview ? { alwaysBasicReview: true } : {})'));
+  const settings = fs.readFileSync(path.join(__dirname, '..', 'components/Analytics.tsx'), 'utf8');
+  assert.ok(settings.includes('alwaysBasicReview: editForm.alwaysBasicReview || undefined') && settings.includes('Boolean(updatedSubject.alwaysBasicReview) === Boolean(original.alwaysBasicReview)'));
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('basicReviewSkipped: includeReview && basicSkipped && recordHasReviewSubjects ? true : undefined'));
+  assert.ok(summary.includes("if (includeReview && basicSkipped) { setIncludeReview(false); setBasicSkipped(false); return; }"));
 });

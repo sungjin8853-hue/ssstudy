@@ -23,6 +23,7 @@ import { mergeNoteIntoEarlier } from './utils/noteMerge';
 import { recordNoteMerges } from './utils/noteMergeLog';
 import { autoReviewHoursOf, chooseAutoReviewGrade, flushFilledAutoGroups, registerAutoReview } from './utils/autoReview';
 import { excludeLogFromReview } from './utils/reviewDelete';
+import { addLogToReview } from './utils/studyRecord';
 import { planTimesChanged, withPlanTimes } from './utils/weekPlan';
 import { useRestTimer, writeRestEndsAt } from './utils/restTimer';
 import { useKeyboardOpen } from './components/NoteSymbolBar';
@@ -835,6 +836,13 @@ const App: React.FC = () => {
 
   // 복습에서 뺀 문제: 노트 글은 그대로 두고(논리 이유는 그 줄에 [!]만 붙인다) 기록만 더한다. 되돌리면 [!]를 빼고 기록을 지운다.
   // 9일: 오늘 할 일 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다(공부 기록 · 노트는 그대로)
+  // 12일: 학습 기록 보기의 "복습하기" — 복습에 안 들어간 기록을 바로 복습에 넣는다(단위는 그대로)
+  const handleAddLogsToReview = (logIds: string[]) => {
+    const ids = new Set(logIds);
+    const nowMs = Date.now();
+    setLogs(prev => prev.map(log => (ids.has(log.id) ? addLogToReview(log, nowMs) : log)));
+  };
+
   const handleExcludeFromReview = (logIds: string[]) => {
     const ids = new Set(logIds);
     setLogs(prev => prev.map(log => (ids.has(log.id) ? excludeLogFromReview(log) : log)));
@@ -1043,6 +1051,7 @@ const App: React.FC = () => {
                 onAddSubject={handleAddSubject}
                 onDeleteFolder={handleDeleteFolder}
                 onOpenReview={() => setActiveTab('dashboard')}
+                onAddLogsToReview={handleAddLogsToReview}
                 focusSubjectId={settingsFocusSubjectId}
               />
             </div>

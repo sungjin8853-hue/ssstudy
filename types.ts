@@ -51,6 +51,8 @@ export interface Subject {
   autoReviewRegister?: boolean;
   /** 자동 복습 하나에 모을 공부 시간(시간, 4일). 없으면 1시간, 0이면 저장할 때마다 */
   autoReviewHours?: number;
+  /** 12일: 노트를 썼든 안 썼든 기본 복습을 늘 넣는다(학습량 입력 창의 "복습 포함"을 늘 골라 둔다). 과목을 만들 때 · 고칠 때 고른다 */
+  alwaysBasicReview?: boolean;
   initialAverageTimePerPage?: number;
   reviewStartPage?: number;
   tagIds?: string[];
