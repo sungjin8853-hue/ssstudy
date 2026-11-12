@@ -70,6 +70,12 @@ const solutionOf = (answer: string): string | undefined => {
 export const SATISFIED = / 충족$/;
 /** `p 이후`: 순서에서 p 다음 자리에 놓인 값이다 */
 export const AFTER = / 이후$/;
+/**
+ * 12일 "[A] B=C ; D: 칸과 이어진 칸의 값도 보여 줘야 맞힐 수 있다": 첫 칸 안의 관계(`B=C`)는 이어진 가장 가까운 칸(D) 앞 자리로 묻는다.
+ * 노트 글의 "이전"과 섞이지 않게 보이지 않는 표시(U+2063)를 붙인다.
+ */
+export const BEFORE_MARK = ' \u2063이전';
+export const BEFORE = / \u2063이전$/;
 /** 예전 "A의 B" 표시(31일에 없앰). 남아 있는 조건 글을 읽을 때만 쓴다 */
 export const OWNER = / 의$/;
 
@@ -108,7 +114,7 @@ export const withoutAnswerPlace = (conditions: readonly string[], answer?: strin
   const hidden = answer === undefined ? '' : readableLabel(answer).trim();
   return conditions.map((text, index) => ({ text, index, role: roles?.[index] }))
     .filter(item => item.role !== 'hidden')
-    .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '').replace(OWNER, '')).trim() !== hidden);
+    .filter(item => !hidden || SATISFIED.test(item.text) || readableLabel(item.text.replace(AFTER, '').replace(BEFORE, '').replace(OWNER, '')).trim() !== hidden);
 };
 
 /** 7일: 가장 가까운 위치 집합(따옴표)과 위치를 가리려고 함께 주는 그 위 집합(`[ ]`, 노트에서 `[동물] 포유류`로 쓰는 꼴)을 나눠 쓴다 */
@@ -122,12 +128,14 @@ const splitRelated = <T extends { role?: string }>(items: T[]) => {
 export const placeOf = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string, roles?: ProseInput['conditionRoles']): string => {
   const entries = withoutAnswerPlace(conditions, answer, roles);
   const afters = entries.filter(item => AFTER.test(item.text));
-  const { related, near: place } = splitRelated(entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text)));
+  const befores = entries.filter(item => BEFORE.test(item.text));
+  const { related, near: place } = splitRelated(entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !BEFORE.test(item.text)));
   // 8일: 위 집합은 "A의 B"로 잇는다(‘고래’의 ‘특징’에서)
   const upper = related.map(item => `${quote(readableLabel(item.text.replace(OWNER, '')))}의 `).join('');
   return `${place.length ? `${upper}${place.map(item => attributeTag(readableLabel(item.text.replace(OWNER, '')), labels?.[item.index])).join(', ')}에서 ` : ''}${afters.length
     // 5일: 겹친 `이후`(바깥 칸 다음 자리 안의 또 다음 자리)는 순서대로 이어 보인다: ‘A’ → ‘B’ 다음 자리의
-    ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(' → ')} 다음 자리의 ` : ''}`;
+    ? `${afters.map(item => attributeTag(readableLabel(item.text.replace(AFTER, '')), labels?.[item.index])).join(' → ')} 다음 자리의 ` : ''}${befores.length
+    ? `${befores.map(item => attributeTag(readableLabel(item.text.replace(BEFORE, '')), labels?.[item.index])).join(' → ')} 앞 자리의 ` : ''}`;
 };
 
 /** 문제 한 개의 줄글. 줄글로 바꾸지 않는 종류(노트 회상 · 능력 변환)는 null. attrs가 있으면 값마다 속성 이름을 붙인다. */

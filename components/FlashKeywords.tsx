@@ -31,7 +31,7 @@ const Slot: React.FC<{ revealed: boolean; answer: string | null; mark?: string; 
     </span>
 );
 
-const PlaceChip: React.FC<{ chip: FlashChip & { role: 'place' | 'owner' | 'after'; related?: boolean } }> = ({ chip }) => (chip.related
+const PlaceChip: React.FC<{ chip: FlashChip & { role: 'place' | 'owner' | 'after' | 'before'; related?: boolean } }> = ({ chip }) => (chip.related
   // 7일: 위치를 가리려고 함께 주는 위 집합(연관 집합)은 가장 가까운 위치 집합과 다르게 작고 옅게
   ? <li data-flash-condition="true" data-flash-role={chip.role} data-flash-related="true"
     className="flex max-w-full flex-col items-center justify-center gap-0.5 rounded-xl border-2 border-dashed border-slate-300 bg-white px-3 py-1.5 text-center">
@@ -43,6 +43,7 @@ const PlaceChip: React.FC<{ chip: FlashChip & { role: 'place' | 'owner' | 'after
     {chip.label.length > 0 && <span data-field-label="true" className="text-sm font-black text-slate-600">{chip.label.join(' · ')}</span>}
     <span className="break-words font-serif text-xl font-bold leading-snug text-slate-900 md:text-2xl"><KeywordText text={chip.value} /></span>
     {chip.role === 'after' && <span data-flash-after="true" className="text-xs font-black text-slate-500">다음 자리</span>}
+    {chip.role === 'before' && <span data-flash-before="true" className="text-xs font-black text-slate-500">앞 자리</span>}
     {chip.role === 'owner' && <span data-flash-owner="true" className="text-xs font-black text-slate-500">의</span>}
   </li>
 );

@@ -19,7 +19,9 @@ import { hasQuoteMark, quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { fillFrame, isFrameTitle, placeUnderFrame, subFrameOf } from './noteFrame';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { cellBlankAnswer, cellBlankStatement, renderCellPieces } from './questionStatement';
-import { convertStatement, keywordCondition, placeOf, proseOf } from './questionProse';
+import { BEFORE_MARK, convertStatement, keywordCondition, placeOf, proseOf } from './questionProse';
+/** 문제 키에 넣지 않는 조건 표시(12일) */
+const OMIT_FROM_KEY = '\u0000omit';
 import type { CellKind, CellPiece } from './questionStatement';
 
 /** generated: `#` 틀이 펼쳐 만든 줄의 글(노트에 쓴 글이 아니다). 글자 범위는 틀 줄을 가리킨다. */
@@ -1044,7 +1046,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   let activeAlias = new Map<string, string>();
   let activePlaceCount = 0;
   let activeToggleCount = 0;
-  const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => activeAlias.get(text) ?? text);
+  // 12일: 키에서 빼는 조건(새로 보이게 한 "앞 자리"). 전에 낸 같은 문제의 복습 기록이 그대로 이어진다
+  const keyConditionsOf = (conditions: readonly string[]) => conditions.map(text => activeAlias.get(text) ?? text).filter(text => text !== OMIT_FROM_KEY);
   const add = (question: Omit<NoteQuestion, 'key' | 'level' | keyof ReviewQuestionDifficulty>) => {
     if (!question.prompt.trim() || !question.answer.trim() || question.prompt === question.answer) return;
     const keyConditions = keyConditionsOf(question.conditions);
@@ -1452,6 +1455,16 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       return [{ text: `${expressionLabel(combine('sequence', before.map(({ cell }) => cell)))} 이후`, key: expressionLabel(columns[0]),
         columns: before.map(({ at }) => expression.classifications[at]), spans: before.flatMap(({ cell }) => spans(cell)) }];
     };
+    /**
+     * 12일 "[A] B=C ; D: 해당 셀과 연결된 셀의 값도 보여 줘야 맞출 수 있다 — 일단 가장 가까운 것만": 첫 칸 안의 관계(`B=C` · `( )`)는
+     * 뒤로 이어진 가장 가까운 칸(D, 그 칸의 분류 이름과 함께)의 "앞 자리"로 묻는다. 둘째 칸부터는 전처럼 앞 칸들의 "다음 자리"다.
+     */
+    const beforeOf = (index: number): QuestionCondition[] => {
+      const next = columns.slice(index + 1).map((cell, step) => ({ cell, at: index + 1 + step })).find(({ cell }) => nonempty(cell));
+      if (!next) return [];
+      return [{ text: `${expressionLabel(next.cell)}${BEFORE_MARK}`, key: OMIT_FROM_KEY,
+        columns: [expression.classifications[next.at]], spans: spans(next.cell) }];
+    };
     expression.fields.forEach((field, index) => {
       // 능력 변환 줄의 목록 칸에 든 갈래(`[N] C,(V:[P] O)`의 `V:[P] O`)는 안쪽 관계라 따로 읽는다(3일)
       if (convertible && field.type === 'and') {
@@ -1467,7 +1480,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       // 칸 전체가 `( )`인 안쪽 관계도 바깥 칸 번호를 이어 간다: n번째 칸의 괄호 안 첫 값은 n번째 칸의 집합을 따른다
       if (field.type === 'relation' && implicit.length > index) implicitByExpression.set(field, implicit.slice(index));
       // 31일: `A:(B:C)`를 "A의 B"로 읽던 해석은 없앴다. 5일: 안쪽 관계(괄호든 칸 안 `=` · `-`든)는 앞 칸들 다음 자리로 묻는다
-      visit(field, index > 0 ? [...context, ...afterOf(index)] : context, expression.classifications[index], scores[index]);
+      visit(field, index > 0 ? [...context, ...afterOf(index)] : field.type === 'text' ? context : [...context, ...beforeOf(index)], expression.classifications[index], scores[index]);
     });
   };
   /**

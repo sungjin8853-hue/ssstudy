@@ -4,7 +4,7 @@
  * 키워드는 줄글과 같은 순서다: 문제가 놓인 자리 → 주어진 값 → 이어 주는 말(관계) → 맞힐 칸. 줄글을 만드는 규칙(proseOf)을 그대로 따라가고,
  * 문장 대신 조각으로 돌려준다. 맞힐 칸은 정답을 확인할 때 같은 자리에서 정답으로 바뀐다.
  */
-import { AFTER, count as stepWords, keywordCondition, operatorOf, OWNER, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
+import { AFTER, BEFORE, count as stepWords, keywordCondition, operatorOf, OWNER, ProseAttrs, ProseInput, readableLabel, SATISFIED, splitLabel, withoutAnswerPlace } from './questionProse';
 import { blankMark } from './questionStatement';
 import type { CellKind, CellPiece } from './questionStatement';
 
@@ -17,7 +17,7 @@ export type FlashPiece = { type: 'text'; value: string } | { type: 'blank'; mark
 
 export interface FlashCard {
   /** 문제가 놓인 자리(위쪽 토글 · 줄 앞 집합): 맨 바깥부터 */
-  place: Array<FlashChip & { role: 'place' | 'owner' | 'after'; related?: boolean }>;
+  place: Array<FlashChip & { role: 'place' | 'owner' | 'after' | 'before'; related?: boolean }>;
   /** 주어진 값. 가린 줄 문제는 없다(줄 전체가 chain) */
   given: FlashChip | null;
   /** 이미 충족한 값(`남은 것` 문제): 문장의 "… 외에" */
@@ -44,13 +44,14 @@ const modeOf = (operator: ReturnType<typeof operatorOf>) => (operator === 'and' 
 const placeAndDone = (conditions: readonly string[], labels?: readonly (readonly string[])[], answer?: string, roles?: ProseInput['conditionRoles']) => {
   const entries = withoutAnswerPlace(conditions, answer, roles);
   const chip = (text: string, index: number): FlashChip => ({ label: [...(labels?.[index] ?? [])], value: readableLabel(text) });
-  const places = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !OWNER.test(item.text));
+  const places = entries.filter(item => !SATISFIED.test(item.text) && !AFTER.test(item.text) && !BEFORE.test(item.text) && !OWNER.test(item.text));
   // 7일: 가장 가까운 위치 집합과, 위치를 가리려고 함께 주는 그 위 집합(연관 집합)을 다른 칸으로 보인다(가까운 것이 빠졌으면 나눌 것 없음)
   const hasNear = places.some(item => item.role !== 'related');
   const place = [
     ...places.map(item => ({ ...chip(item.text, item.index), role: 'place' as const, ...(hasNear && item.role === 'related' ? { related: true } : {}) })),
     ...entries.filter(item => OWNER.test(item.text)).map(item => ({ ...chip(item.text.replace(OWNER, ''), item.index), role: 'owner' as const })),
-    ...entries.filter(item => AFTER.test(item.text)).map(item => ({ ...chip(item.text.replace(AFTER, ''), item.index), role: 'after' as const }))
+    ...entries.filter(item => AFTER.test(item.text)).map(item => ({ ...chip(item.text.replace(AFTER, ''), item.index), role: 'after' as const })),
+    ...entries.filter(item => BEFORE.test(item.text)).map(item => ({ ...chip(item.text.replace(BEFORE, ''), item.index), role: 'before' as const }))
   ];
   const satisfied = entries.filter(item => SATISFIED.test(item.text));
   const done: FlashChip | null = satisfied.length ? {

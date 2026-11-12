@@ -8751,7 +8751,8 @@ test('( ) is a toggle word: its first value shares the cell with the text around
   assert.ok(!questionsFor('(A:B) 안녕 : X').some(q => q.prompt.includes('B 안녕') || q.answer.includes('B 안녕') || q.answer.includes('(')));
   // the other connectors and nested groups pick the first value too
   assert.deepEqual(direct('(A;B) 안녕 : X')[0], ['A 안녕', 'X']);
-  assert.deepEqual(direct('((A:B):C) 안녕 : X')[0], ['A 안녕', 'X']);
+  // (12일: 안쪽 `A:B`는 이어진 C 앞 자리로 묻게 되어 주어진 것이 많아 쉬운 문제로 앞에 온다)
+  assert.ok(direct('((A:B):C) 안녕 : X').some(([prompt, answer]) => prompt === 'A 안녕' && answer === 'X'));
   // a group with no connector inside is only grouping: the text stays as written
   assert.deepEqual(direct('(A,B) 안녕 : X'), [['(A,B) 안녕', 'X']]);
   assert.deepEqual(direct('밑변 (cm) : 길이'), [['밑변 (cm)', '길이']]);
@@ -10860,7 +10861,7 @@ test('29일: 첨가 연결 — 하위 토글 기준의 칸이 상위 기준의 �
   const labels = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct')
     .map(q => { const c = getReviewQuestionClassification(q.criterion, q); return `${q.prompt}(${c.prompt})>${q.answer}(${c.answer})`; });
   // 괄호로 쓴 줄만 합친 기준: 괄호 안은 A · C, 바깥은 B. 괄호 없는 줄은 하위 기준(A · C)만
-  assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [A];[C]\n(x;y):z\nx2;y2\n:::end\n:::end'), ['x(A)>z(B)', 'x(A)>y(C)', 'x2(A)>y2(C)']);
+  assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [A];[C]\n(x;y):z\nx2;y2\n:::end\n:::end').sort(), ['x(A)>y(C)', 'x(A)>z(B)', 'x2(A)>y2(C)']);
   // 상위의 둘째 칸에 첨가: [A]:([B];[C])
   assert.deepEqual(labels(':::toggle [A]:[B]\n:::toggle [B];[C]\nw:(p;q)\n:::end\n:::end'), ['w(A)>p(B)', 'p(B)>q(C)']);
   // 따로 분리된 기준은 전처럼 하위 기준만
@@ -12265,4 +12266,27 @@ test('12일 fix-123: "기본 복습 늘 넣기" picks 복습 포함 even with an
   const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(summary.includes('basicReviewSkipped: includeReview && basicSkipped && recordHasReviewSubjects ? true : undefined'));
   assert.ok(summary.includes("if (includeReview && basicSkipped) { setIncludeReview(false); setBasicSkipped(false); return; }"));
+});
+
+test('12일 fix-124: a relation inside the first cell ([A] B=C ; D) is asked with the nearest connected cell and its class shown, keeping the old question keys', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const view = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct' || q.kind === 'reverse').map(q => [q.prompt, q.answer, q.conditions, q.key]);
+  const now = view('[A] B=C ; D');
+  const d = now.find(([prompt]) => prompt === 'B');
+  assert.deepEqual(d.slice(0, 2), ['B', 'C']);
+  assert.ok(d[2].some(text => text.startsWith('D ') && text.endsWith('이전')), 'D is shown');
+  const { proseOf } = loadSource('utils/questionProse.ts');
+  const question = buildReviewQuestions('[A] B=C ; D').questions.find(q => q.prompt === 'B');
+  assert.ok(proseOf(question).statement.endsWith('‘D’ 앞 자리의 ‘B’에 대응하는 것은?'), proseOf(question).statement);
+  // 이어진 칸의 분류 이름도 함께(능력 집합)
+  const labelled = buildReviewQuestions('[개념:정의]\nB=C : D').questions.find(q => q.prompt === 'B');
+  const at = labelled.conditions.findIndex(text => text.endsWith('이전'));
+  assert.deepEqual(labelled.columns.conditions[at], [1], 'D sits in the 정의 column, so the screen shows 정의 ‘D’');
+  // 가장 가까운 것만: 둘째 칸부터는 전처럼 앞 칸의 다음 자리
+  const second = buildReviewQuestions('X ; [A] B=C ; D').questions.find(q => q.prompt === 'B');
+  assert.ok(proseOf(second).statement.startsWith('‘X’ 다음 자리의') && !proseOf(second).statement.includes('앞 자리'));
+  // 키는 그대로라 그동안의 복습 기록이 이어진다(실제 노트 문제 키 비교로 확인: 새 조건은 키에 들지 않는다)
+  assert.ok(!question.key.includes('이전'));
+  // 홀로 쓴 줄(이어진 칸이 없음)은 그대로
+  assert.ok(!buildReviewQuestions('[A] B=C').questions.some(q => q.conditions.some(text => text.endsWith('이전'))));
 });
