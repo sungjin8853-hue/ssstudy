@@ -12290,3 +12290,22 @@ test('12일 fix-124: a relation inside the first cell ([A] B=C ; D) is asked wit
   // 홀로 쓴 줄(이어진 칸이 없음)은 그대로
   assert.ok(!buildReviewQuestions('[A] B=C').questions.some(q => q.conditions.some(text => text.endsWith('이전'))));
 });
+
+test('12일 fix-125: 복습과목 추가 in the study record puts an excluded record into review subjects only; the record view opens from the today detail next to 정리노트', () => {
+  const { addLogToReviewSubjects, canAddReviewSubjects, recordReviewState } = loadSource('utils/studyRecord.ts');
+  const now = Date.parse('2026-11-12T13:00:00+09:00');
+  const excluded = { id: 'x', subjectId: 'S', pagesRead: 3, timeSpentMinutes: 20, timestamp: '2026-11-11T01:00:00.000Z', reviewEnabled: false, isCondensed: true, reviewSubjectIdsSnapshot: ['R'] };
+  assert.equal(canAddReviewSubjects(recordReviewState(excluded, now), true), true);
+  assert.equal(canAddReviewSubjects(recordReviewState(excluded, now), false), false, 'no review subjects: nothing to add');
+  assert.equal(canAddReviewSubjects(recordReviewState({ ...excluded, unitReviewPending: true }, now), true), false, 'a waiting record takes its review subjects when it goes in');
+  const added = addLogToReviewSubjects(excluded, now);
+  assert.equal(added.basicReviewSkipped, true);
+  assert.equal(added.reviewEnabled, true);
+  assert.equal(added.nextReviewDate, new Date(now + 2 * 3600000).toISOString());
+  assert.equal(recordReviewState(added, now).kind, 'basicSkipped');
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  const header = summary.slice(summary.indexOf('aria-label="정리노트 열기"'), summary.indexOf('data-testid="register-review"'));
+  assert.ok(header.includes('data-testid="open-study-record"'), 'the record button sits right after the note button');
+  const settings = fs.readFileSync(path.join(__dirname, '..', 'components/Analytics.tsx'), 'utf8');
+  assert.ok(!settings.includes('subject-add-review-subject') && !settings.includes('StudyRecordDialog'), 'the settings cards are as before (review subjects are added from the stage ✎ as before)');
+});

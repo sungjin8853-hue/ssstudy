@@ -6,7 +6,6 @@ import { ReviewGrowthSettings } from './PageGrowth';
 import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { AlwaysBasicReviewToggle } from './AlwaysBasicReviewToggle';
-import { StudyRecordDialog } from './StudyRecordDialog';
 import { buildStudyOrderForDate } from './SessionLogger';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
@@ -50,8 +49,6 @@ interface Props {
   onAddSubject?: (subject: Subject) => void;
   onDeleteFolder?: (folderId: string) => void;
   onOpenReview?: () => void;
-  /** 12일 학습 기록 보기의 "복습하기": 고른 기록을 바로 복습에 넣는다 */
-  onAddLogsToReview?: (logIds: string[]) => void;
   /** 학습 실행의 "학습 설정 가기"로 열었을 때 먼저 보여줄 과목: 들어 있는 폴더를 펼치고 그 카드로 스크롤한다 */
   focusSubjectId?: string;
 }
@@ -79,8 +76,7 @@ export const Analytics: React.FC<Props> = ({
   onUpdateTags,
   onAddSubject,
   onDeleteFolder,
-  onOpenReview,
-  onAddLogsToReview
+  onOpenReview
 }) => {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set(['root']));
   const [expandedSubjectReviewIds, setExpandedSubjectReviewIds] = useState<Set<string>>(new Set());
@@ -204,10 +200,6 @@ export const Analytics: React.FC<Props> = ({
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusSubjectId]);
-
-  // 12일 "각 과목마다 학습 기록 보기"
-  const [recordSubjectId, setRecordSubjectId] = useState<string | null>(null);
-  const recordSubject = recordSubjectId ? subjects.find(subject => subject.id === recordSubjectId) : undefined;
 
   const toggleSubjectReviewList = (id: string) => {
     const next = new Set(expandedSubjectReviewIds);
@@ -557,15 +549,6 @@ export const Analytics: React.FC<Props> = ({
     onUpdateSubject?.(withFreshPagePlan({ ...subject, followUpSubjects: (subject.followUpSubjects || []).filter(stage => stage.id !== stageId) }));
     setConfirmDeleteStageId(null);
     setStageEditForm(null);
-  };
-
-  /** 12일 "복습과목도 추가 버튼": 지금 단계의 연필(✎) 창을 열고 새 복습과목 만들기 칸을 바로 펼친다 */
-  const openAddReviewSubject = (subject: Subject, stage: SubjectStage) => {
-    setExpandedSubjectReviewIds(current => new Set(current).add(subject.id));
-    openInlineStageEditor(subject, stage);
-    setNewReviewForm({ name: '', startPage: 1, endPage: 100, chapterText: '', pageLabel: '' });
-    // 만들기 칸이 카드 아래쪽에 펼쳐지므로 그 칸을 화면 가운데로 가져온다
-    window.setTimeout(() => document.querySelector('[data-testid="new-review-subject-form"]')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120);
   };
 
   const addFollowUpSubject = (subject: Subject) => {
@@ -1430,26 +1413,6 @@ export const Analytics: React.FC<Props> = ({
                  <ProgressBar percent={progressPercent} label={`${displayStage?.name || sub.name} 학습 진척도`} />
               </div>
 
-              {!isEditing && (
-                // 12일: 과목마다 "학습 기록 보기"와 "복습과목 추가"(후행과목 추가처럼 카드에서 바로)
-                <div data-testid="subject-record-actions" className="flex flex-wrap gap-2 px-1">
-                  <button type="button" data-testid="subject-record-open" aria-label={`${displayStage?.name || sub.name} 학습 기록 보기`}
-                    onClick={event => { event.preventDefault(); event.stopPropagation(); setRecordSubjectId(sub.id); }}
-                    onMouseDown={event => event.stopPropagation()}
-                    className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:border-indigo-300 hover:text-indigo-700">
-                    📋 학습 기록 보기
-                  </button>
-                  {!reviewSubjectIdSet.has(sub.id) && displayStage && (
-                    <button type="button" data-testid="subject-add-review-subject" aria-label={`${displayStage.name} 복습과목 추가`}
-                      onClick={event => { event.preventDefault(); event.stopPropagation(); openAddReviewSubject(sub, displayStage); }}
-                      onMouseDown={event => event.stopPropagation()}
-                      className="h-10 rounded-xl border border-rose-200 bg-white px-4 text-sm font-black text-rose-600 hover:bg-rose-50">
-                      ＋ 복습과목 추가
-                    </button>
-                  )}
-                </div>
-              )}
-
               {isEditing && (
                 <div className="mt-2 bg-slate-900 p-4 rounded-2xl border border-slate-800 animate-in slide-in-from-top-4 relative z-30">
                   <div className="mb-4">
@@ -2037,10 +2000,6 @@ export const Analytics: React.FC<Props> = ({
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {recordSubject && (
-        <StudyRecordDialog subject={recordSubject} subjects={subjects} logs={logs}
-          onAddToReview={ids => onAddLogsToReview?.(ids)} onClose={() => setRecordSubjectId(null)} />
-      )}
       <div className="flex flex-col gap-3 md:flex-row md:items-stretch md:justify-between">
         <div className="flex items-center gap-4 rounded-2xl border border-indigo-100 bg-white px-5 py-3.5 shadow-sm">
           <p className="text-sm font-bold text-slate-500">하루 평균<br />필요시간</p>

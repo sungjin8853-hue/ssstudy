@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { StudyLog, Subject } from '../types';
-import { buildStudyRecord, canAddToReview, RecordReviewState, StudyRecordRow } from '../utils/studyRecord';
+import { buildStudyRecord, canAddReviewSubjects, canAddToReview, RecordReviewState, StudyRecordRow } from '../utils/studyRecord';
+import { getSubjectStageReviewSubjectIds } from '../utils/schedule';
 import { getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { formatDurationShort } from '../utils/weekPlan';
 import { parseStudyDate } from '../utils/schedule';
@@ -27,14 +28,14 @@ const whenText = (nextAt: number, days: number, nowMs: number) => {
   return `${days}일 뒤(${formatMonthDay(nextAt)}) 오늘 할 일에 나와요`;
 };
 
-const stateView = (state: RecordReviewState, nowMs: number, reviewNames: string): { tone: string; text: string } => {
+const stateView = (state: RecordReviewState, nowMs: number, reviewNames: string, basicOff = false): { tone: string; text: string } => {
   switch (state.kind) {
     case 'scheduled':
       return { tone: state.nextAt <= nowMs ? 'text-rose-700' : 'text-indigo-700', text: `${state.stage === 'subject' ? `복습과목${reviewNames ? `(${reviewNames})` : ''}` : '기본 복습'} · ${whenText(state.nextAt, state.days, nowMs)}` };
     case 'basicSkipped':
       return { tone: 'text-amber-700', text: `기본 복습은 빠져 있어요${state.nextAt !== null && state.days !== null ? ` · 복습과목 ${whenText(state.nextAt, state.days, nowMs)}` : ''}` };
     case 'pending':
-      return { tone: 'text-amber-700', text: '복습에 아직 안 들어갔어요(복습 넣기를 기다려요)' };
+      return { tone: 'text-amber-700', text: `복습에 아직 안 들어갔어요(복습 넣기를 기다려요${basicOff ? ' · 기본 복습은 빼 둠' : ''})` };
     case 'waiting':
       return { tone: 'text-amber-700', text: '복습에 아직 안 들어갔어요(자동 복습으로 모으는 중)' };
     case 'excluded':
@@ -52,7 +53,7 @@ export const StudyRecordDialog: React.FC<{
   subject: Subject;
   subjects: Subject[];
   logs: StudyLog[];
-  onAddToReview: (logIds: string[]) => void;
+  onAddToReview: (logIds: string[], mode: 'basic' | 'subjects') => void;
   onClose: () => void;
 }> = ({ subject, subjects, logs, onAddToReview, onClose }) => {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -66,9 +67,13 @@ export const StudyRecordDialog: React.FC<{
   const label = getPageLabel(subject);
   const pos = pagePositionLabel(label);
   const stageCount = new Set(days.flatMap(day => day.rows.map(row => row.log.subjectStageId || subject.id))).size;
-  const reviewNamesOf = (row: StudyRecordRow) => (row.log.reviewSubjectIdsSnapshot ?? [])
-    .map(id => subjects.find(item => item.id === id)?.name).filter(Boolean).join(', ');
-  const notInReview = days.flatMap(day => day.rows).filter(row => canAddToReview(row.state));
+  /** 그 기록의 복습과목(저장할 때 이어져 있던 것, 없으면 지금 그 단계의 것) 중 남아 있는 과목 이름 */
+  const reviewSubjectNamesOf = (row: StudyRecordRow) => {
+    const ids = row.log.reviewSubjectIdsSnapshot?.length ? row.log.reviewSubjectIdsSnapshot : getSubjectStageReviewSubjectIds(subject, row.log.subjectStageId || subject.id);
+    return ids.map(id => subjects.find(item => item.id === id)?.name).filter((name): name is string => Boolean(name));
+  };
+  const reviewNamesOf = (row: StudyRecordRow) => reviewSubjectNamesOf(row).join(', ');
+  const notInReview = days.flatMap(day => day.rows).filter(row => canAddToReview(row.state) || canAddReviewSubjects(row.state, reviewSubjectNamesOf(row).length > 0));
 
   return (
     <div data-testid="study-record-dialog" role="dialog" aria-modal="true" aria-label={`${subject.name} 학습 기록`}
@@ -96,16 +101,25 @@ export const StudyRecordDialog: React.FC<{
                 </div>
                 <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
                   {day.rows.map(row => {
-                    const view = stateView(row.state, nowMs, reviewNamesOf(row));
+                    const view = stateView(row.state, nowMs, reviewNamesOf(row), Boolean(row.log.basicReviewSkipped));
                     const addable = canAddToReview(row.state);
+                    const addableSubjects = canAddReviewSubjects(row.state, reviewSubjectNamesOf(row).length > 0);
                     return (
                       <li key={row.log.id} data-record-log={row.log.id} data-review-state={row.state.kind}
-                        className={`overflow-hidden rounded-2xl border ${addable ? 'border-amber-300' : 'border-slate-200'} bg-white`}>
-                        {addable && (
-                          <div className="flex items-center justify-between gap-2 bg-amber-50 px-3 py-1.5">
-                            <span className="text-[12px] font-bold text-amber-800">{row.state.kind === 'basicSkipped' ? '기본 복습이 안 들어가 있어요' : '복습이 안 들어가 있어요'}</span>
-                            <button type="button" data-testid="record-add-review" onClick={() => onAddToReview([row.log.id])}
-                              className="h-9 shrink-0 rounded-xl bg-amber-600 px-4 text-sm font-black text-white hover:bg-amber-700">복습하기</button>
+                        className={`overflow-hidden rounded-2xl border ${addable || addableSubjects ? 'border-amber-300' : 'border-slate-200'} bg-white`}>
+                        {(addable || addableSubjects) && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 px-3 py-1.5">
+                            <span className="text-[12px] font-bold text-amber-800">{row.state.kind === 'basicSkipped' ? '기본 복습이 안 들어가 있어요' : addableSubjects ? '기본 복습 · 복습과목이 안 들어가 있어요' : '복습이 안 들어가 있어요'}</span>
+                            <span className="flex shrink-0 gap-1.5">
+                              {addableSubjects && (
+                                <button type="button" data-testid="record-add-review-subjects" onClick={() => onAddToReview([row.log.id], 'subjects')}
+                                  className="h-9 rounded-xl border-2 border-amber-600 bg-white px-3 text-sm font-black text-amber-800 hover:bg-amber-100">복습과목 추가</button>
+                              )}
+                              {addable && (
+                                <button type="button" data-testid="record-add-review" onClick={() => onAddToReview([row.log.id], 'basic')}
+                                  className="h-9 rounded-xl bg-amber-600 px-4 text-sm font-black text-white hover:bg-amber-700">복습하기</button>
+                              )}
+                            </span>
                           </div>
                         )}
                         <div className="flex flex-col gap-0.5 px-3 py-2">

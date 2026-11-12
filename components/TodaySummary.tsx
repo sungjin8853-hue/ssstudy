@@ -6,6 +6,7 @@ import { calculateRecentTimedPageAverage, calculateReviewChangeAmounts, calculat
 import { BASIC_REVIEW_DETAIL_PREFIX, carriedReviewState, getRepeatedReviewRange, getReviewStartPage } from '../utils/review';
 import { getMeasurementRemainingPages, getPomodoroPageTarget, getRemainingPomodoroSessions, getReviewPomodoro, PomodoroPlan } from '../utils/measurement';
 import { PomodoroMinutesStepper } from './PomodoroMinutesStepper';
+import { StudyRecordDialog } from './StudyRecordDialog';
 import { usePomodoroMinutes } from '../utils/pomodoroSetting';
 import {
   getActiveSubjectStage,
@@ -71,6 +72,8 @@ interface Props {
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
   /** 9일: 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다 */
   onExcludeFromReview?: (logIds: string[]) => void;
+  /** 12일: 학습 기록 보기의 "복습하기" · "복습과목 추가" */
+  onAddLogsToReview?: (logIds: string[], mode: 'basic' | 'subjects') => void;
   onDeleteLogs: (logIds: string[]) => void;
   /** 주면 학습과목 위쪽에 "임시값" 버튼이 생긴다: 측정 전인 지금 과목과 남은 후행과목의 한 장당 시간(임시값)을 고친다 */
   onUpdateSubjects?: (subjects: Subject[]) => void;
@@ -523,7 +526,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onAddLogsToReview }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -537,6 +540,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const [basicSkipped, setBasicSkipped] = useState(false);
   const [showFlowTutorial, setShowFlowTutorial] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  // 12일 "오늘 할 일 과목들 정리노트 버튼 옆에 학습 기록 보기"
+  const [showRecord, setShowRecord] = useState(false);
   /** "추가 학습하기"를 눌러 원래 정보를 다시 연 끝낸 과목의 키 */
   const [reopenedId, setReopenedId] = useState('');
   // 다른 과목으로 넘어가면 다시 완료 카드로 돌아간다.
@@ -1156,6 +1161,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               {noteCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{noteCount}</span>}
             </button>
           )}
+          {onAddLogsToReview && (
+            <button type="button" data-testid="open-study-record" onClick={() => setShowRecord(true)} aria-label="학습 기록 보기" className={headerButton}>
+              <span aria-hidden="true">📋</span>학습 기록 보기
+            </button>
+          )}
           {canRegisterHere && onRegisterReview && (pendingReviewCount > 0 || autoReview) && (
             <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="복습에 넣기" className={headerButton}>
               <span aria-hidden="true">↻</span>복습에 넣기
@@ -1279,6 +1289,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       {detailPanel}
 
       {showFlowTutorial && <MeasurementTutorial onClose={() => setShowFlowTutorial(false)} />}
+      {showRecord && onAddLogsToReview && detailData && (
+        // 복습 칸(기본 복습 · 복습과목)에서 열면 그 복습의 원래 과목 기록을 보인다
+        <StudyRecordDialog subject={detailData.owner ?? detailData.subject} subjects={subjects} logs={logs}
+          onAddToReview={onAddLogsToReview} onClose={() => setShowRecord(false)} />
+      )}
       {showNotes && onUpdateReviewMemo && (
         <NoteSheet logs={logs} subjects={subjects} subjectId={noteSubjectId} subjectName={noteSubjectName}
           onUpdateReviewMemo={onUpdateReviewMemo} onRestoreReviewQuestion={onRestoreReviewQuestion} onSkipEditIntake={onSkipEditIntake} onClose={() => setShowNotes(false)} />

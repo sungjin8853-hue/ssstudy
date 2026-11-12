@@ -85,6 +85,20 @@ export const addLogToReview = (log: StudyLog, nowMs: number): StudyLog => {
   };
 };
 
+/**
+ * "복습과목 추가"를 보여 줄 기록: 복습과목까지 뺀 기록(복습 제외)인데 그 기록의 단계에 복습과목이 있을 때.
+ * 대기 · 모으는 중인 기록은 복습에 넣을 때 복습과목도 함께 들어가고, 기본 복습만 뺀 기록은 이미 복습과목을 한다.
+ */
+export const canAddReviewSubjects = (state: RecordReviewState, hasReviewSubjects: boolean) => hasReviewSubjects && state.kind === 'excluded';
+
+/** "복습과목 추가": 기본 복습은 빼 둔 채 복습과목만 하도록 넣는다(기본 복습만 제외한 기록과 같다). 처음은 2시간 뒤, 단위는 그대로 */
+export const addLogToReviewSubjects = (log: StudyLog, nowMs: number): StudyLog => ({
+  ...addLogToReview(log, nowMs),
+  basicReviewSkipped: true,
+  reviewStep: 0,
+  nextReviewDate: new Date(nowMs + INITIAL_REVIEW_DELAY_MS).toISOString()
+});
+
 /** 과목의 공부 기록을 날짜별로(최근 날짜부터, 한 날 안에서는 먼저 한 것부터) */
 export const buildStudyRecord = (subject: Pick<Subject, 'id'>, logs: readonly StudyLog[], nowMs: number): StudyRecordDay[] => {
   const own = logs.filter(log => log.subjectId === subject.id && isStudyRecord(log));
