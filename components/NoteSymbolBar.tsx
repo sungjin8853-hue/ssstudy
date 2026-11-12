@@ -43,9 +43,14 @@ export const useKeyboardInset = () => {
     update();
     viewport.addEventListener('resize', update);
     viewport.addEventListener('scroll', update);
+    // 12일: 화면을 돌리면 창 높이(innerHeight)가 보이는 영역보다 늦게 바뀌는 브라우저가 있어 창 크기 · 방향이 바뀔 때도 다시 잰다
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
     return () => {
       viewport.removeEventListener('resize', update);
       viewport.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
     };
   }, []);
   return inset;
@@ -53,6 +58,43 @@ export const useKeyboardInset = () => {
 
 /** 이 높이(px)보다 크게 화면이 가려지면 화면 키보드가 올라온 것으로 본다 */
 export const KEYBOARD_MIN_INSET = 120;
+
+const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'number', 'tel', 'url', 'password', 'date', 'time', 'datetime-local', 'month', 'week']);
+/** 화면 키보드를 띄우는 칸(글 입력칸 · 글 상자 · 직접 고치는 글)에 지금 손이 가 있는가 */
+export const isEditableElement = (element: Element | null): boolean => {
+  if (!element) return false;
+  const tag = element.tagName;
+  if (tag === 'TEXTAREA') return !(element as HTMLTextAreaElement).readOnly;
+  if (tag === 'INPUT') {
+    const input = element as HTMLInputElement;
+    return !input.readOnly && TEXT_INPUT_TYPES.has((input.getAttribute('type') || '').toLowerCase());
+  }
+  return (element as HTMLElement).isContentEditable === true;
+};
+/** 키보드가 올라왔다고 볼 때: 글을 쓰는 칸에 손이 가 있고 그만큼 화면이 가려졌을 때만 */
+export const keyboardOpenFrom = (inset: number, editing: boolean) => editing && inset >= KEYBOARD_MIN_INSET;
+
+/**
+ * 12일 "가로 화면에서 축소를 짝 당겨야 맨 밑 탭이 나온다": 가로 화면에서는 창 높이와 보이는 영역의 차이가 키보드 없이도 크게 잡히는 브라우저가 있어
+ * 맨 아래 탭이 키보드 때처럼 숨었다. 이제 글을 쓰는 칸에 손이 가 있을 때만 키보드로 본다.
+ */
+export const useKeyboardOpen = () => {
+  const inset = useKeyboardInset();
+  const [editing, setEditing] = useState(() => (typeof document === 'undefined' ? false : isEditableElement(document.activeElement)));
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const update = () => setEditing(isEditableElement(document.activeElement));
+    // 칸에서 손을 뗄 때는 다음 칸으로 옮겨 가는 중일 수 있어 한 박자 뒤에 본다
+    const later = () => window.setTimeout(update, 0);
+    document.addEventListener('focusin', update);
+    document.addEventListener('focusout', later);
+    return () => {
+      document.removeEventListener('focusin', update);
+      document.removeEventListener('focusout', later);
+    };
+  }, []);
+  return keyboardOpenFrom(inset, editing);
+};
 
 export const NoteSymbolBar: React.FC<{ onInsert: (value: string) => void; className?: string }> = ({ onInsert, className = '' }) => {
   // 9일 "키보드 때 안 움직이게": 키보드가 올라와도 막대는 노트 칸 위 제자리에 둔다(전에는 키보드 바로 위로 옮겨 갔다)

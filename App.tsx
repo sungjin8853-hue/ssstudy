@@ -25,7 +25,7 @@ import { autoReviewHoursOf, chooseAutoReviewGrade, flushFilledAutoGroups, regist
 import { excludeLogFromReview } from './utils/reviewDelete';
 import { planTimesChanged, withPlanTimes } from './utils/weekPlan';
 import { useRestTimer, writeRestEndsAt } from './utils/restTimer';
-import { KEYBOARD_MIN_INSET, useKeyboardInset } from './components/NoteSymbolBar';
+import { useKeyboardOpen } from './components/NoteSymbolBar';
 import { withLogShorthand } from './utils/noteShorthand';
 import { useSubjectShorthandSync } from './utils/useNoteShorthand';
 import { normalizeChapters } from './utils/subjectChapters';
@@ -150,7 +150,7 @@ const App: React.FC = () => {
   useSubjectShorthandSync(subjects);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   // 9일: 화면 키보드가 올라와 있으면 맨 아래 탭을 키보드 위로 띄우지 않는다
-  const keyboardOpen = useKeyboardInset() >= KEYBOARD_MIN_INSET;
+  const keyboardOpen = useKeyboardOpen();
   const [activeStudyWeekday, setActiveStudyWeekday] = useState<number>(new Date().getDay());
   const [dashboardDetailSubjectId, setDashboardDetailSubjectId] = useState('');
   /** 학습 실행의 "학습 설정 가기"로 열 때 설정 화면이 먼저 보여줄 과목(그 과목이 든 폴더를 펼치고 카드로 스크롤) */

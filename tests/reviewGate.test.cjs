@@ -12040,7 +12040,7 @@ test('9일: 자동으로 넣기를 켜도 이전 대기 기록은 남기고 새�
   const component = bar.slice(bar.indexOf('export const NoteSymbolBar'));
   assert.ok(!component.includes('useKeyboardInset()') && component.includes('data-floating="false"') && !component.includes('fixed inset-x-0'), 'the symbol bar never floats above the keyboard');
   const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
-  assert.ok(app.includes('const keyboardOpen = useKeyboardInset() >= KEYBOARD_MIN_INSET;'));
+  assert.ok(app.includes('const keyboardOpen = useKeyboardOpen();'));
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.ok(html.includes('html, body { overscroll-behavior-y: none; }'), 'pulling past the page end does not drag the tab bar');
 });
@@ -12192,4 +12192,18 @@ test('10일 fix-120: a line joined only by , asks what goes with each value, and
   assert.ok(shown.includes('능력 집합') && shown.includes('물 → 원인:결과 · 개념:정의'), shown);
   // 다른 연결어가 섞인 줄은 홀로 쓴 줄이 아니다
   assert.ok(!questionsFor('A : B - C').some(q => q.lone));
+});
+
+test('12일 fix-121: the bottom tabs hide only while a text field is focused and the keyboard covers the screen (landscape no longer hides them)', () => {
+  const { keyboardOpenFrom, isEditableElement, KEYBOARD_MIN_INSET } = loadSource('components/NoteSymbolBar.tsx');
+  assert.equal(keyboardOpenFrom(300, false), false, 'a tall gap without a focused text field is not the keyboard (landscape)');
+  assert.equal(keyboardOpenFrom(300, true), true);
+  assert.equal(keyboardOpenFrom(KEYBOARD_MIN_INSET - 1, true), false);
+  const el = (tagName, extra = {}) => ({ tagName, readOnly: false, getAttribute: name => (name === 'type' ? extra.type ?? null : null), ...extra });
+  assert.equal(isEditableElement(el('TEXTAREA')), true);
+  assert.equal(isEditableElement(el('INPUT', { type: 'number' })), true);
+  assert.equal(isEditableElement(el('INPUT', { type: 'checkbox' })), false);
+  assert.equal(isEditableElement(el('BUTTON')), false);
+  assert.equal(isEditableElement(el('DIV', { isContentEditable: true })), true);
+  assert.equal(isEditableElement(null), false);
 });
