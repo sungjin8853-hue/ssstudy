@@ -2350,11 +2350,13 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   };
 
   // 9일: 복습 포함 · 제외는 측정 중이 아니라 학습량 입력 창에서 고른다. 창이 열릴 때마다 이번 기록의 노트에 글이 있으면 포함,
-  // 없으면 기본 복습만 제외(복습과목이 없으면 그냥 제외)로 골라 둔다(과목 설정에서 복습을 끈 과목 · 복습과목을 잴 때는 전처럼 모두 제외)
+  // 없으면 기본 복습만 제외(복습과목이 없으면 그냥 제외)로 골라 둔다(과목 설정에서 복습을 끈 과목 · 복습과목으로 남의 범위를 복습할 때는 모두 제외).
+  // 12일 "왜 복습과목이 있으면 기본 복습이 안 들어가? 내가 그런 말 한 적 있어?": 다른 과목의 복습과목으로 이어 둔 과목을 따로 잴 때
+  // 처음부터(9월 14일 설계) 노트와 상관없이 제외로 골라 두던 것을 없앴다. 그 과목도 노트 규칙 그대로다
   const sessionHasReviewSubjects = Boolean(selectedSubject) && !activeReviewRun
     && getReviewSubjectIdsForLog({ subjectId, subjectStageId: activeSubjectStage?.id } as StudyLog, selectedSubject!, subjects).length > 0;
   const defaultReviewChoice = (): 'include' | 'skipBasic' | 'skipAll' => {
-    if (isSubjectReviewDisabled || activeReviewRun || reviewSubjectIdSet.has(subjectId)) return 'skipAll';
+    if (isSubjectReviewDisabled || activeReviewRun) return 'skipAll';
     if (splitSessionMemo().savedMemo.trim()) return 'include';
     return sessionHasReviewSubjects ? 'skipBasic' : 'skipAll';
   };
@@ -2498,7 +2500,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       : cutStartPage)
     : '';
   // 9일: 복습 포함 · 제외는 측정이 끝난 뒤 고르므로 재는 동안의 바로 복습 넣기는 과목 설정(복습을 끈 과목 · 복습과목이 아니면)만 본다
-  const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !isSubjectReviewDisabled && !reviewSubjectIdSet.has(subjectId);
+  const canCutReview = (step === 'timer' || step === 'organize') && !activeReviewRun && Boolean(selectedSubject) && !isSubjectReviewDisabled;
   // 바로 복습 넣기로 복습에 넣으면 노트지의 조각이 바뀐 기록과 어긋날 수 있다(4일 점검): 기록이 1시간 안 앞 기록에 합쳐져 없어지거나(자동 복습),
   // 넣을 때 새 노트가 이전 쪽 노트에 연결 · 첨가로 합쳐져 그 기록의 노트가 바뀐다. 어긋나면 넣기가 끝난 뒤 오늘 노트로 노트지를 다시 채우고,
   // 그사이 새로 쓴 글은 뒤에 그대로 둔다(바뀐 기록에 옛 글로 고친 것을 덮어쓰지 않는다)
@@ -3453,7 +3455,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                 <p data-testid="session-review-choice-note" className="mt-2 text-center text-[13px] font-bold text-slate-500">
                   {reviewChoice !== defaultReviewChoice() ? '직접 골랐어요.'
                     : isSubjectReviewDisabled ? '이 과목은 복습을 꺼 두어 제외로 골라 두었어요.'
-                    : reviewSubjectIdSet.has(subjectId) ? '복습과목이라 제외로 골라 두었어요.'
                     : reviewChoice === 'include' ? '이번 정리노트에 쓴 글이 있어 포함으로 골라 두었어요.'
                     : reviewChoice === 'skipBasic' ? '이번 정리노트가 비어 있어 기본 복습만 제외로 골라 두었어요. 복습과목은 해요.'
                     : '이번 정리노트가 비어 있어 제외로 골라 두었어요.'}

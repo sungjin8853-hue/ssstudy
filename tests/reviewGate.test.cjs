@@ -11997,7 +11997,9 @@ test('9일: 복습 포함 · 제외는 측정 뒤 학습량 입력 창에서 고
   const pages = logger.slice(logger.indexOf("{step === 'pages' && ("));
   assert.ok(pages.includes('data-testid="session-review-choice"'), 'the choice is in the record window');
   const rule = logger.slice(logger.indexOf('const defaultReviewChoice = ()'), logger.indexOf('const pressSkipReview'));
-  assert.ok(rule.includes("if (isSubjectReviewDisabled || activeReviewRun || reviewSubjectIdSet.has(subjectId)) return 'skipAll';"));
+  assert.ok(rule.includes("if (isSubjectReviewDisabled || activeReviewRun) return 'skipAll';"));
+  // 12일: 다른 과목의 복습과목으로 이어 둔 과목도 따로 잴 때는 노트 규칙 그대로다(전처럼 처음부터 제외로 고르지 않는다)
+  assert.ok(!rule.includes('reviewSubjectIdSet') && !logger.includes('복습과목이라 제외로 골라 두었어요.'));
   assert.ok(rule.includes("if (splitSessionMemo().savedMemo.trim()) return 'include';") && rule.includes("return sessionHasReviewSubjects ? 'skipBasic' : 'skipAll';"),
     'an empty note leaves out only the basic review when there are review subjects');
   assert.ok(/if \(step === 'pages'\) setReviewChoice\(defaultReviewChoice\(\)\);/.test(logger), 'chosen again each time the record window opens');
