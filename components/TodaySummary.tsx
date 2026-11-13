@@ -931,7 +931,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   };
   const addField = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-lg font-black text-slate-900 outline-none focus:border-indigo-500';
   const amountDialog = changingAmount ? (
-    <div role="dialog" aria-modal="true" aria-label="학습 기록 추가" data-testid="amount-change-dialog" onClick={() => { setChangingAmount(false); closeModal(); }}
+    // 13일 "추가에서 정리노트 쓰는데 옆에 블러 처리된 공간 누르면 창 꺼지고 내용도 사라져": 바깥(흐린 곳)을 눌러도 닫지 않는다. 닫기는 × 로만
+    <div role="dialog" aria-modal="true" aria-label="학습 기록 추가" data-testid="amount-change-dialog"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-sm sm:p-4">
       <div onClick={event => event.stopPropagation()} className="flex max-h-[94vh] w-full max-w-3xl flex-col rounded-[2rem] bg-white shadow-2xl animate-fade-in">
         <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-5 sm:px-6">

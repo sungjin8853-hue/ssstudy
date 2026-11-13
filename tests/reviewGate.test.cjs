@@ -12309,3 +12309,10 @@ test('12일 fix-125: 복습과목 추가 in the study record puts an excluded re
   const settings = fs.readFileSync(path.join(__dirname, '..', 'components/Analytics.tsx'), 'utf8');
   assert.ok(!settings.includes('subject-add-review-subject') && !settings.includes('StudyRecordDialog'), 'the settings cards are as before (review subjects are added from the stage ✎ as before)');
 });
+
+test('13일 fix-126: tapping the blurred area beside the 학습 기록 추가 window does not close it (only ×), so a note being written is not lost', () => {
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  const open = summary.slice(summary.indexOf('data-testid="amount-change-dialog"'), summary.indexOf('data-testid="amount-change-dialog"') + 300);
+  assert.ok(!/^[^>]*onClick=/.test(open), 'the backdrop has no click-to-close');
+  assert.ok(summary.includes('aria-label="학습 기록 추가 닫기"'));
+});
