@@ -131,7 +131,7 @@ export const registerAutoGroup = (logs: StudyLog[], memberIds: readonly string[]
  * hours만큼 차면(또는 force: 바로 복습 넣기 · 과목을 다 끝냄) 모은 기록을 한 묶음으로 넣는다. 아니면 모으는 중으로 둔다.
  * 다른 단계에 모으던 기록은 단계가 바뀐 것이니 먼저 넣는다. 대기 중이 아니면 그대로 돌려준다.
  * 켜기 전에 저장한 대기 기록(autoReviewWaiting이 아닌 것)은 건드리지 않는다(9일).
- * 저장할 때마다 그 묶음(모으는 중이든 이번에 넣었든)의 난도를 묻는다(8일): 마지막에 고른 난도가 묶음의 실제 난도다.
+ * 묶음을 복습에 넣을 때만 그 묶음의 난도를 묻는다(8일). 13일 "1시간이 채워지지도 않았는데 자동 복습 피드백이 뜬다": 모으는 중에는 묻지 않는다.
  */
 export const registerAutoReview = (
   logs: StudyLog[], logId: string, hours = DEFAULT_AUTO_REVIEW_HOURS, force = false,
@@ -156,8 +156,8 @@ export const registerAutoReview = (
     return register(next, group.map(log => log.id)).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
   }
   return next.map(log => (log.id === incoming.id
-    ? { ...log, autoReviewQueued: undefined, autoReviewCut: undefined, autoReviewWaiting: true, autoReviewAsk: true }
-    : askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
+    ? { ...log, autoReviewQueued: undefined, autoReviewCut: undefined, autoReviewWaiting: true, autoReviewAsk: undefined }
+    : askIds.has(log.id) && log.autoReviewAsk ? { ...log, autoReviewAsk: undefined } : log));
 };
 
 /** 모으는 중인 묶음을 가리키는 키(넣은 때가 아직 없다) */
@@ -168,8 +168,7 @@ export const AUTO_WAITING_GROUP = 'waiting';
  * 그사이 복습을 해 버린 묶음은 묻지 않는다.
  */
 export const autoReviewAskOf = (logs: readonly StudyLog[], subjectId: string): { groupAt: string; members: StudyLog[] } | null => {
-  const waiting = logs.filter(log => log.subjectId === subjectId && log.unitReviewPending && log.autoReviewWaiting);
-  if (waiting.some(log => log.autoReviewAsk)) return { groupAt: AUTO_WAITING_GROUP, members: waiting };
+  // 13일: 모으는 중인 묶음은 묻지 않는다(전 판에서 모으는 중에 물음 표시가 붙은 기록도). 넣은 묶음만 묻는다
   const asking = logs.filter(log => log.subjectId === subjectId && log.autoReviewAsk && isFreshAutoRegistered(log));
   if (!asking.length) return null;
   const groupAt = asking.map(log => log.reviewRegisteredAt!).sort().at(-1)!;

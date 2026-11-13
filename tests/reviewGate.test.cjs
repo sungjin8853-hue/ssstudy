@@ -11938,21 +11938,20 @@ test('8일: 복습과목 측정 — 학습노트 · 이전 복습노트를 저�
   assert.deepEqual(qs.map(q => [q.kind, q.answer, q.form]), [['direct', 'd AND c', 'equal']]);
 });
 
-test('8일 · 10일: 자동 복습은 저장할 때마다 그 묶음의 난도를 묻는다 — 모으는 중이면 고른 난도를 적어 두었다가 넣을 때 쓰고, 넣은 묶음이면 마지막에 고른 난도가 실제 난도', () => {
-  const { registerAutoReview, chooseAutoReviewGrade, autoReviewAskOf, AUTO_WAITING_GROUP } = loadSource('utils/autoReview.ts');
+test('8일 · 10일 · 13일: 자동 복습은 묶음을 넣을 때 난도를 묻는다(모으는 중에는 묻지 않음) — 넣은 묶음이면 마지막에 고른 난도가 실제 난도', () => {
+  const { registerAutoReview, chooseAutoReviewGrade, autoReviewAskOf } = loadSource('utils/autoReview.ts');
   const pending = (id, end, minutes, start, endPage, extra = {}) => ({ id, subjectId: 's', subjectStageId: 's', timestamp: end, timeSpentMinutes: minutes, pagesRead: endPage - start + 1,
     startPage: start, endPage, pageCountIsExplicit: true, unitReviewPending: true, isCondensed: true, reviewEnabled: false, autoReviewQueued: true, ...extra });
-  // 30분(1시간이 안 참): 모으는 중인 묶음을 묻는다
+  // 30분(1시간이 안 참): 모으는 중이라 묻지 않는다(13일 "1시간이 채워지지도 않았는데 자동 복습 피드백이 뜬다")
   let logs = registerAutoReview([pending('a', '2026-11-03T01:00:00.000Z', 30, 1, 5)], 'a', 1);
-  let ask = autoReviewAskOf(logs, 's');
-  assert.deepEqual([ask.groupAt, ask.members.map(log => log.id)], [AUTO_WAITING_GROUP, ['a']]);
-  logs = chooseAutoReviewGrade(logs, 's', ask.groupAt, 'hard');
-  assert.equal(autoReviewAskOf(logs, 's'), null, 'asked once');
-  assert.ok(logs[0].unitReviewPending && logs[0].autoReviewWaiting && logs[0].autoReviewChosenGrade === 'hard', 'still collecting, the choice is kept');
-  // 3시간 뒤 40분: 모은 70분 ≥ 60분이라 둘이 한 묶음으로 들어가고, 적어 둔 난도로 넣는다. 넣은 묶음을 다시 묻는다
+  assert.equal(autoReviewAskOf(logs, 's'), null);
+  assert.ok(logs[0].unitReviewPending && logs[0].autoReviewWaiting && !logs[0].autoReviewAsk, 'still collecting, nothing asked');
+  // 전 판에서 모으는 중에 물음 표시가 붙은 기록도 묻지 않는다
+  assert.equal(autoReviewAskOf([{ ...logs[0], autoReviewAsk: true }], 's'), null);
+  // 3시간 뒤 40분: 모은 70분 ≥ 60분이라 둘이 한 묶음으로 들어가고, 이때 묻는다
   logs = registerAutoReview([...logs, pending('b', '2026-11-03T04:40:00.000Z', 40, 6, 8)], 'b', 1);
-  assert.ok(logs.every(log => log.autoReviewRegistered && !log.unitReviewPending && log.feedbackGrade === 'hard'));
-  ask = autoReviewAskOf(logs, 's');
+  assert.ok(logs.every(log => log.autoReviewRegistered && !log.unitReviewPending));
+  let ask = autoReviewAskOf(logs, 's');
   assert.deepEqual([ask.groupAt, ask.members.map(log => log.id)], ['2026-11-03T04:40:00.000Z', ['a', 'b']]);
   // 닫으면 그대로, 고르면 그 난도가 묶음 전체의 난도(다음 복습도 그 난도로)
   const before = logs.find(log => log.id === 'a').nextReviewDate;
