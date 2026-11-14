@@ -72,8 +72,8 @@ interface Props {
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
   /** 9일: 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다 */
   onExcludeFromReview?: (logIds: string[]) => void;
-  /** 12일: 학습 기록 보기의 "복습하기" · "복습과목 추가" */
-  onAddLogsToReview?: (logIds: string[], mode: 'basic' | 'subjects') => void;
+  /** 12일 · 14일: 학습 기록 보기의 "복습 넣기" · "복습 빼기"(기본 복습만) */
+  onChangeLogsReview?: (logIds: string[], action: 'add' | 'remove', hasReviewSubjects: boolean) => void;
   onDeleteLogs: (logIds: string[]) => void;
   /** 주면 학습과목 위쪽에 "임시값" 버튼이 생긴다: 측정 전인 지금 과목과 남은 후행과목의 한 장당 시간(임시값)을 고친다 */
   onUpdateSubjects?: (subjects: Subject[]) => void;
@@ -526,7 +526,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onAddLogsToReview }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onChangeLogsReview }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -1162,7 +1162,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               {noteCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{noteCount}</span>}
             </button>
           )}
-          {onAddLogsToReview && (
+          {onChangeLogsReview && (
             <button type="button" data-testid="open-study-record" onClick={() => setShowRecord(true)} aria-label="학습 기록 보기" className={headerButton}>
               <span aria-hidden="true">📋</span>학습 기록 보기
             </button>
@@ -1290,10 +1290,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       {detailPanel}
 
       {showFlowTutorial && <MeasurementTutorial onClose={() => setShowFlowTutorial(false)} />}
-      {showRecord && onAddLogsToReview && detailData && (
+      {showRecord && onChangeLogsReview && detailData && (
         // 복습 칸(기본 복습 · 복습과목)에서 열면 그 복습의 원래 과목 기록을 보인다
         <StudyRecordDialog subject={detailData.owner ?? detailData.subject} subjects={subjects} logs={logs}
-          onAddToReview={onAddLogsToReview} onClose={() => setShowRecord(false)} />
+          onChangeReview={onChangeLogsReview} onClose={() => setShowRecord(false)} />
       )}
       {showNotes && onUpdateReviewMemo && (
         <NoteSheet logs={logs} subjects={subjects} subjectId={noteSubjectId} subjectName={noteSubjectName}

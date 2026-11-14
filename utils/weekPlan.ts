@@ -112,7 +112,7 @@ export const buildDueReviewWeekCells = (
     .filter(log => log.subjectId === parent.id && !log.isCondensed && log.reviewEnabled !== false && !log.reviewParentSubjectId && log.pagesRead > 0)
     .filter(log => {
       const stage = stages.find(item => item.id === (log.subjectStageId || parent.id));
-      const ids = log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot : stage?.reviewSubjectIds || [];
+      const ids = log.reviewSubjectsSkipped ? [] : log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot : stage?.reviewSubjectIds || [];
       return ids.includes(review.id);
     })
     .map(log => ({

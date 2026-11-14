@@ -427,6 +427,7 @@ const findReviewSubjectOwner = (reviewSubjectId: string, sourceSubjects: Subject
 
 const getReviewSubjectIdsForLog = (log: StudyLog, parentSubject: Subject | undefined, sourceSubjects: Subject[]) => {
   if (log.isRepeatReview) return sourceSubjects.some(subject => subject.id === log.subjectId) ? [log.subjectId] : [];
+  if (log.reviewSubjectsSkipped) return [];
   const configuredIds = Array.isArray(log.reviewSubjectIdsSnapshot) && log.reviewSubjectIdsSnapshot.length > 0
     ? log.reviewSubjectIdsSnapshot
     : parentSubject

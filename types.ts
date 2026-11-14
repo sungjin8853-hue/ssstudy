@@ -237,6 +237,8 @@ export interface StudyLog {
   reviewGateLevel?: number;
   /** 9일: 학습량 입력 창에서 "기본 복습만 제외"로 저장한 기록(복습과목이 있을 때). 기본 복습(복습 문제)은 묻지 않고 복습과목만 한다 */
   basicReviewSkipped?: boolean;
+  /** 14일: 복습과목에는 넣지 않는다(기본 복습만). 학습 기록 보기의 "복습 넣기"는 기본 복습만 넣으므로, 복습 제외였던 기록에 붙는다 */
+  reviewSubjectsSkipped?: boolean;
   reviewGatePendingSchedules?: Record<string, ReviewQuestionSchedule>;
   reviewGatePendingSteps?: Record<string, number>;
   reviewGateRetry?: {

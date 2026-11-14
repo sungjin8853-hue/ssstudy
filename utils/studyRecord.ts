@@ -2,6 +2,7 @@ import type { StudyLog, Subject } from '../types';
 import { getLocalDateKey, getLogProgressPages, getLogStudyDate, parseStudyDate } from './schedule';
 import { INITIAL_REVIEW_DELAY_MS } from './review';
 import { registrationBoundaries, unitIndexAt } from './reviewUnits';
+import { excludeLogFromReview } from './reviewDelete';
 
 /**
  * 12일 "각 과목마다 학습 기록 보기": 날짜마다 그날 한 페이지들과 그 기록이 든 단위, 그리고 그 기록의 복습이
@@ -59,18 +60,25 @@ export const recordReviewState = (log: StudyLog, nowMs: number): RecordReviewSta
   return { kind: 'scheduled', nextAt: next, days: daysUntil(next, nowMs), stage };
 };
 
-/** "복습하기"를 보여 줄 기록: 기본 복습이 들어가 있지 않은 기록 */
+/** "복습 넣기"를 보여 줄 기록: 기본 복습이 들어가 있지 않은 기록 */
 export const canAddToReview = (state: RecordReviewState) =>
   state.kind === 'pending' || state.kind === 'waiting' || state.kind === 'excluded' || state.kind === 'basicSkipped';
 
+/** "복습 빼기"를 보여 줄 기록: 기본 복습이 들어가 있고 아직 기본 복습 차례인 기록(기본 복습을 마치고 복습과목 차례면 뺄 기본 복습이 없다) */
+export const canRemoveFromReview = (state: RecordReviewState) => state.kind === 'scheduled' && state.stage === 'basic';
+
 /**
- * "복습하기": 그 기록을 바로 복습에 넣는다. 처음 복습은 복습에 넣을 때처럼 2시간 뒤다(이미 복습과목 일정이 있는 기본 복습만 뺀 기록은 그 일정 그대로).
+ * 14일 "학습 기록 보기의 버튼들은 기본 복습 여부만 바꾼다(복습과목에 넣지 않는 것은 저장할 때 복습 제외 두 번 누르기뿐)".
+ * "복습 넣기": 그 기록의 기본 복습을 바로 넣는다. 처음 복습은 복습에 넣을 때처럼 2시간 뒤다(이미 복습과목 일정이 있는 기본 복습만 뺀 기록은 그 일정 그대로).
+ * 복습 제외(복습과목까지 뺀) 기록은 기본 복습만 넣고 복습과목은 계속 빼 둔다. 대기 기록은 원래대로 복습과목도 이어진다.
  * 단위는 바꾸지 않는다: 넣은 때(reviewRegisteredAt)를 새로 적지 않아 그 기록은 원래 공부한 때의 단위에 남고, 단위 경계도 생기지 않는다.
  */
 export const addLogToReview = (log: StudyLog, nowMs: number): StudyLog => {
   const keepSchedule = log.basicReviewSkipped && !log.unitReviewPending && log.reviewEnabled !== false && !log.isCondensed && Boolean(log.nextReviewDate);
+  const wasExcluded = !log.unitReviewPending && (log.reviewEnabled === false || log.isCondensed) && !log.isReviewed;
   return {
     ...log,
+    ...(wasExcluded ? { reviewSubjectsSkipped: true } : {}),
     unitReviewPending: undefined,
     autoReviewWaiting: undefined,
     autoReviewQueued: undefined,
@@ -86,18 +94,14 @@ export const addLogToReview = (log: StudyLog, nowMs: number): StudyLog => {
 };
 
 /**
- * "복습과목 추가"를 보여 줄 기록: 복습과목까지 뺀 기록(복습 제외)인데 그 기록의 단계에 복습과목이 있을 때.
- * 대기 · 모으는 중인 기록은 복습에 넣을 때 복습과목도 함께 들어가고, 기본 복습만 뺀 기록은 이미 복습과목을 한다.
+ * "복습 빼기": 기본 복습만 뺀다. 복습과목이 이어지는 기록이면 기본 복습만 제외한 기록이 되어(일정 그대로) 복습과목은 그대로 하고,
+ * 복습과목이 없거나 빼 둔 기록이면 복습 제외 기록이 된다.
  */
-export const canAddReviewSubjects = (state: RecordReviewState, hasReviewSubjects: boolean) => hasReviewSubjects && state.kind === 'excluded';
-
-/** "복습과목 추가": 기본 복습은 빼 둔 채 복습과목만 하도록 넣는다(기본 복습만 제외한 기록과 같다). 처음은 2시간 뒤, 단위는 그대로 */
-export const addLogToReviewSubjects = (log: StudyLog, nowMs: number): StudyLog => ({
-  ...addLogToReview(log, nowMs),
-  basicReviewSkipped: true,
-  reviewStep: 0,
-  nextReviewDate: new Date(nowMs + INITIAL_REVIEW_DELAY_MS).toISOString()
-});
+export const removeLogFromReview = (log: StudyLog, hasReviewSubjects: boolean): StudyLog => (
+  hasReviewSubjects && !log.reviewSubjectsSkipped
+    ? { ...log, basicReviewSkipped: true }
+    : (({ reviewSubjectsSkipped: _skip, ...rest }) => excludeLogFromReview(rest as StudyLog))(log)
+);
 
 /** 과목의 공부 기록을 날짜별로(최근 날짜부터, 한 날 안에서는 먼저 한 것부터) */
 export const buildStudyRecord = (subject: Pick<Subject, 'id'>, logs: readonly StudyLog[], nowMs: number): StudyRecordDay[] => {

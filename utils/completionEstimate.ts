@@ -109,7 +109,7 @@ export const estimateReviewSubjectCompletion = (
   const stages = Array.isArray(stage) ? stage : [stage];
   const events = logs
     .filter(log => {
-      if (log.subjectId !== parentSubject.id || log.isCondensed || log.reviewEnabled === false) return false;
+      if (log.subjectId !== parentSubject.id || log.isCondensed || log.reviewEnabled === false || log.reviewSubjectsSkipped) return false;
       const logStage = stages.find(item => item.id === (log.subjectStageId || parentSubject.id));
       if (!logStage) return false;
       const reviewSubjectIds = Array.isArray(log.reviewSubjectIdsSnapshot) && log.reviewSubjectIdsSnapshot.length > 0

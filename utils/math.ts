@@ -344,7 +344,7 @@ export const calculateReviewSubjectTiming = (
     return changes.get(key)!;
   };
   for (const log of reviewLogs) {
-    const sequence = log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot
+    const sequence = log.reviewSubjectsSkipped ? [] : log.reviewSubjectIdsSnapshot?.length ? log.reviewSubjectIdsSnapshot
       : subjects.find(subject => subject.id === parentSubjectId)?.reviewSubjectIds || reviewSubjectIds || [];
     const index = sequence.indexOf(subjectId);
     const reviewNumber = (log.reviewStep || 0) + 1;
