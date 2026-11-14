@@ -5738,7 +5738,7 @@ test('page unit review registration: exceptions keep the old behaviour', () => {
 
   // App 연결: 세션 저장과 오늘 화면 고쳐 저장은 대기 규칙을 쓰고, "복습에 넣기"는 과목 카드 버튼이 누른다
   const app = fs.readFileSync(path.resolve(__dirname, '..', 'App.tsx'), 'utf8');
-  assert.ok(app.includes('applyUnitReviewRegistration(subject, prev, newLog)') && app.includes('applyUnitReviewRegistration(subject, rest, enrichedLog)') && app.includes('keepsUnitReviewPending'));
+  assert.ok(app.includes('applyUnitReviewRegistration(subject, base, newLog)') && app.includes('applyUnitReviewRegistration(subject, rest, enrichedLog)') && app.includes('keepsUnitReviewPending'));
   assert.ok(app.includes('registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now)') && app.includes('onRegisterReview={handleRegisterReview}'));
   const today = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.equal((today.match(/\|\| log\.unitReviewPending/g) || []).length, 2, 'a waiting record counts as a review-included record in the edit modal');
@@ -5880,7 +5880,7 @@ test('pomodoro rounds come from the estimated time: up to 25 min is one round, l
   // 공부 화면: 뽀모도로 시간(▲로 늘린 값 그대로)이 지날 때마다 한 회이고, 끝나면 알람(차임 3번)이 울린다. 알림만 낸다
   const logger = fs.readFileSync(path.resolve(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   assert.ok(!logger.includes('studyPomodoroByPages') && !logger.includes('Math.floor(attackCompletedPages / pomodoroPageTarget!)'), 'no page-count rounds any more');
-  assert.ok(logger.includes("const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (pomodoroMinutes * 60));"));
+  assert.ok(logger.includes("const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (sessionPomodoroMinutes * 60));"), '14일: 단원이 있으면 단원 끝까지 길이');
   assert.equal(loadSource('components/SessionLogger.tsx').POMODORO_ALARM_REPEATS, 3);
   const studyStart = logger.indexOf('const studyPomodoroSeenRef');
   const studyEffect = logger.slice(studyStart, logger.indexOf('}, [step, seconds, studyPomodoroRound]);', studyStart));
@@ -5990,7 +5990,7 @@ test('pomodoro ▲▼ buttons: stacked vertically right beside the pomodoro leng
   assert.equal((summary.match(/adjust=\{<PomodoroMinutesStepper \/>\}/g) || []).length, 2);
   // 학습·복습의 모든 계산이 같은 저장 값을 쓴다(25가 굳어 있지 않다)
   assert.ok(!/POMODORO_MINUTES/.test(logger.replace(/^import .*$/gm, '')) && !/\{POMODORO_MINUTES\}|String\(POMODORO_MINUTES\)/.test(summary));
-  assert.ok(logger.includes('getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, pomodoroMinutes)') && logger.includes('minutes: pomodoroMinutes'));
+  assert.ok(logger.includes('getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, sessionPomodoroMinutes)') && logger.includes('minutes: pomodoroMinutes') && logger.includes('chapterBoundedPomodoroMinutes(unitTimePerPage || averageTimePerPage, sessionChapterPagesLeft, pomodoroMinutes)'));
 });
 
 test('pomodoro end sound: a separate chime (not the page-turn sound), unlocked when a study or review starts, and it counts again if the length is changed mid-run', () => {
@@ -12331,4 +12331,38 @@ test('13일 fix-126: tapping the blurred area beside the 학습 기록 추가 wi
   const open = summary.slice(summary.indexOf('data-testid="amount-change-dialog"'), summary.indexOf('data-testid="amount-change-dialog"') + 300);
   assert.ok(!/^[^>]*onClick=/.test(open), 'the backdrop has no click-to-close');
   assert.ok(summary.includes('aria-label="학습 기록 추가 닫기"'));
+});
+
+test('14일 fix-129: 이어서 풀기 saves are left out of the efficiency until the subject is finished with 완료, then they count together (total time ÷ total pages)', () => {
+  const { calculateUnitEfficiency, calculateCurrentUnitEfficiency } = loadSource('utils/pageGrowth.ts');
+  const done = { pagesRead: 10, timeSpentMinutes: 20, timestamp: '2026-11-10T01:00:00.000Z' };
+  const partA = { pagesRead: 4, timeSpentMinutes: 20, timestamp: '2026-11-12T01:00:00.000Z', continueLater: true };
+  const partB = { pagesRead: 2, timeSpentMinutes: 10, timestamp: '2026-11-13T01:00:00.000Z', continueLater: true };
+  assert.equal(calculateUnitEfficiency([done, partA, partB]).averageTimePerPage, 2, 'open parts do not count yet');
+  assert.equal(calculateCurrentUnitEfficiency([done, partA, partB]).averageTimePerPage, 2);
+  // 완료: 앞 기록들의 표시가 지워지고 마지막 기록과 함께 들어간다 → (20 + 20 + 10 + 10) ÷ (10 + 4 + 2 + 4)
+  const final = { pagesRead: 4, timeSpentMinutes: 10, timestamp: '2026-11-14T01:00:00.000Z' };
+  const closed = [done, { ...partA, continueLater: undefined }, { ...partB, continueLater: undefined }, final];
+  assert.equal(calculateUnitEfficiency(closed).averageTimePerPage, 60 / 20);
+  const app = fs.readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
+  assert.ok(app.includes("const closing = new Set(newLog.continuedFromIds ?? []);"));
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes("...(!activeReviewRun && continueMode ? { continueLater: true }"));
+  assert.ok(logger.includes('data-testid="continue-later"'));
+  assert.ok(logger.includes('elapsed={formatTime(resumeBaseSeconds + seconds)}'), 'the timer goes on from the time already spent');
+});
+
+test('14일 fix-129: with chapters the pomodoro stops at the chapter end — the shorter of the set length and the time to the chapter end rounded up to 5 minutes', () => {
+  const { chapterBoundedPomodoroMinutes, chapterPagesLeftFrom } = loadSource('utils/measurement.ts');
+  const chapters = [{ startPage: 1, endPage: 10 }, { startPage: 20, endPage: 30 }];
+  assert.equal(chapterPagesLeftFrom(chapters, 8), 3);
+  assert.equal(chapterPagesLeftFrom(chapters, 15), 11, 'between chapters: the next chapter whole');
+  assert.equal(chapterPagesLeftFrom(chapters, 31), null);
+  assert.equal(chapterPagesLeftFrom([], 5), null);
+  assert.equal(chapterBoundedPomodoroMinutes(2.5, 3, 25), 10, '3 pages × 2.5 min = 7.5 → 10');
+  assert.equal(chapterBoundedPomodoroMinutes(2.5, 4, 25), 10, '10 stays 10');
+  assert.equal(chapterBoundedPomodoroMinutes(2.5, 30, 25), 25, 'farther than the set length: the set length');
+  assert.equal(chapterBoundedPomodoroMinutes(0.5, 2, 25), 5, 'at least 5');
+  assert.equal(chapterBoundedPomodoroMinutes(0, 3, 25), 25, 'speed unknown: the set length');
+  assert.equal(chapterBoundedPomodoroMinutes(2, null, 30), 30, 'no chapters');
 });

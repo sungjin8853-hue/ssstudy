@@ -42,6 +42,8 @@ export interface PageEfficiencySample {
   /** 학습 기록이면: 복습에 넣은 때(그 단위에 든다) · 아직 기다리는 중(지금 채우는 단위). 단원을 골라 넣으면 시각 순서와 단위가 다를 수 있다 */
   reviewRegisteredAt?: string;
   unitReviewPending?: boolean;
+  /** 이어서 풀기로 저장하고 아직 완료로 끝내지 않은 기록(효율에서 뺀다) */
+  continueLater?: boolean;
 }
 
 export const hasMeasurementOnDate = (logs: PageEfficiencySample[], date: string) => logs.some(log => (
@@ -65,8 +67,7 @@ export const buildPageEfficiencyUnits = (logs: PageEfficiencySample[], pageUnit?
     attackMinutes = 0;
     rateSquares = 0;
   };
-  logs.filter(log => Number.isFinite(log.pagesRead) && log.pagesRead > 0
-    && Number.isFinite(log.timeSpentMinutes) && log.timeSpentMinutes > 0 && Number.isFinite(Date.parse(log.timestamp)))
+  logs.filter(isMeasuredSample)
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
     .forEach(log => {
       let remaining = log.pagesRead;
@@ -119,7 +120,8 @@ export interface EfficiencyWindow {
   complete: boolean;
 }
 
-const isMeasuredSample = (log: PageEfficiencySample) => Number.isFinite(log.pagesRead) && log.pagesRead > 0
+// 14일: "이어서 풀기"로 저장하고 아직 완료로 끝내지 않은 기록은 효율에서 뺀다. 완료로 끝내면 앞 기록들이 함께 들어 합산 시간 ÷ 합산 장수가 된다
+const isMeasuredSample = (log: PageEfficiencySample) => !log.continueLater && Number.isFinite(log.pagesRead) && log.pagesRead > 0
   && Number.isFinite(log.timeSpentMinutes) && log.timeSpentMinutes > 0 && Number.isFinite(Date.parse(log.timestamp));
 
 const chronological = <T extends PageEfficiencySample>(logs: T[]) => logs.filter(isMeasuredSample)

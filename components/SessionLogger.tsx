@@ -13,7 +13,7 @@ import { calculateCurrentUnitEfficiency } from '../utils/pageGrowth';
 import { reviewCompletionBoundaries } from '../utils/reviewUnits';
 import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage, willWaitForReview } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
-import { createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
+import { chapterBoundedPomodoroMinutes, chapterPagesLeftFrom, createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
 import { REVIEW_MASK_INTERVAL_MS, calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
@@ -963,6 +963,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [minutes, setMinutes] = useState(0);
   const [timerMode, setTimerMode] = useState<TimerMode>('remainingPages');
   const [seconds, setSeconds] = useState(0);
+  // 14일 "이어서 풀기": 이번 측정을 이어서 풀기로 저장하는 중(효율 계산에서 빠지고, 다음에 이어서 푼다)
+  const [continueMode, setContinueMode] = useState(false);
   const [studySeconds, setStudySeconds] = useState(0);
   const [organizationSeconds, setOrganizationSeconds] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
@@ -1188,16 +1190,27 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const taskSubject = selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.subject : selectedRunQueueItem.reviewGroup.subject;
     if (!taskSubject) return null;
     const repeatLog = selectedRunQueueItem.kind === 'review' ? selectedRunQueueItem.reviewGroup.logs.find(log => log.isRepeatReview) : undefined;
+    // 14일: 단원이 있는 학습과목은 뽀모도로를 지금 단원 끝까지로(정해 둔 길이와 단원 끝까지 예상 시간을 5분 단위로 올린 값 중 짧은 쪽)
+    if (selectedRunQueueItem.kind === 'study') {
+      const stage = getActiveSubjectStage(taskSubject);
+      const chapterLeft = chapterPagesLeftFrom(getStageChapters(taskSubject, stage), stage?.currentPage || taskSubject.completedPages + 1);
+      const rate = calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === taskSubject.id)).averageTimePerPage || selectedRunQueueItem.studyItem.averageTimePerPage;
+      const minutes = chapterBoundedPomodoroMinutes(rate, chapterLeft, pomodoroMinutes);
+      const pages = getPomodoroPageTarget(rate, getMeasurementRemainingPages(taskSubject), minutes);
+      const firstPages = pages !== null && chapterLeft !== null ? Math.min(pages, chapterLeft) : pages;
+      const remainingDay = selectedRunQueueItem.studyItem.remainingDayPages;
+      // 첫 번은 단원 끝까지, 그다음부터는 정해 둔 길이로 센다
+      const fullPages = getPomodoroPageTarget(rate, getMeasurementRemainingPages(taskSubject), pomodoroMinutes);
+      const sessions = minutes < pomodoroMinutes && firstPages && fullPages && remainingDay > 0
+        ? 1 + Math.ceil(Math.max(0, remainingDay - firstPages) / fullPages - 1e-9) : undefined;
+      return { subjectId: taskSubject.id, minutes, remainingTaskPages: remainingDay, pages: firstPages, ...(sessions !== undefined ? { sessions } : {}) };
+    }
     return { subjectId: taskSubject.id, minutes: pomodoroMinutes,
-      remainingTaskPages: selectedRunQueueItem.kind === 'study' ? selectedRunQueueItem.studyItem.remainingDayPages
-        : selectedRunQueueItem.reviewGroup.averageTimePerPage > 0
+      remainingTaskPages: selectedRunQueueItem.reviewGroup.averageTimePerPage > 0
           ? selectedRunQueueItem.reviewGroup.estimatedMinutes / selectedRunQueueItem.reviewGroup.averageTimePerPage
           : selectedRunQueueItem.reviewGroup.logs.reduce((sum, log) => sum + log.pagesRead, 0),
-      // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일): 학습과목은 "복습에 넣기" 사이, 복습과목은 복습 한 번이 한 단위. 기본 복습은 그대로
-      pages: getPomodoroPageTarget(selectedRunQueueItem.kind === 'study'
-        ? calculateCurrentUnitEfficiency(logs.filter(log => log.subjectId === taskSubject.id)).averageTimePerPage
-          || selectedRunQueueItem.studyItem.averageTimePerPage
-        : selectedRunQueueItem.reviewGroup.reviewType === 'subject'
+      // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일): 학습과목은 "복습에 넣기" 사이(위), 복습과목은 복습 한 번이 한 단위. 기본 복습은 그대로
+      pages: getPomodoroPageTarget(selectedRunQueueItem.reviewGroup.reviewType === 'subject'
           ? reviewUnitEfficiencyOf(selectedRunQueueItem.reviewGroup.parentSubjectId, selectedRunQueueItem.reviewGroup.subjectId) || selectedRunQueueItem.reviewGroup.averageTimePerPage
           : selectedRunQueueItem.reviewGroup.averageTimePerPage,
         repeatLog ? getRepeatedReviewRange(repeatLog, taskSubject).remainingPages : getMeasurementRemainingPages(taskSubject), pomodoroMinutes) };
@@ -1216,6 +1229,17 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const selectSubjectForMeasurement = (subject: Subject) => {
     setSubjectId(subject.id);
   };
+
+  // 14일: 그 과목에 이어서 풀기로 저장해 두고 아직 완료로 끝내지 않은 기록들(학습과목만). 다시 재면 시간 · 장수가 그 뒤로 이어진다
+  const openContinuationsOf = (id: string) => logs.filter(log => log.subjectId === id && log.continueLater && !log.reviewParentSubjectId && !log.isRepeatReview);
+  const resumeSummaryOf = (id: string) => {
+    const open = openContinuationsOf(id);
+    if (!open.length) return null;
+    return { ids: open.map(log => log.id), minutes: open.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0),
+      pages: open.reduce((sum, log) => sum + (Number(log.pagesRead) || 0), 0) };
+  };
+  const activeResume = !activeReviewRun && subjectId ? resumeSummaryOf(subjectId) : null;
+  const resumeBaseSeconds = activeResume ? Math.round(activeResume.minutes * 60) : 0;
 
   const selectedSubjectLogs = useMemo(
     () => logs.filter(log => log.subjectId === subjectId && log.pagesRead > 0 && log.timeSpentMinutes > 0),
@@ -1306,7 +1330,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const averageSecondsPerPage = unitAttackPerPage > 0 ? Math.max(1, Math.round(unitAttackPerPage * 60)) : 0;
   // 뽀모도로 장수는 이번 단위의 평균 효율로 정한다(4일)
   const unitTimePerPage = sessionUnit.averageTimePerPage;
-  const pomodoroPageTarget = getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, pomodoroMinutes);
+  // 14일: 단원이 있으면 이번 뽀모도로는 지금 단원 끝까지다(다음 단원으로 이어 잡지 않는다). 길이는 정해 둔 길이와 단원 끝까지 예상 시간(5분 단위 올림) 중 짧은 쪽
+  const sessionChapterPagesLeft = stageChapters.length > 0 && !activeReviewRun
+    ? chapterPagesLeftFrom(stageChapters, activeSubjectStage?.currentPage || 1) : null;
+  const sessionPomodoroMinutes = chapterBoundedPomodoroMinutes(unitTimePerPage || averageTimePerPage, sessionChapterPagesLeft, pomodoroMinutes);
+  const pomodoroPageTarget = (() => {
+    const target = getPomodoroPageTarget(unitTimePerPage || averageTimePerPage, remainingSubjectPages, sessionPomodoroMinutes);
+    return target !== null && sessionChapterPagesLeft !== null ? Math.min(target, sessionChapterPagesLeft) : target;
+  })();
   const timeTargetPages = attackCompletedPages;
   const progressBasePages = activeReviewRun ? reviewStartPage : activeSubjectStage?.currentPage || 1;
   const progressCurrentPages = stageChapters.length > 0
@@ -1539,7 +1570,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 새 측정이 시작되면(풀이 시간 0) 처음부터 다시 센다.
   // 뽀모도로 시간(기본 25분)이 지날 때마다 한 회다(27일 요청: ▲로 늘린 시간이 바로 반영되고, 시간이 끝나면 알람이 울린다).
   // 예전에는 장당 시간을 알면 목표 장수를 풀 때마다 한 회라서 시간을 늘려도 끝나는 때가 그대로였다.
-  const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (pomodoroMinutes * 60));
+  const studyPomodoroRound = step !== 'timer' ? 0 : Math.floor(seconds / (sessionPomodoroMinutes * 60));
   const studyPomodoroSeenRef = useRef(0);
   const [dismissedPomodoroRound, setDismissedPomodoroRound] = useState(0);
   useEffect(() => {
@@ -1676,6 +1707,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const resetAll = () => {
     setStep('idle');
     setCutEndPage(null);
+    setContinueMode(false);
     setCutError('');
     setSeconds(0);
     setStudySeconds(0);
@@ -2404,7 +2436,10 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       reviewMemo: savedMemo || undefined,
       reviewMemoDocument: sheet ? undefined : reviewMemoDocument,
       reviewEnabled: !shouldSkipReview,
-      ...(skipBasicOnly ? { basicReviewSkipped: true } : {})
+      ...(skipBasicOnly ? { basicReviewSkipped: true } : {}),
+      // 14일: 이어서 풀기로 저장하면 효율 계산에서 빠지고, 완료로 끝내면 앞의 이어서 풀기 기록들을 함께 효율에 넣는다
+      ...(!activeReviewRun && continueMode ? { continueLater: true }
+        : !activeReviewRun && activeResume ? { continuedFromIds: activeResume.ids } : {})
     };
   };
 
@@ -3036,7 +3071,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       startButton: selectedRunQueueItem ? (
         <StartButton kind={selectedRunQueueItem.kind} onClick={() => selectedRunQueueItem.kind === 'review'
           ? startReviewGroup(selectedRunQueueItem.reviewGroup)
-          : startStudyOrderItem(selectedRunQueueItem.studyItem)} />
+          : startStudyOrderItem(selectedRunQueueItem.studyItem)}
+          resume={selectedRunQueueItem.kind === 'study' ? (() => {
+            const summary = resumeSummaryOf(selectedRunQueueItem.studyItem.subject.id);
+            return summary ? { minutes: summary.minutes, pages: summary.pages, label: getPageLabel(selectedRunQueueItem.studyItem.subject) } : null;
+          })() : null} />
       ) : null,
       currentRowDone: Boolean(viewingDoneCard),
       reviewTaskLogs: selectedReviewGroup && !viewingDoneCard ? selectedReviewGroup.logs : undefined,
@@ -3295,9 +3334,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
             <div className="flex flex-wrap items-stretch gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
                 {/* 넓은 화면에서 한 줄에 놓되, 측정 묶음은 글보다 좁아지지 않는다(좁으면 진척도가 아래 줄로 내려간다: 1일 "이번 측정이 진척도에 가려짐") */}
                 <div data-testid="measurement-group" className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-slate-50 px-3 py-3 sm:gap-x-4 sm:px-4 lg:w-auto lg:flex-[2_0_auto] lg:flex-nowrap">
-                <PomodoroLength className="!bg-transparent !p-0" />
+                <PomodoroLength className="!bg-transparent !p-0" effectiveMinutes={sessionPomodoroMinutes} />
                 <div className="flex min-w-0 flex-1 items-center gap-3 border-l border-slate-200 pl-3 sm:gap-4 sm:pl-4">
-                  <MeasurementProgress pages={timeTargetPages} target={pomodoroPageTarget} elapsed={formatTime(seconds)} label={pageLabel} />
+                  <MeasurementProgress pages={timeTargetPages} target={pomodoroPageTarget} elapsed={formatTime(resumeBaseSeconds + seconds)} label={pageLabel} />
                 </div>
                 </div>
               <div className="flex w-full min-w-0 items-center rounded-xl bg-slate-50 px-4 py-3 sm:flex-1 sm:basis-48 lg:w-auto">
@@ -3343,7 +3382,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               >
                 {isTimerRunning ? '일시정지' : '다시 시작'}
               </button>
-              <button onClick={handleTimerComplete} className="flex-1 rounded-xl bg-rose-500 px-3 py-3.5 text-sm font-black text-white shadow-sm transition-colors hover:bg-rose-600">완료</button>
+              {!activeReviewRun && (
+                // 14일: 일시정지 · 완료 옆의 "이어서 풀기": 완료처럼 저장하되 효율은 계산하지 않고, 다음에 이 과목을 이어서 푼다
+                <button type="button" data-testid="continue-later" onClick={() => { setContinueMode(true); handleTimerComplete(); }}
+                  className="flex-1 rounded-xl bg-teal-600 px-3 py-3.5 text-sm font-black text-white shadow-sm transition-colors hover:bg-teal-700">이어서 풀기</button>
+              )}
+              <button onClick={() => { setContinueMode(false); handleTimerComplete(); }} className="flex-1 rounded-xl bg-rose-500 px-3 py-3.5 text-sm font-black text-white shadow-sm transition-colors hover:bg-rose-600">완료</button>
             </div>
             </div>
             )}
@@ -3497,9 +3541,23 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
               </section>;
             })()}
 
+            {!activeReviewRun && (continueMode || activeResume) && (
+              <section data-testid="continue-later-note" aria-label="이어서 풀기"
+                className={`mb-3 flex w-full flex-wrap items-center justify-between gap-2 rounded-2xl border-2 px-4 py-3 ${continueMode ? 'border-teal-300 bg-teal-50' : 'border-indigo-200 bg-indigo-50'}`}>
+                <p className={`text-sm font-bold ${continueMode ? 'text-teal-900' : 'text-indigo-900'}`}>
+                  {continueMode
+                    ? '이어서 풀기로 저장해요. 진척과 공부 시간은 그대로 쌓이고, 효율은 나중에 완료로 끝낼 때 앞 기록과 합쳐 계산해요.'
+                    : `완료로 저장해요. 앞의 이어서 풀기 ${activeResume!.ids.length}번(${Math.round(activeResume!.minutes)}분 · ${formatPageNumber(activeResume!.pages)}${pageLabel})과 합친 시간 ÷ 장수로 효율을 정해요.`}
+                </p>
+                <button type="button" data-testid="continue-later-toggle" onClick={() => setContinueMode(value => !value)}
+                  className="shrink-0 rounded-xl border-2 border-current bg-white px-3 py-1.5 text-sm font-black text-slate-700">
+                  {continueMode ? '완료로 저장' : '이어서 풀기로 저장'}
+                </button>
+              </section>
+            )}
             <div className={activeReviewRun ? 'grid w-full gap-3 sm:grid-cols-3' : 'w-full'}>
-              <button onClick={handleFinalSave} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg shadow-lg">
-                저장 완료
+              <button onClick={handleFinalSave} className={`w-full py-4 text-white rounded-2xl font-black text-lg shadow-lg ${!activeReviewRun && continueMode ? 'bg-teal-600' : 'bg-green-600'}`}>
+                {!activeReviewRun && continueMode ? '이어서 풀기로 저장' : '저장 완료'}
               </button>
               {activeReviewRun && (
                 <button onClick={() => handleSwitchToNextReviewSubject()} className="w-full py-4 bg-rose-600 text-white rounded-2xl font-black text-lg shadow-lg shadow-rose-100">

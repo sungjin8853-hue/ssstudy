@@ -494,9 +494,16 @@ export const PomodoroSummary: React.FC<{
   nextChapterLabel?: string | null;
   /** "공부 시작"과 끝날 날짜 사이에 놓는 분류(학습 · 복습과목)와 필수 표시 */
   badges?: React.ReactNode;
-}> = ({ pages, efficiency, attackEfficiency, remainingTaskPages, growth, efficiencySlot, top, side, growthTop, start, label = DEFAULT_PAGE_LABEL, endLabel, nextChapterLabel, badges }) => {
-  const [pomodoroMinutes] = usePomodoroMinutes();
-  const sessions = remainingTaskPages === undefined ? null : getRemainingPomodoroSessions(remainingTaskPages, pages);
+  /** 14일: 이번 뽀모도로 길이(단원 끝까지가 더 짧으면 그 길이). 없으면 정해 둔 길이 */
+  minutes?: number;
+  /** 14일: 첫 번이 단원 끝까지로 짧을 때의 필요 횟수 */
+  sessionsOverride?: number | null;
+}> = ({ pages, efficiency, attackEfficiency, remainingTaskPages, growth, efficiencySlot, top, side, growthTop, start, label = DEFAULT_PAGE_LABEL, endLabel, nextChapterLabel, badges, minutes, sessionsOverride }) => {
+  const [setting] = usePomodoroMinutes();
+  const chapterBounded = minutes !== undefined && minutes < setting;
+  const pomodoroMinutes = chapterBounded ? minutes : setting;
+  const sessions = chapterBounded && sessionsOverride != null ? sessionsOverride
+    : remainingTaskPages === undefined ? null : getRemainingPomodoroSessions(remainingTaskPages, pages);
   return <div data-testid="pomodoro-growth-strip" className="grid gap-3 lg:grid-cols-2 lg:items-stretch lg:gap-4">
     <section aria-label="공부 시작" className="flex min-w-0 flex-col rounded-2xl border-2 border-slate-500 bg-white px-5 pb-1.5 pt-3.5">
       <CellTitle endLabel={endLabel} nextChapterLabel={nextChapterLabel} badges={badges}>공부 시작</CellTitle>
@@ -513,7 +520,7 @@ export const PomodoroSummary: React.FC<{
           </HelpPopover>
         </div>
         <div className="mt-1 flex flex-wrap items-stretch gap-x-4 gap-y-2">
-          <PomodoroStat label="한 번에" value={String(pomodoroMinutes)} unit="분" adjust={<PomodoroMinutesStepper />} />
+          <PomodoroStat label={chapterBounded ? '단원 끝까지' : '한 번에'} value={String(pomodoroMinutes)} unit="분" adjust={<PomodoroMinutesStepper />} />
           {pages !== null && pages > 0 && <PomodoroStat label={`풀 ${pageWord(label) === '페이지' ? '장수' : pageWord(label)}`} value={formatNumber(pages)} unit={label} />}
           {sessions !== null && <PomodoroStat label="필요 횟수" value={String(sessions)} unit="회" />}
         </div>
@@ -1255,7 +1262,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         </>
       ) : (
         <>
-          <PomodoroSummary label={pageLabel} endLabel={endLabel} nextChapterLabel={nextChapterLabel} badges={kindBadges} pages={detailPomodoroPages} efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency} remainingTaskPages={pomodoroPlan?.subjectId === detailData.subject.id
+          <PomodoroSummary label={pageLabel} endLabel={endLabel} nextChapterLabel={nextChapterLabel} badges={kindBadges} pages={detailPomodoroPages}
+            minutes={pomodoroPlan?.subjectId === detailData.subject.id ? pomodoroPlan.minutes : undefined}
+            sessionsOverride={pomodoroPlan?.subjectId === detailData.subject.id ? pomodoroPlan.sessions : undefined} efficiency={detailData.efficiency} attackEfficiency={detailData.attackEfficiency} remainingTaskPages={pomodoroPlan?.subjectId === detailData.subject.id
             ? pomodoroPlan.remainingTaskPages : undefined}
             top={<>
               {detailData.owner && <div className="flex items-baseline gap-2.5">

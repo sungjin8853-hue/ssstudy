@@ -520,7 +520,10 @@ const App: React.FC = () => {
     };
     // 페이지 단위가 있는 과목은 세션마다 복습을 등록하지 않고, 단위 끝 페이지까지 풀었을 때 그 단위 범위를 등록한다.
     setLogs(prev => {
-      const result = applyUnitReviewRegistration(subject, prev, newLog);
+      // 14일: 완료로 끝낸 기록이 이어 받은 "이어서 풀기" 기록들은 이제 효율에 든다(합산 시간 ÷ 합산 장수)
+      const closing = new Set(newLog.continuedFromIds ?? []);
+      const base = closing.size ? prev.map(item => (closing.has(item.id) ? { ...item, continueLater: undefined } : item)) : prev;
+      const result = applyUnitReviewRegistration(subject, base, newLog);
       // 자동 복습 넣기를 켠 과목은 아래 효과가 모으다가(정한 공부 시간이 차면) 노트 합치기와 함께 복습에 넣는다(3일, 4일).
       // "바로 복습 넣기"로 저장한 기록은 곧바로 넣는다. 복습을 기다리지 않는 기록에는 그 표시를 남기지 않는다
       const waits = result.incoming.unitReviewPending;

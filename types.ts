@@ -239,6 +239,10 @@ export interface StudyLog {
   basicReviewSkipped?: boolean;
   /** 14일: 복습과목에는 넣지 않는다(기본 복습만). 학습 기록 보기의 "복습 넣기"는 기본 복습만 넣으므로, 복습 제외였던 기록에 붙는다 */
   reviewSubjectsSkipped?: boolean;
+  /** 14일 "이어서 풀기"로 저장한 기록: 진척 · 공부 시간은 그대로 쌓이지만, 완료로 끝내기 전까지 효율(장당 시간) 계산에서 빠진다 */
+  continueLater?: boolean;
+  /** 14일: 완료로 끝낸 기록이 이어 받은 "이어서 풀기" 기록들. 저장할 때 그 기록들의 continueLater를 지워 함께 효율에 든다(합산 시간 ÷ 합산 장수) */
+  continuedFromIds?: string[];
   reviewGatePendingSchedules?: Record<string, ReviewQuestionSchedule>;
   reviewGatePendingSteps?: Record<string, number>;
   reviewGateRetry?: {

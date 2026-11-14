@@ -481,12 +481,16 @@ export const DoneStartButton: React.FC<{ label?: string }> = ({ label = '오늘 
   </button>
 );
 
-/** 학습 시작 / 복습 시작 큰 버튼. */
-export const StartButton: React.FC<{ kind: 'study' | 'review'; onClick: () => void }> = ({ kind, onClick }) => (
-  <button type="button" onClick={onClick}
-    className={`flex h-[68px] w-full items-center justify-center gap-2.5 rounded-2xl text-xl font-black text-white transition-transform active:translate-y-0.5 ${kind === 'review'
-      ? 'bg-amber-700 shadow-[0_4px_0_#78350F] hover:bg-amber-800' : 'bg-indigo-600 shadow-[0_4px_0_#3730A3] hover:bg-indigo-700'}`}>
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z" /></svg>
-    {kind === 'review' ? '복습 시작' : '학습 시작'}
+/** 학습 시작 / 복습 시작 큰 버튼. 14일: "이어서 풀기"로 저장해 둔 과목은 청록색 "이어서 풀기"(resume: 앞에서 푼 시간 · 장수) */
+export const StartButton: React.FC<{ kind: 'study' | 'review'; onClick: () => void; resume?: { minutes: number; pages: number; label: string } | null }> = ({ kind, onClick, resume }) => (
+  <button type="button" onClick={onClick} data-testid={resume ? 'start-resume' : undefined}
+    className={`flex h-[68px] w-full flex-col items-center justify-center rounded-2xl text-xl font-black text-white transition-transform active:translate-y-0.5 ${resume
+      ? 'bg-teal-600 shadow-[0_4px_0_#115E59] hover:bg-teal-700'
+      : kind === 'review' ? 'bg-amber-700 shadow-[0_4px_0_#78350F] hover:bg-amber-800' : 'bg-indigo-600 shadow-[0_4px_0_#3730A3] hover:bg-indigo-700'}`}>
+    <span className="flex items-center gap-2.5">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z" /></svg>
+      {resume ? '이어서 풀기' : kind === 'review' ? '복습 시작' : '학습 시작'}
+    </span>
+    {resume && <span className="text-[13px] font-bold text-teal-50">앞에서 {Math.round(resume.minutes)}분 · {Number.isInteger(resume.pages) ? resume.pages : resume.pages.toFixed(1)}{resume.label} 이어서</span>}
   </button>
 );

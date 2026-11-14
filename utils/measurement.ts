@@ -11,6 +11,8 @@ export interface PomodoroPlan {
   pages: number | null;
   minutes: number;
   remainingTaskPages?: number;
+  /** 14일: 첫 뽀모도로가 단원 끝까지로 짧아졌을 때의 필요 횟수(그 한 번 + 남은 양을 정해 둔 길이로) */
+  sessions?: number | null;
 }
 
 export const getRemainingPomodoroSessions = (remainingPages: number, sessionPages: number | null) => (
@@ -44,6 +46,25 @@ export const getPomodoroPageTarget = (minutesPerPage: number, remainingPages: nu
   if (!Number.isFinite(minutesPerPage) || minutesPerPage <= 0) return null;
   if (!Number.isFinite(remainingPages) || remainingPages <= 0) return 0;
   return Math.min(Math.floor(remainingPages), Math.max(1, Math.floor(pomodoroMinutes / minutesPerPage)));
+};
+
+/**
+ * 14일 "한 단위(단원)가 끝나면 다음 단원을 이어 하지 않고, 뽀모도로도 그 단원이 끝날 때까지의 예상 시간을 5의 배수로 올려 정한다"(더 짧은 쪽):
+ * 단원 끝까지 남은 장수 × 장당 시간을 5분 단위로 올린 값과 정해 둔 뽀모도로 길이 중 짧은 것. 단원이 없거나 장당 시간을 모르면 정해 둔 길이.
+ */
+export const chapterBoundedPomodoroMinutes = (minutesPerPage: number, chapterPagesLeft: number | null, pomodoroMinutes = POMODORO_MINUTES) => {
+  if (chapterPagesLeft === null || !(chapterPagesLeft > 0) || !Number.isFinite(minutesPerPage) || minutesPerPage <= 0) return pomodoroMinutes;
+  const untilChapterEnd = Math.max(5, Math.ceil(chapterPagesLeft * minutesPerPage / 5 - 1e-9) * 5);
+  return Math.min(pomodoroMinutes, untilChapterEnd);
+};
+
+/** 단원이 있는 과목에서 다음에 풀 페이지부터 그 단원 끝까지 남은 장수(단원 사이는 세지 않는다). 단원이 없거나 다 풀었으면 null */
+export const chapterPagesLeftFrom = (chapters: readonly SubjectChapter[], nextPage: number): number | null => {
+  if (chapters.length === 0) return null;
+  const index = chapters.findIndex(item => nextPage <= item.endPage);
+  if (index < 0) return null;
+  const left = pagesBetween(chapters, Math.max(nextPage, chapters[index].startPage), chapters[index].endPage);
+  return left > 0 ? left : null;
 };
 
 export const POMODORO_SECONDS = POMODORO_MINUTES * 60;

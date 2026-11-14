@@ -15,8 +15,11 @@ const BUTTON = 'flex h-7 w-9 touch-manipulation items-center justify-center roun
  * 측정 화면의 뽀모도로 칸: "뽀모도로 30분" 글자와, 그 바로 옆에 놓인 ▲ 버튼 하나.
  * 측정 중에는 시간을 늘리기만 하고 줄일 수는 없다.
  */
-export const PomodoroLength: React.FC<{ className?: string }> = ({ className = '' }) => {
-  const [minutes] = usePomodoroMinutes();
+export const PomodoroLength: React.FC<{ className?: string; effectiveMinutes?: number }> = ({ className = '', effectiveMinutes }) => {
+  const [setting] = usePomodoroMinutes();
+  // 14일: 단원 끝까지가 정해 둔 길이보다 짧으면 이번 뽀모도로는 그 길이다(▲는 정해 둔 길이를 바꾼다)
+  const bounded = effectiveMinutes !== undefined && effectiveMinutes < setting;
+  const minutes = bounded ? effectiveMinutes : setting;
   return (
     <div data-testid="pomodoro-length" className={`flex shrink-0 items-center gap-2 rounded-2xl bg-slate-50 px-3 py-3 ${className}`}>
       <div className="flex flex-col">
@@ -24,6 +27,7 @@ export const PomodoroLength: React.FC<{ className?: string }> = ({ className = '
         <p className="whitespace-nowrap font-mono text-3xl font-black tabular-nums text-indigo-700">
           <span data-testid="pomodoro-minutes">{minutes}</span><span className="ml-0.5 text-base font-bold">분</span>
         </p>
+        {bounded && <p data-testid="pomodoro-chapter-bounded" className="mt-0.5 whitespace-nowrap text-[12px] font-bold text-amber-700">단원 끝까지</p>}
       </div>
       <PomodoroMinutesStepper upOnly />
     </div>
