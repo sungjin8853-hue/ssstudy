@@ -7094,7 +7094,8 @@ test('grouping brackets are ( ): they make the same questions as the old [ ] gro
   assert.deepEqual(prose.filter(q => q.prompt.includes('시간') || q.answer.includes('시간')).map(q => [q.kind, q.prompt, q.answer]),
     [['direct', '시간예', '길이'], ['reverse', '길이', '시간예']]);
   assert.deepEqual(prose.filter(q => !q.prompt.includes('시간') && !q.answer.includes('시간')).map(q => [q.kind, q.prompt, q.answer, q.conditions]),
-    [['direct', '예', '3시', []], ['reverse', '3시', '예', []]]);
+    // 15일: 글 사이 괄호의 관계도 이어진 가장 가까운 칸(길이)의 앞 자리로 묻는다(키에는 들지 않음)
+    [['direct', '예', '3시', ['길이 \u2063이전']], ['reverse', '3시', '예', ['길이 \u2063이전']]]);
   // 괄호가 한 쌍으로 묶인 한 칸은 풀어서 읽는다
   const nested = questionsFor('A:(B:C)');
   assert.ok(nested.some(q => q.kind === 'direct' && q.prompt === 'A' && q.answer === 'B'));
@@ -8292,14 +8293,14 @@ test('a standalone [X] is the set itself: it holds every nested subset, so an ab
 test('( ) is an application scope: its inner relation makes its own questions, apart from the outside and from the leading [set]', () => {
   const shape = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}|${q.answer}|${q.conditions.join('>')}`);
   // 바깥 칸의 값은 `( )`가 놓인 자리의 A와 안녕(`A 안녕`)이고 B는 단절된 값이다. 안쪽 A:B는 따로
-  assert.deepEqual(shape('(A:B) 안녕 : C'), ['direct|A 안녕|C|', 'reverse|C|A 안녕|', 'direct|A|B|', 'reverse|B|A|']);
-  assert.deepEqual(shape('X : (A:B) 안녕'), ['direct|X|A 안녕|', 'reverse|A 안녕|X|', 'direct|A|B|', 'reverse|B|A|']);
+  assert.deepEqual(shape('(A:B) 안녕 : C').sort(), ['direct|A 안녕|C|', 'direct|A|B|C \u2063이전', 'reverse|B|A|C \u2063이전', 'reverse|C|A 안녕|'].sort(), '15일: 이어진 C의 앞 자리');
+  assert.deepEqual(shape('X : (A:B) 안녕').sort(), ['direct|X|A 안녕|', 'reverse|A 안녕|X|', 'direct|A|B|X 이후', 'reverse|B|A|X 이후'].sort(), '15일: 이어진 X의 다음 자리');
   // 논리는 분리되어도 위치는 분리되지 않는다: 줄 앞 `[D]` 안에 놓인 괄호라 안쪽도 D 안의 문제다
-  assert.deepEqual(shape('[D] (A:B) 안녕 : C'), ['direct|A 안녕|C|D', 'reverse|C|A 안녕|D', 'direct|A|B|D', 'reverse|B|A|D']);
+  assert.deepEqual(shape('[D] (A:B) 안녕 : C').sort(), ['direct|A 안녕|C|D', 'reverse|C|A 안녕|D', 'direct|A|B|D>C \u2063이전', 'reverse|B|A|D>C \u2063이전'].sort());
   // 칸마다 집합이 있으면 안쪽 첫 값은 괄호가 놓인 칸의 집합, `:` 뒤 값은 다음 칸의 집합이다
   const convert = questionsFor('[D] (A:B) 안녕 : [E] C');
-  assert.deepEqual(convert.filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set + '/' + step.cell).join('>')),
-    ['D/A 안녕>E/C', 'E/C>D/A 안녕', 'D/A>E/B', 'E/B>D/A']);
+  assert.deepEqual(convert.filter(q => q.kind === 'convert').map(q => q.convert.steps.map(step => step.set + '/' + step.cell).join('>')).sort(),
+    ['D/A 안녕>E/C', 'E/C>D/A 안녕', 'D/A>E/B', 'E/B>D/A'].sort());
   // 관계가 없는 괄호 글은 문제를 더하지 않는다
   assert.deepEqual(shape('밑변 (cm) : 길이'), ['direct|밑변 (cm)|길이|', 'reverse|길이|밑변 (cm)|']);
   // 칸 전체가 `( )`인 것은 지금처럼 풀어 읽고 문제를 겹쳐 내지 않는다
@@ -8316,15 +8317,15 @@ test('( ) takes the position it stands in: inner values are in the set of that c
   const shape = memo => questionsFor(memo).map(q => `${q.kind}|${q.prompt}|${q.answer}|${q.conditions.join('>')}`);
   const stepsOf = q => q.convert.steps.map(step => step.set).join('>');
   // 놓인 자리가 없으면 아무 조건도 더하지 않는다(전과 같음)
-  assert.deepEqual(shape('(A:B) 안녕 : C'), ['direct|A 안녕|C|', 'reverse|C|A 안녕|', 'direct|A|B|', 'reverse|B|A|']);
+  assert.deepEqual(shape('(A:B) 안녕 : C').sort(), ['direct|A 안녕|C|', 'direct|A|B|C \u2063이전', 'reverse|B|A|C \u2063이전', 'reverse|C|A 안녕|'].sort(), '15일: 이어진 C의 앞 자리');
   // 칸마다 집합이 따로 있는 줄: 괄호가 놓인 칸 → 안쪽 첫 값, 다음 칸 → `:` 뒤 값
   assert.ok(questionsFor('[D] (A:B) 안녕 : [E] C').some(q => q.convert && q.prompt === 'A' && q.answer === 'B' && stepsOf(q) === 'D>E'));
   // 바깥에 다음 칸이 없으면 첫 값만 자리의 집합을 가진다(조건으로 준다)
   const lone = questionsFor('[D] 안녕 : [E] (A:B) 값').filter(q => !q.convert);
-  assert.deepEqual(lone.map(q => [q.prompt, q.answer, q.conditions]), [['A', 'B', ['E']], ['B', 'A', ['E']]]);
+  assert.deepEqual(lone.map(q => [q.prompt, q.answer, q.conditions]), [['A', 'B', ['E', '[D] 안녕 이후']], ['B', 'A', ['E', '[D] 안녕 이후']]], '15일: 이어진 앞 칸의 다음 자리');
   // 위쪽 토글 제목이 이어 주는 칸 집합: 괄호가 n번째 칸이면 안쪽 `:` 뒤 값은 n+1번째 칸의 집합이다
   const two = questionsFor(':::toggle [도형] 이름 : [개념] 정의\n삼각형 : (세 변:세 각) 합\n:::end');
-  assert.deepEqual(two.filter(q => q.kind === 'direct' && q.prompt === '세 변').map(q => q.conditions), [['[도형] 이름 : [개념] 정의', '개념.정의']]);
+  assert.deepEqual(two.filter(q => q.kind === 'direct' && q.prompt === '세 변').map(q => q.conditions), [['[도형] 이름 : [개념] 정의', '개념.정의', '삼각형 이후']]);
   const three = questionsFor(':::toggle [도형] 이름 : [개념] 정의 : [예] 보기\n삼각형 : (세 변:세 각) 합\n:::end');
   assert.ok(three.some(q => q.convert && q.prompt === '세 변' && q.answer === '세 각' && stepsOf(q) === '개념.정의>예.보기'));
   const first = questionsFor(':::toggle [도형] 이름 : [개념] 정의\n(세 변:세 각) 합 : 삼각형\n:::end');
@@ -8747,11 +8748,11 @@ test('a line whose end is an unfinished relation takes the line below as a toggl
 test('( ) is a toggle word: its first value shares the cell with the text around it; the other values are cut off from that cell', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer]);
   // A and 안녕 are in the same cell at the same position (value `A 안녕`); B sits at another position, so there is no `B 안녕`
-  assert.deepEqual(direct('(A:B) 안녕 : X'), [['A 안녕', 'X'], ['A', 'B']]);
-  assert.deepEqual(direct('X : 안녕 (A:B)'), [['X', '안녕 A'], ['A', 'B']]);
+  assert.deepEqual(direct('(A:B) 안녕 : X').map(pair => pair.join('|')).sort(), ['A 안녕|X', 'A|B'].sort(), '15일: 안쪽 문제는 X 앞 자리가 주어져 쉬운 쪽으로 앞에 올 수 있다');
+  assert.deepEqual(direct('X : 안녕 (A:B)').map(pair => pair.join('|')).sort(), ['X|안녕 A', 'A|B'].sort());
   assert.ok(!questionsFor('(A:B) 안녕 : X').some(q => q.prompt.includes('B 안녕') || q.answer.includes('B 안녕') || q.answer.includes('(')));
   // the other connectors and nested groups pick the first value too
-  assert.deepEqual(direct('(A;B) 안녕 : X')[0], ['A 안녕', 'X']);
+  assert.ok(direct('(A;B) 안녕 : X').some(([prompt, answer]) => prompt === 'A 안녕' && answer === 'X'));
   // (12일: 안쪽 `A:B`는 이어진 C 앞 자리로 묻게 되어 주어진 것이 많아 쉬운 문제로 앞에 온다)
   assert.ok(direct('((A:B):C) 안녕 : X').some(([prompt, answer]) => prompt === 'A 안녕' && answer === 'X'));
   // a group with no connector inside is only grouping: the text stays as written

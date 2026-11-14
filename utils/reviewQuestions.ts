@@ -1511,16 +1511,24 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     ...implicit.slice(fields.length)
   ];
   /** `column`: 이 글이 놓인 칸 번호. `( )` 안의 첫 값은 그 칸, `:` 뒤는 그다음 칸들이다(분류기준 이름도 이어서 센다). */
-  const visitGroups = (expression: Expression, node: QuestionNoteNode, scope: string[], sets: string[][], column = offsetByNode.get(node.id) ?? 0) => {
+  const visitGroups = (expression: Expression, node: QuestionNoteNode, scope: string[], sets: string[][], column = offsetByNode.get(node.id) ?? 0, neighbor: QuestionCondition[] = []) => {
     if (expression.type === 'relation') {
       const own = columnSetsOf(expression.fields, sets);
+      const cells = expression.fields.map(head);
       expression.fields.forEach((field, index) => {
         const placed = expression.classifications[index];
-        visitGroups(field, node, scope, own.slice(index), typeof placed === 'number' ? placed : column);
+        // 15일: 글 사이에 든 괄호(`((A,B)=(C)) 경우 ; X`)도 칸 전체가 괄호일 때처럼 이어진 가장 가까운 칸을 보인다
+        // (첫 칸은 뒤 칸의 "앞 자리", 둘째 칸부터는 앞 칸의 "다음 자리"). 키에는 넣지 않아 복습 기록이 이어진다
+        const near = index > 0
+          ? cells.slice(0, index).map((cell, at) => ({ cell, at })).filter(({ cell }) => nonempty(cell)).slice(-1)[0]
+          : cells.slice(1).map((cell, step) => ({ cell, at: 1 + step })).find(({ cell }) => nonempty(cell));
+        const context: QuestionCondition[] = near ? [{ text: `${expressionLabel(near.cell)}${index > 0 ? ' 이후' : BEFORE_MARK}`, key: OMIT_FROM_KEY,
+          columns: [expression.classifications[near.at]], spans: spans(near.cell) }] : [];
+        visitGroups(field, node, scope, own.slice(index), typeof placed === 'number' ? placed : column, context);
       });
       return;
     }
-    if (expression.type !== 'text') { expression.items.forEach(item => visitGroups(item, node, scope, sets, column)); return; }
+    if (expression.type !== 'text') { expression.items.forEach(item => visitGroups(item, node, scope, sets, column, neighbor)); return; }
     const { start, end } = expression.span;
     const source = titleSource(node);
     // `@`를 풀어 바꾼 칸은 글자 범위가 원문과 달라서 안쪽을 따로 읽지 않는다
@@ -1541,9 +1549,9 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         // 모든 안쪽 칸에 집합이 있으면 집합은 칸마다 단위 문제에 들어가고, 아니면 놓인 자리의 집합을 조건으로 준다
         const placed = joinSets(fields.length >= 2 && fields.every(Boolean) ? scope : [...scope, ...(sets[0] ?? [])]);
         visit(scoped, [...ancestorConditions(node), ...(placed ? [{ text: placed, columns: [], spans: [], place: 'position' as const }] : []),
-          ...(innerScope ? [{ text: innerScope, columns: [], spans: [], place: 'position' as const }] : [])]);
+          ...(innerScope ? [{ text: innerScope, columns: [], spans: [], place: 'position' as const }] : []), ...neighbor]);
       });
-      visitGroups(inner, node, scope, sets, column);
+      visitGroups(inner, node, scope, sets, column, neighbor);
       index = close;
     }
   };
