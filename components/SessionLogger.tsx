@@ -3090,6 +3090,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       extraReviewKeys: doneCards.filter(card => card.kind === 'review' && extraReviewGroups.has(card.detailKey)).map(card => card.detailKey),
       // 끝낸 과목에서 "추가 학습하기"로 다시 연 뒤 시작을 누르면 그 과목의 측정을 바로 시작한다(대기열에 없어도 된다).
       // 복습 칸이면 그 칸의 다음 복습을 앞당겨 시작한다.
+      resumeFor: (id: string) => {
+        const summary = resumeSummaryOf(id);
+        const subject = subjects.find(item => item.id === id);
+        return summary && subject ? { minutes: summary.minutes, pages: summary.pages, label: getPageLabel(subject) } : null;
+      },
       onExtraStudy: (detailKey: string) => {
         if (doneCards.some(card => card.detailKey === detailKey && card.kind === 'review')) {
           const group = extraReviewGroups.get(detailKey);

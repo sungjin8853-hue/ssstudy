@@ -12366,3 +12366,11 @@ test('14일 fix-129: with chapters the pomodoro stops at the chapter end — the
   assert.equal(chapterBoundedPomodoroMinutes(0, 3, 25), 25, 'speed unknown: the set length');
   assert.equal(chapterBoundedPomodoroMinutes(2, null, 30), 30, 'no chapters');
 });
+
+test('14일 fix-130: editing an 이어서 풀기 record keeps it out of the efficiency, a reopened finished subject still offers 이어서 풀기, and the record view marks it', () => {
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  assert.ok(summary.includes('editingSummary.logs.every(log => log.continueLater) ? { continueLater: true } : {}'));
+  assert.ok(summary.includes('resume={idle.resumeFor?.(detailSubjectId)}'));
+  const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/StudyRecordDialog.tsx'), 'utf8');
+  assert.ok(dialog.includes('data-record-continue'));
+});

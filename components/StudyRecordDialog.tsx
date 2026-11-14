@@ -135,6 +135,7 @@ export const StudyRecordDialog: React.FC<{
                             </span>
                           </div>
                           <span data-record-when className={`text-[13px] font-bold ${view.tone}`}>{view.text}</span>
+                          {row.log.continueLater && <span data-record-continue className="text-[12px] font-bold text-teal-700">이어서 풀기로 저장(완료로 끝내면 효율에 들어가요)</span>}
                         </div>
                       </li>
                     );

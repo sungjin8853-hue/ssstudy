@@ -724,6 +724,13 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       ...(editingSummary?.logs.length === 1 && editingSummary.logs[0].autoReviewRegistered ? { autoReviewRegistered: true } : {}),
       // 자동 복습으로 모으는 중인 기록은 고쳐도(여러 기록을 하나로 고쳐도) 계속 모은다(4일)
       ...(editingSummary?.logs.some(log => log.unitReviewPending && log.autoReviewWaiting) ? { autoReviewWaiting: true } : {}),
+      // 14일 점검: 이어서 풀기 기록을 고쳐도 이어서 풀기로 남는다(효율에서 빠진 채). 완료 기록이 이어 받은 기록 목록도 그대로
+      ...(editingSummary && editingSummary.logs.length > 0 && editingSummary.logs.every(log => log.continueLater) ? { continueLater: true } : {}),
+      ...(() => {
+        const inSummary = new Set(editingSummary?.logs.map(log => log.id) ?? []);
+        const from = [...new Set(editingSummary?.logs.flatMap(log => log.continuedFromIds ?? []) ?? [])].filter(id => !inSummary.has(id));
+        return from.length ? { continuedFromIds: from } : {};
+      })(),
       pagesRead: pages,
       timeSpentMinutes: minutes,
       startPage: editStartPage,
@@ -819,8 +826,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const showAheadCard = Boolean(aheadView && !aheadOpened);
   // 시작 버튼 자리: 끝낸 과목을 열어 둔 동안은 눌러지지 않는 "오늘 학습 완료", 추가 학습을 연 뒤에는 그 과목의 "학습 시작".
   const startSlot = idle ? (showDoneCard ? <DoneStartButton />
-    : aheadOpened && idle.onExtraStudy ? <StartButton kind="study" onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
-    : reopened && canExtraStudy && idle.onExtraStudy ? <StartButton kind={doneRow?.kind === 'review' ? 'review' : 'study'} onClick={() => idle.onExtraStudy?.(detailSubjectId)} />
+    : aheadOpened && idle.onExtraStudy ? <StartButton kind="study" onClick={() => idle.onExtraStudy?.(detailSubjectId)} resume={idle.resumeFor?.(detailSubjectId)} />
+    : reopened && canExtraStudy && idle.onExtraStudy ? <StartButton kind={doneRow?.kind === 'review' ? 'review' : 'study'} onClick={() => idle.onExtraStudy?.(detailSubjectId)}
+      resume={doneRow?.kind === 'review' ? null : idle.resumeFor?.(detailSubjectId)} />
     : idle.startButton ?? (
       <div className="flex h-[68px] items-center justify-center rounded-2xl bg-slate-100 px-3 text-center text-base font-black text-slate-700">오늘 할 일을 모두 마쳤어요</div>
     )) : null;

@@ -96,6 +96,8 @@ export interface IdleSummaryContext {
   extraReviewPlans?: Record<string, ReviewPlanContext>;
   /** 오늘 끝낸 과목에서 "추가 학습하기"로 다시 연 뒤 시작을 누르면 그 과목의 측정(복습이면 다음 복습)을 바로 시작한다 */
   onExtraStudy?: (detailKey: string) => void;
+  /** 14일: 그 과목에 이어서 풀기로 저장해 둔 몫(앞에서 푼 시간 · 장수). 없으면 null */
+  resumeFor?: (subjectId: string) => { minutes: number; pages: number; label: string } | null;
   /** 오늘 끝낸 복습 칸 중에 앞당겨 할 수 있는 다음 복습이 남아 있는 칸의 키. 여기 없는 복습 칸은 "추가 학습하기" 대신 눌러지지 않는 "오늘 복습 완료"가 온다. */
   extraReviewKeys?: string[];
   /** 지금 보는 칸(같은 과목 한 칸)에 있는 다른 할 일들: 칸 안 순서(기본 복습 → 과목)에서 뒤에 오는 것은 한 줄 정보만 둔다 */
