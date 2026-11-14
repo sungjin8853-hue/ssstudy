@@ -53,6 +53,8 @@ export interface ProseInput {
   form?: 'equal' | 'components' | 'match' | 'together';
   /** 남은 값의 다음 값을 묻는 남은 조건 문제(2일) */
   beyond?: boolean;
+  /** 15일: 앞쪽 `,` 조건 중 남은 것(뒤 값을 주고 묻는다) */
+  before?: boolean;
   /** 8일: 맞힐 값에 쓴 `{X}`들(중복 없이). 있으면 "X에 해당하는 내용이 들어가도록" 부가조건을 붙인다 */
   answerKeywords?: readonly string[];
   /** 7일: 조건마다 보이는 방법(near · related · hidden). 없으면 모든 조건을 같게 보인다 */
@@ -212,6 +214,11 @@ const proseBody = (input: ProseInput, attrs?: ProseAttrs): Prose | null => {
   if (kind === 'remaining' && input.beyond) {
     // 남은 값은 보이지 않고 머릿속으로 찾는다: 그 값의 다음 값을 묻는다(2일)
     const lead = `${where}${givenTag}에 필요한 것 중 ${done}남은 것의 다음 ${attr ? `${attr} 값` : '값'}`;
+    return { statement: answerOperator === 'and' ? `${lead}을 모두 쓰시오.` : answerOperator === 'sequence' ? `${lead}을 순서대로 쓰시오.` : `${lead}은?`, solution };
+  }
+  if (kind === 'remaining' && input.before) {
+    // 15일: 앞쪽 `,` 조건 중 남은 것 — "‘본 어근을 밝혀 적지 않음’ 앞의 값 중 ‘…어근’ 외에 남은 것은?"
+    const lead = `${where}${givenTag} 앞의 ${attr ? `${attr} 값` : '값'} 중 ${done}남은 ${noun}`;
     return { statement: answerOperator === 'and' ? `${lead}을 모두 쓰시오.` : answerOperator === 'sequence' ? `${lead}을 순서대로 쓰시오.` : `${lead}은?`, solution };
   }
   if (kind === 'remaining') {

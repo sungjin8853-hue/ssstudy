@@ -1474,7 +1474,8 @@ test('equals is a higher-importance colon while periods, decimals and spaces sta
 test('nested relation columns restart their labels, keep the outer importance, and outer relations use only branch heads', () => {
   const direct = memo => questionsFor(memo).filter(q => q.kind === 'direct').map(q => [q.prompt, q.answer, q.priority, q.conditions]);
   // 31일: "A의 B" 해석은 없앴다. 안쪽 관계는 첫 칸이 자리(조건)다
-  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a 이후']], ['b', 'd', 2, []], ['d', 'c', 3, ['a → b 이후']]]);
+  // 15일: 앞 칸은 이어진 가장 가까운 것만(b) 보인다
+  assert.deepEqual(direct('a:(b:c):(d:c)'), [['a', 'b', 1, []], ['b', 'c', 2, ['a 이후']], ['b', 'd', 2, []], ['d', 'c', 3, ['b 이후']]]);
   const colored = memoColors.splitReviewMemoColonColors('a:(b:c):(d:c):e // f:g');
   // 6일: 괄호 안 색은 처음부터 다시 세지 않고 놓인 칸 다음 색부터(문제의 칸 번호와 같다)
   assert.deepEqual(colored.filter(p => p.colonIndex !== undefined).map(p => p.colonIndex), [0, 1, 1, 2, 2, 0]);
@@ -11624,7 +11625,7 @@ test('5일: 연결어(: ; <) 뒤 칸 안의 관계는 "‘A’에서" 대신 "�
   assert.equal(eq.find(item => item.q.kind === 'direct' && item.q.prompt === 'N').q.key, 'q2:1df08kh:0');
   // 앞 칸이 여럿이면 순서대로: (d:c)는 a → b 다음 자리
   const chain = asked('a:(b:c):(d:c)');
-  assert.ok(has(chain, '‘a → b’ 다음 자리의 ‘d’ 다음 값은?', 'c') && has(chain, '‘a’ 다음 자리의 ‘b’ 다음 값은?', 'c') && has(chain, '‘b’ 다음 값은?', 'd'));
+  assert.ok(has(chain, '‘b’ 다음 자리의 ‘d’ 다음 값은?', 'c') && has(chain, '‘a’ 다음 자리의 ‘b’ 다음 값은?', 'c') && has(chain, '‘b’ 다음 값은?', 'd'), '15일: 가장 가까운 앞 칸만');
   assert.equal(chain.find(item => item.q.kind === 'direct' && item.q.prompt === 'd').q.key, 'q2:1bdqdb6:0');
   // 겹친 자리는 → 로 잇는다
   assert.ok(has(asked('A:(B:(C-D),(K=F))'), '‘A’ → ‘B’ 다음 자리의 ‘K’에 대응하는 것은?', 'F'));
@@ -12373,4 +12374,21 @@ test('14일 fix-130: editing an 이어서 풀기 record keeps it out of the effi
   assert.ok(summary.includes('resume={idle.resumeFor?.(detailSubjectId)}'));
   const dialog = fs.readFileSync(path.join(__dirname, '..', 'components/StudyRecordDialog.tsx'), 'utf8');
   assert.ok(dialog.includes('data-record-continue'));
+});
+
+test('15일 fix-131: conditions joined by , before a connector are asked as the remaining ones given the value after, and a cell-inner relation shows only the nearest earlier cell', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const { proseOf } = loadSource('utils/questionProse.ts');
+  const memo = '(하다,거리다)가 붙을 수 없는 어근, 어근에 접미사 이가 붙은 말 ; 본 어근을 밝혀 적지 않음 ; [예시] 맴 + 이 = 매미';
+  const questions = buildReviewQuestions(memo).questions;
+  const remaining = questions.filter(q => q.kind === 'remaining' && q.before).map(q => [q.prompt, q.answer, proseOf(q).statement]);
+  assert.deepEqual(remaining, [
+    ['본 어근을 밝혀 적지 않음', '어근에 접미사 이가 붙은 말', '‘본 어근을 밝혀 적지 않음’ 앞의 값 중 ‘(하다,거리다)가 붙을 수 없는 어근’ 외에 남은 것은?'],
+    ['본 어근을 밝혀 적지 않음', '(하다,거리다)가 붙을 수 없는 어근', '‘본 어근을 밝혀 적지 않음’ 앞의 값 중 ‘어근에 접미사 이가 붙은 말’ 외에 남은 것은?']
+  ]);
+  const match = questions.find(q => q.prompt === '맴 + 이');
+  assert.equal(proseOf(match).statement, '‘본 어근을 밝혀 적지 않음’ 다음 자리의 ‘맴 + 이’에 대응하는 것은?', 'labels (예시) are added on screen');
+  // 오른쪽이 `,`면 전처럼 "필요한 것 중 남은 것", 홀로 쓴 `=`의 구성요소는 그대로
+  assert.ok(buildReviewQuestions('C ; A, B').questions.every(q => !q.before));
+  assert.ok(buildReviewQuestions('A, B = C').questions.every(q => !q.before));
 });

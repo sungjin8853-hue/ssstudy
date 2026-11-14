@@ -53,6 +53,8 @@ export interface NoteQuestion extends ReviewQuestionDifficulty {
   form?: 'equal' | 'components' | 'match' | 'together';
   /** 남은 조건을 한 걸음 더 간 문제(2일): 주어진 값들로 남은 값을 머릿속으로 찾고, 그 남은 값의 다음 값을 맞힌다(남은 값은 보이지 않는다) */
   beyond?: boolean;
+  /** 15일: 앞쪽(연결어 왼쪽)이 `,`로 묶인 조건들일 때, 뒤 값과 앞 조건 몇 개를 주고 남은 앞 조건을 묻는다 */
+  before?: boolean;
   /** 다른 연결어 없이 `=`·`-`만으로 이은 줄의 문제(2일): 능력 집합 칸에 앞 값의 상위 집합을 알려 준다 */
   lone?: boolean;
   /** 덩어리 칸 빈칸 문제의 재료: 문장에 속성 이름을 넣어 다시 쓸 때 쓴다 */
@@ -1356,6 +1358,16 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
         conditionSpans: [...conditionSpans, ...given.map(spans)],
         columns: { ...base.columns, conditions: [...conditionColumns, ...given.map(() => [expression.classifications[index + 1]])] },
         promptSpans: [...spans(left), ...given.flatMap(spans)] }));
+      // 15일 "(하다,거리다)가 붙을 수 없는 어근, 어근에 접미사 이가 붙은 말 ; 본 어근을 밝혀 적지 않음": 연결어 왼쪽이 `,`로 묶인 조건들이면
+      // 뒤 값(B)과 앞 조건 몇 개를 주고 남은 앞 조건을 묻는다(‘B’ 앞의 값 중 ‘A1’ 외에 남은 것은? A2). 오른쪽 조건들의 "남은 조건"과 짝이다
+      if ((separator === ':' || separator === ';' || separator === '<') && left.type === 'and' && nonempty(right)) partialConditions(left).forEach(({ given, remaining }) => add({
+        ...base, kind: 'remaining', before: true, direction: 'reverse',
+        prompt: expressionLabel(right), promptSpans: [...spans(right), ...given.flatMap(spans)],
+        answer: expressionLabel(remaining), answerSpans: spans(remaining),
+        conditions: [...conditions, ...given.map(fact => `${expressionLabel(fact)} 충족`)],
+        conditionSpans: [...conditionSpans, ...given.map(spans)],
+        columns: { prompt: [expression.classifications[index + 1]], answer: [expression.classifications[index]],
+          conditions: [...conditionColumns, ...given.map(() => [expression.classifications[index]])] } }));
       // 갈래진 값(`A:(B:F),C,D`)에서 나머지 값(C, D)을 주면 남은 값(B)을 논리적으로 찾을 수 있으니, B를 보이지 않고 그다음 값(F)을 묻는다(2일)
       const branched = expression.fields[index + 1];
       if (goesForward(separator) && branched.type === 'and') branched.items.forEach((item, at) => {
@@ -1449,15 +1461,17 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
      * 앞 칸이 여럿이면 모두 순서대로 보인다(`a:(b:c):(d:c)`의 d → c는 "‘a → b’ 다음 자리의 ‘d’ 다음 값은?")
      */
     // 빈 칸(`A: :(B:C)`)은 자리 글에 넣지 않는다. 앞 칸이 모두 비면 자리 조건이 없다
+    // 15일: 앞쪽도 이어진 가장 가까운 칸만 보인다(12일 "일단 가장 가까운 것만"과 같게). 앞 칸을 다 이어 붙이면
+    // `((A, B) → C) 다음 자리의`처럼 길고 괄호가 겹쳤다. 키는 전처럼 첫 칸이라 복습 기록이 이어진다
     const afterOf = (index: number): QuestionCondition[] => {
-      const before = columns.slice(0, index).map((cell, at) => ({ cell, at })).filter(({ cell }) => nonempty(cell));
+      const before = columns.slice(0, index).map((cell, at) => ({ cell, at })).filter(({ cell }) => nonempty(cell)).slice(-1);
       if (!before.length) return [];
       return [{ text: `${expressionLabel(combine('sequence', before.map(({ cell }) => cell)))} 이후`, key: expressionLabel(columns[0]),
         columns: before.map(({ at }) => expression.classifications[at]), spans: before.flatMap(({ cell }) => spans(cell)) }];
     };
     /**
      * 12일 "[A] B=C ; D: 해당 셀과 연결된 셀의 값도 보여 줘야 맞출 수 있다 — 일단 가장 가까운 것만": 첫 칸 안의 관계(`B=C` · `( )`)는
-     * 뒤로 이어진 가장 가까운 칸(D, 그 칸의 분류 이름과 함께)의 "앞 자리"로 묻는다. 둘째 칸부터는 전처럼 앞 칸들의 "다음 자리"다.
+     * 뒤로 이어진 가장 가까운 칸(D, 그 칸의 분류 이름과 함께)의 "앞 자리"로 묻는다. 둘째 칸부터는 바로 앞 칸의 "다음 자리"다.
      */
     const beforeOf = (index: number): QuestionCondition[] => {
       const next = columns.slice(index + 1).map((cell, step) => ({ cell, at: index + 1 + step })).find(({ cell }) => nonempty(cell));
