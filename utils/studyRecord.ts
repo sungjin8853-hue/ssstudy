@@ -71,14 +71,22 @@ export const canRemoveFromReview = (state: RecordReviewState) => state.kind === 
  * 14일 "학습 기록 보기의 버튼들은 기본 복습 여부만 바꾼다(복습과목에 넣지 않는 것은 저장할 때 복습 제외 두 번 누르기뿐)".
  * "복습 넣기": 그 기록의 기본 복습을 바로 넣는다. 처음 복습은 복습에 넣을 때처럼 2시간 뒤다(이미 복습과목 일정이 있는 기본 복습만 뺀 기록은 그 일정 그대로).
  * 복습 제외(복습과목까지 뺀) 기록은 기본 복습만 넣고 복습과목은 계속 빼 둔다. 대기 기록은 원래대로 복습과목도 이어진다.
- * 단위는 바꾸지 않는다: 넣은 때(reviewRegisteredAt)를 새로 적지 않아 그 기록은 원래 공부한 때의 단위에 남고, 단위 경계도 생기지 않는다.
+ * 15일 "복습에 넣으면 단위가 바뀌어야": 복습에 안 들어가 있던 기록(대기 · 자동 복습 모으는 중 · 복습 제외)을 넣으면 "복습에 넣기"를 누른 것과 같이
+ * 넣은 때(reviewRegisteredAt)를 적는다. 그때 단위가 끝나 그 기록은 그 단위에 들고("지금 채우는 중"이 아니다), 아직 기다리는 다른 기록은 다음 단위가 된다.
+ * 기본 복습만 뺐던 기록, 한 번 넣었다 뺀 기록은 이미 넣은 때가 있어 그 단위를 그대로 둔다.
  */
 export const addLogToReview = (log: StudyLog, nowMs: number): StudyLog => {
   const keepSchedule = log.basicReviewSkipped && !log.unitReviewPending && log.reviewEnabled !== false && !log.isCondensed && Boolean(log.nextReviewDate);
   const wasExcluded = !log.unitReviewPending && (log.reviewEnabled === false || log.isCondensed) && !log.isReviewed;
+  // 한 번 복습에 들어갔다 빠진 기록(넣은 때가 있음)은 다시 넣어도 원래 단위 그대로: 넣기 · 빼기를 오가도 단위가 옮겨 다니지 않는다
+  const entersReview = Boolean(log.unitReviewPending) || (wasExcluded && !log.reviewRegisteredAt);
+  const range = Number.isFinite(log.startPage) && Number.isFinite(log.endPage)
+    ? { start: Math.min(log.startPage!, log.endPage!), end: Math.max(log.startPage!, log.endPage!) }
+    : log.reviewUnitRange;
   return {
     ...log,
     ...(wasExcluded ? { reviewSubjectsSkipped: true } : {}),
+    ...(entersReview ? { reviewRegisteredAt: new Date(nowMs).toISOString(), autoReviewRegistered: undefined, ...(range ? { reviewUnitRange: range } : {}) } : {}),
     unitReviewPending: undefined,
     autoReviewWaiting: undefined,
     autoReviewQueued: undefined,

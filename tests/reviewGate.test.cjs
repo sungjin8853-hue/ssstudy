@@ -12212,7 +12212,7 @@ test('12일 fix-121: the bottom tabs hide only while a text field is focused and
   assert.equal(isEditableElement(null), false);
 });
 
-test('12일 fix-123: study record rows show the unit and when each review comes, and 복습하기 puts a record into review without moving its unit', () => {
+test('12일 fix-123 · 15일 fix-133: study record rows show the unit and when each review comes, and 복습하기 puts a record into review and ends its unit like 복습에 넣기', () => {
   const { buildStudyRecord, recordReviewState, addLogToReview, canAddToReview, daysUntil } = loadSource('utils/studyRecord.ts');
   const H = 3600000;
   const now = Date.parse('2026-11-12T13:00:00+09:00');
@@ -12237,20 +12237,30 @@ test('12일 fix-123: study record rows show the unit and when each review comes,
   assert.equal(daysUntil(new Date(2026, 10, 12, 23, 59).getTime(), new Date(2026, 10, 12, 9, 0).getTime()), 0);
   assert.equal(daysUntil(new Date(2026, 10, 13, 0, 1).getTime(), new Date(2026, 10, 12, 23, 59).getTime()), 1);
   assert.deepEqual(days.flatMap(day => day.rows).filter(row => canAddToReview(row.state)).map(row => row.log.id).sort(), ['b', 'c', 'd']);
-  // 복습하기: 제외 · 대기 기록은 2시간 뒤 첫 복습으로 들어가고 단위(넣은 때)는 새로 생기지 않는다
+  // 복습하기: 제외 · 대기 기록은 2시간 뒤 첫 복습으로 들어가고, 15일부터는 "복습에 넣기"처럼 넣은 때를 적어 단위가 끝난다
   const added = addLogToReview(logs[1], now);
   assert.equal(recordReviewState(added, now).kind, 'scheduled');
   assert.equal(added.nextReviewDate, new Date(now + 2 * H).toISOString());
-  assert.equal(added.reviewRegisteredAt, undefined);
+  assert.equal(added.reviewRegisteredAt, new Date(now).toISOString());
+  assert.deepEqual(added.reviewUnitRange, { start: 6, end: 10 });
   const pending = addLogToReview(logs[2], now);
   assert.equal(pending.unitReviewPending, undefined);
   assert.equal(recordReviewState(pending, now).kind, 'scheduled');
+  assert.equal(pending.reviewRegisteredAt, new Date(now).toISOString());
   // 기본 복습만 뺀 기록은 그 일정 그대로 기본 복습을 다시 넣는다
   const basic = addLogToReview(logs[3], now);
   assert.equal(basic.basicReviewSkipped, undefined);
   assert.equal(basic.nextReviewDate, logs[3].nextReviewDate);
+  assert.equal(basic.reviewRegisteredAt, undefined, 'already in review: its unit stays');
   const after = buildStudyRecord({ id: 'S' }, logs.map(log => (log.id === 'b' ? added : log.id === 'c' ? pending : log)), now);
-  assert.deepEqual(after.flatMap(day => day.rows).map(row => [row.log.id, row.unit]).sort(), [['a', 1], ['b', 2], ['c', 2], ['d', 2]]);
+  assert.deepEqual(after.flatMap(day => day.rows).map(row => [row.log.id, row.unit, row.currentUnit]).sort(), [['a', 1, false], ['b', 2, false], ['c', 2, false], ['d', 2, false]], '15일: 넣은 기록은 지금 채우는 단위가 아니다');
+  // 하나만 넣으면 아직 기다리는 다른 기록은 다음 단위(지금 채우는 단위)로 넘어간다
+  const one = buildStudyRecord({ id: 'S' }, logs.map(log => (log.id === 'b' ? added : log)), now).flatMap(day => day.rows);
+  assert.deepEqual(one.map(row => [row.log.id, row.unit, row.currentUnit]).sort(), [['a', 1, false], ['b', 2, false], ['c', 3, true], ['d', 2, false]]);
+  // 넣었다 빼고 다시 넣어도 단위는 처음 넣은 때 그대로
+  const { removeLogFromReview } = loadSource('utils/studyRecord.ts');
+  const again = addLogToReview(removeLogFromReview(added, false), now + 5 * H);
+  assert.equal(again.reviewRegisteredAt, added.reviewRegisteredAt);
   // 마친 복습은 복습하기가 없다
   assert.equal(recordReviewState({ ...base, id: 'z', timestamp: logs[0].timestamp, reviewEnabled: false, isCondensed: true, isReviewed: true }, now).kind, 'done');
 });
