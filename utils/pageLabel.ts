@@ -1,5 +1,5 @@
 import type { Subject } from '../types';
-import { getActiveSubjectStage } from './schedule';
+import { getActiveSubjectStage, getRecommendedRanges } from './schedule';
 /**
  * 과목마다 "페이지"를 부르는 글자를 정할 수 있다. 기본은 P(위치는 p.). 예를 들어 n으로 바꾸면 화면의 P/h는 n/h, 분/P는 분/n,
  * 7P는 7n, p.31은 n.31이 된다. "회"나 "단원"처럼 한글도 된다.
@@ -28,3 +28,24 @@ export const pagePositionLabel = (label: string) => (label === DEFAULT_PAGE_LABE
 
 /** "페이지당", "푸는 페이지"처럼 낱말로 쓰는 자리: 기본이면 페이지, 직접 정한 글자면 그 글자 */
 export const pageWord = (label: string) => (label === DEFAULT_PAGE_LABEL ? '페이지' : label);
+
+/**
+ * 오늘 권장 범위를 글로: 한 단계 안이면 "p.37~40", 후행과목으로 넘치면 "p.37~40 · 2회독 p.1~4"(15일).
+ * 넘친 단계는 그 후행과목의 글자(정해 두었으면)로 쓴다.
+ */
+export const formatRecommendedRanges = (subject: Subject, start: number, pages: number, formatNumber: (value: number) => string) => (
+  recommendedRangeParts(subject, start, pages, formatNumber).join(' · ')
+);
+
+/** 단계마다 한 덩이: ["p.37~40", "2회독 p.1~4"] (좁은 화면에서는 줄을 나눠 보인다) */
+export const recommendedRangeParts = (subject: Subject, start: number, pages: number, formatNumber: (value: number) => string): string[] => {
+  const ranges = getRecommendedRanges(subject, start, pages);
+  const firstPos = pagePositionLabel(getPageLabel(subject));
+  if (!ranges.length) return [`${firstPos}.${formatNumber(start)}~${formatNumber(start + Math.max(1, pages) - 1)}`];
+  return ranges.map((range, index) => {
+    const own = range.isFollowUp ? (subject.followUpSubjects || []).find(item => item.id === range.stageId)?.pageLabel : undefined;
+    const pos = index === 0 ? firstPos : pagePositionLabel(normalizePageLabel(own ?? subject.pageLabel));
+    const span = range.start === range.end ? `${pos}.${formatNumber(range.start)}` : `${pos}.${formatNumber(range.start)}~${formatNumber(range.end)}`;
+    return index === 0 ? span : `${range.name} ${span}`;
+  });
+};

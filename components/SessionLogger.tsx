@@ -30,8 +30,8 @@ import { ReviewQuestionContent } from './ReviewQuestionContent';
 import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { copyText } from '../utils/copyText';
 import { getReviewMemoOutlineText } from '../utils/reviewMemo';
-import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getRecommendedEndPage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
+import { DEFAULT_PAGE_LABEL, formatRecommendedRanges, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
 import { currentPlanStageId, planRefreshSummary, PlanRefreshSummary, replanSubject, withPlanTimes } from '../utils/weekPlan';
 import { PlanRefreshDialog } from './PlanRefreshDialog';
 import { RestTimer } from './RestTimer';
@@ -2895,7 +2895,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       // 후행과목으로 넘어간 과목은 지금 공부하는 후행과목 이름으로 부른다(본 과목 이름은 상세 칸 제목의 앞쪽에 남아 있다)
       kindLabel: '학습', title: activeStage && activeStage.id !== item.studyItem.subject.id ? activeStage.name : item.name,
       meta: recommended > 0
-        ? `오늘 권장 ${studyPos}.${formatPageNumber(start)}~${formatPageNumber(getRecommendedEndPage(item.studyItem.subject, getActiveSubjectStage(item.studyItem.subject), start, recommended))} · ${formatPageNumber(recommended)}${studyLabel}`
+        ? `오늘 권장 ${formatRecommendedRanges(item.studyItem.subject, start, recommended, formatPageNumber)} · ${formatPageNumber(recommended)}${studyLabel}`
         : `시작 ${studyPos}.${formatPageNumber(start)}`
     };
   });

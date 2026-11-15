@@ -87,10 +87,44 @@ export const getStageChapters = (subject: Subject, stage?: { isFollowUp: boolean
   return followUp ? getFollowUpChapters(followUp) : [];
 };
 
-/** 시작 페이지에서 pages장을 풀 때의 끝 페이지. 단원이 있으면 단원 사이를 건너뛰어 센다 */
-export const getRecommendedEndPage = (subject: Subject, stage: { isFollowUp: boolean } | null | undefined, start: number, pages: number) => {
+/** 시작 페이지에서 pages장을 풀 때의 끝 페이지. 단원이 있으면 단원 사이를 건너뛰어 센다. 그 단계의 끝 페이지를 넘지 않는다(넘치는 몫은 getRecommendedRanges의 다음 단계) */
+export const getRecommendedEndPage = (subject: Subject, stage: { isFollowUp: boolean; id?: string } | null | undefined, start: number, pages: number) => {
   const chapters = getStageChapters(subject, stage);
-  return (chapters.length > 0 ? endPageForSolved(chapters, start, pages) : null) ?? start + pages - 1;
+  const end = (chapters.length > 0 ? endPageForSolved(chapters, start, pages) : null) ?? start + pages - 1;
+  const stageEnd = stage && 'endPage' in stage && typeof (stage as { endPage?: unknown }).endPage === 'number' ? (stage as { endPage: number }).endPage : null;
+  return stageEnd !== null ? Math.min(end, Math.max(start, stageEnd)) : end;
+};
+
+export interface RecommendedRange {
+  stageId: string;
+  name: string;
+  isFollowUp: boolean;
+  start: number;
+  end: number;
+  pages: number;
+}
+
+/**
+ * 15일 "후행과목이 있을 때 권장량이 과목 끝 페이지를 뚫고 나온다": 오늘 권장량은 지금 단계가 먼저 끝나면 넘치는 몫을 다음 단계(후행과목)
+ * 페이지로 센 값이다(31일). 그래서 범위도 단계마다 나눠 준다. 예: 끝 40쪽 과목을 37쪽부터 44장 → [p.37~40, 2회독 p.1~40].
+ */
+export const getRecommendedRanges = (subject: Subject, start: number, pages: number): RecommendedRange[] => {
+  const stages = getSubjectStages(subject);
+  const activeIndex = stages.findIndex(stage => stage.status === 'current');
+  if (activeIndex < 0 || !(pages > 0)) return [];
+  const ranges: RecommendedRange[] = [];
+  let left = pages;
+  for (let index = activeIndex; index < stages.length && left > 0; index += 1) {
+    const stage = stages[index];
+    if (!(stage.remainingPages > 0)) continue;
+    const from = index === activeIndex ? start : stage.currentPage;
+    // 마지막 단계는 남은 양을 다 맡는다(그 단계 끝을 넘으면 끝에서 멈춘다)
+    const take = index === stages.length - 1 ? left : Math.min(left, stage.remainingPages);
+    const end = getRecommendedEndPage(subject, stage, from, take);
+    ranges.push({ stageId: stage.id, name: stage.name, isFollowUp: stage.isFollowUp, start: from, end, pages: take });
+    left -= take;
+  }
+  return ranges;
 };
 
 export const getSubjectStages = (subject: Subject) => {

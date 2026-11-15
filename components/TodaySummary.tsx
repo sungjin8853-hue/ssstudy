@@ -14,7 +14,6 @@ import {
   getAllSubjectReviewIds,
   getLocalDateKey,
   getLogStudyDate,
-  getRecommendedEndPage,
   getStageChapters,
   isSubjectRequiredNow,
   getSubjectStages,
@@ -29,7 +28,7 @@ import { ReviewSpeedGrowthCell, SpeedGraph, UnitGrowthEfficiency } from './PageG
 import { calculateCurrentUnitEfficiency, describeGrowthChange, describeSpeed, getEfficiencyScope, getEfficiencyView, pagesPerReferenceTime, toGrowthChange } from '../utils/pageGrowth';
 import { basicReviewCountRows, QUESTION_GRADE_LABELS } from '../utils/basicReviewStats';
 import type { BasicReviewCountRow, QuestionGrade } from '../utils/basicReviewStats';
-import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel, pageWord } from '../utils/pageLabel';
+import { DEFAULT_PAGE_LABEL, getPageLabel, pagePositionLabel, pageWord, recommendedRangeParts } from '../utils/pageLabel';
 import { getSubjectChain, getSubjectFamily, hasSubjectChain, isFamilyStudyLog, SubjectFamily } from '../utils/subjectChain';
 import { estimateSubjectEndDate, formatShortEndDate } from '../utils/completionEstimate';
 import { DoneStartButton, HelpPopover, IdleSummaryContext, LaterMembersStrip, MemberChooser, ReviewPlanContext, ReviewScopeStrip, StartButton, TINTED_HELP_BUTTON } from './TodayTasks';
@@ -1045,7 +1044,16 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       {recommendedPages !== null && recommendedPages > 0 && (
         <div className="flex flex-col items-end gap-0.5 whitespace-nowrap pb-1">
           <span className="text-[15px] font-bold text-slate-600">오늘 권장</span>
-          <span className="font-mono text-xl font-bold text-slate-900">{formatNumber(recommendedPages)}{pageLabel} · {pagePos}.{formatNumber(detailStartPage)}~{formatNumber(getRecommendedEndPage(detailData.subject, detailData.activeStage, detailStartPage, recommendedPages))}</span>
+          {(() => {
+            // 후행과목으로 넘치는 몫은 줄을 나눠 그 단계 범위로(15일: 과목 끝 페이지를 넘는 범위를 보이지 않는다)
+            const [first, ...rest] = recommendedRangeParts(detailData.subject, detailStartPage, recommendedPages, formatNumber);
+            return (
+              <>
+                <span data-testid="recommended-range" className="font-mono text-xl font-bold text-slate-900">{formatNumber(recommendedPages)}{pageLabel} · {first}</span>
+                {rest.map(part => <span key={part} data-testid="recommended-range-next" className="font-mono text-base font-bold text-slate-700">이어서 {part}</span>)}
+              </>
+            );
+          })()}
         </div>
       )}
     </div>

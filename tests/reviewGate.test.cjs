@@ -12403,3 +12403,23 @@ test('15일 fix-131: conditions joined by , before a connector are asked as the 
   assert.ok(buildReviewQuestions('C ; A, B').questions.every(q => !q.before));
   assert.ok(buildReviewQuestions('A, B = C').questions.every(q => !q.before));
 });
+
+test('15일 fix-134: today\'s recommended range stops at the stage end page and shows the overflow as the follow-up stage\'s own range', () => {
+  const { getRecommendedRanges, getRecommendedEndPage, getActiveSubjectStage } = loadSource('utils/schedule.ts');
+  const { formatRecommendedRanges } = loadSource('utils/pageLabel.ts');
+  const subject = { id: 'F', name: '수학', pageLabel: 'P', startPage: 1, totalPages: 40, completedPages: 36, targetDate: '2026-11-17',
+    followUpSubjects: [{ id: 'f1', name: '2회독', startPage: 1, endPage: 40, completedPage: 0 }, { id: 'f2', name: '3회독', startPage: 1, endPage: 30, completedPage: 0, pageLabel: '회' }] };
+  const stage = getActiveSubjectStage(subject);
+  assert.equal(getRecommendedEndPage(subject, stage, 37, 44), 40, 'never past the subject end page');
+  assert.deepEqual(getRecommendedRanges(subject, 37, 44).map(r => [r.name, r.start, r.end, r.pages]), [['수학', 37, 40, 4], ['2회독', 1, 40, 40]]);
+  assert.equal(formatRecommendedRanges(subject, 37, 6, String), 'p.37~40 · 2회독 p.1~2');
+  assert.equal(formatRecommendedRanges(subject, 37, 50, String), 'p.37~40 · 2회독 p.1~40 · 3회독 회.1~6');
+  assert.equal(formatRecommendedRanges(subject, 37, 3, String), 'p.37~39', 'inside one stage: as before');
+  // 후행과목 단원 사이는 건너뛴다
+  const chaptered = { ...subject, followUpSubjects: [{ id: 'f1', name: '2회독', startPage: 1, endPage: 30, completedPage: 0, chapters: [{ startPage: 1, endPage: 5 }, { startPage: 21, endPage: 30 }] }] };
+  assert.equal(formatRecommendedRanges(chaptered, 37, 10, String), 'p.37~40 · 2회독 p.1~21');
+  // 오늘 할 일 칸과 상세 칸 모두 이 글을 쓴다
+  const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
+  const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
+  assert.ok(logger.includes('오늘 권장 ${formatRecommendedRanges(') && summary.includes('recommendedRangeParts(detailData.subject, detailStartPage, recommendedPages, formatNumber)'));
+});
