@@ -221,16 +221,16 @@ export const NotePracticeDialog: React.FC<{
             className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-300 text-slate-900 hover:bg-slate-50"><CloseIcon /></button>
         </div>
         <div role="group" aria-label="범위 방식" className="flex gap-1 self-start rounded-xl bg-[#E7EAF8] p-1">
-          {segment('unit', '단위로')}
+          {segment('unit', units.every(unit => unit.kind === 'day') ? '날짜로' : '단위로')}
           {hasPages && segment('page', '페이지로')}
         </div>
         {mode === 'unit' ? (
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="시작 단위" value={fromKey} onChange={event => setFromKey(event.target.value)} className={select}>
+            <select aria-label={units.every(unit => unit.kind === 'day') ? '시작 날짜' : '시작 단위'} value={fromKey} onChange={event => setFromKey(event.target.value)} className={select}>
               {units.map(unit => <option key={unit.key} value={unit.key}>{noteUnitLabel(unit)}</option>)}
             </select>
             <span className="font-black text-slate-500">~</span>
-            <select aria-label="끝 단위" value={toKey} onChange={event => setToKey(event.target.value)} className={select}>
+            <select aria-label={units.every(unit => unit.kind === 'day') ? '끝 날짜' : '끝 단위'} value={toKey} onChange={event => setToKey(event.target.value)} className={select}>
               {units.map(unit => <option key={unit.key} value={unit.key}>{noteUnitLabel(unit)}</option>)}
             </select>
           </div>

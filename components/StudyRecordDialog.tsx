@@ -130,9 +130,12 @@ export const StudyRecordDialog: React.FC<{
                               {row.start !== undefined && row.end !== undefined ? row.start === row.end ? `${pos}.${num(row.start)}` : `${pos}.${num(row.start)}~${num(row.end)}` : pos}
                               <span className="ml-1.5 text-[13px] font-bold text-slate-500">{num(row.pages)}{label}{row.log.timeSpentMinutes > 0 ? ` · ${formatDurationShort(row.log.timeSpentMinutes)}` : ''}</span>
                             </span>
+                            {/* 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않아 단위 표기가 없다(후행과목 이름만) */}
+                            {subject.autoReviewRegister ? (stageCount > 1 && row.log.subjectStageNameSnapshot
+                              ? <span className="text-[13px] font-black text-slate-600">{row.log.subjectStageNameSnapshot}</span> : null) : (
                             <span data-record-unit={row.unit} className="text-[13px] font-black text-slate-600">
                               {stageCount > 1 && row.log.subjectStageNameSnapshot ? `${row.log.subjectStageNameSnapshot} · ` : ''}단위 {row.unit}{row.currentUnit ? ' (지금 채우는 중)' : ''}
-                            </span>
+                            </span>)}
                           </div>
                           <span data-record-when className={`text-[13px] font-bold ${view.tone}`}>{view.text}</span>
                           {row.log.continueLater && <span data-record-continue className="text-[12px] font-bold text-teal-700">이어서 풀기로 저장(완료로 끝내면 효율에 들어가요)</span>}

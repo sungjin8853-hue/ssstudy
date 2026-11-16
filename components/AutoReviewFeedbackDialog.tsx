@@ -52,7 +52,7 @@ export const AutoReviewFeedbackDialog: React.FC<{
         </p>
         <p className="mt-2 text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(info.speed, pageLabel)}</span></p>
         <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">
-          {info.previous !== null && <li className="text-indigo-800">바로 앞 단위 속도 {formatSpeed(info.previous, pageLabel)} · 추천은 이 단위와 견줘요</li>}
+          {info.previous !== null && <li className="text-indigo-800">바로 앞 묶음 속도 {formatSpeed(info.previous, pageLabel)} · 추천은 이 묶음과 견줘요</li>}
           <li>평균 속도 {formatSpeed(info.summary.averageSpeed, pageLabel)}{info.summary.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</li>
         </ul>
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">

@@ -12423,3 +12423,38 @@ test('15일 fix-134: today\'s recommended range stops at the stage end page and 
   const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(logger.includes('오늘 권장 ${formatRecommendedRanges(') && summary.includes('recommendedRangeParts(detailData.subject, detailStartPage, recommendedPages, formatNumber)'));
 });
+
+test('17일 fix-135: a subject with auto review on is not split into units — no unit boundaries, no unit labels, and 복습 넣기 records no unit end', () => {
+  const { subjectUnitBoundaries, registrationBoundaries } = loadSource('utils/reviewUnits.ts');
+  const { buildStudyRecord, addLogToReview } = loadSource('utils/studyRecord.ts');
+  const { groupLogsByReviewUnit } = loadSource('utils/noteUnits.ts');
+  const H = 3600e3;
+  const now = Date.parse('2026-11-16T15:00:00.000Z');
+  const at = hours => new Date(now - hours * H).toISOString();
+  const logs = [
+    { id: 'a', subjectId: 'S', startPage: 1, endPage: 5, pagesRead: 5, timeSpentMinutes: 30, timestamp: at(50), reviewRegisteredAt: at(49), nextReviewDate: at(-5) },
+    { id: 'b', subjectId: 'S', startPage: 6, endPage: 10, pagesRead: 5, timeSpentMinutes: 30, timestamp: at(20), reviewRegisteredAt: at(19), autoReviewRegistered: true, nextReviewDate: at(-5) },
+    { id: 'c', subjectId: 'S', startPage: 11, endPage: 15, pagesRead: 5, timeSpentMinutes: 30, timestamp: at(3), unitReviewPending: true, reviewEnabled: false, isCondensed: true }
+  ];
+  assert.equal(registrationBoundaries(logs).length, 1, 'manual 복습에 넣기 before auto was turned on');
+  assert.deepEqual(subjectUnitBoundaries({ autoReviewRegister: true }, logs), []);
+  assert.deepEqual(subjectUnitBoundaries({}, logs), registrationBoundaries(logs), 'auto off: as before');
+  // 학습 기록: 모두 한 덩어리
+  const rows = buildStudyRecord({ id: 'S', autoReviewRegister: true }, logs, now).flatMap(day => day.rows);
+  assert.deepEqual([...new Set(rows.map(row => row.unit))], [1]);
+  // 정리노트: 단위가 아니라 날마다
+  assert.ok(groupLogsByReviewUnit(logs, subjectUnitBoundaries({ autoReviewRegister: true }, logs)).every(section => section.kind === 'day'));
+  // 학습 기록의 복습 넣기: 넣은 때를 적지 않는다(단위 경계가 생기지 않는다)
+  const added = addLogToReview(logs[2], now, true);
+  assert.equal(added.reviewRegisteredAt, undefined);
+  assert.equal(added.unitReviewPending, undefined);
+  assert.equal(addLogToReview(logs[2], now).reviewRegisteredAt, new Date(now).toISOString(), 'auto off: ends the unit (fix-133)');
+  // 화면: 학습 기록 · 정리노트 · 추이 · 효율 설명 · 피드백 말
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  assert.ok(read('components/StudyRecordDialog.tsx').includes('{subject.autoReviewRegister ? (stageCount > 1'));
+  assert.ok(read('components/NoteTab.tsx').includes('subjectUnitBoundaries(currentSubject,'));
+  assert.ok(read('components/HistoryCharts.tsx').includes("{!selectedTrend.noUnits && <div"));
+  assert.ok(read('components/EfficiencyBoxes.tsx').includes('{!noUnits && <span><b>단위</b>'));
+  assert.ok(read('components/AutoReviewFeedbackDialog.tsx').includes('바로 앞 묶음 속도'));
+  assert.ok(read('App.tsx').includes('addLogToReview(log, nowMs, Boolean(subjects.find(subject => subject.id === log.subjectId)?.autoReviewRegister))'));
+});
