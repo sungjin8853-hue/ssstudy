@@ -110,9 +110,7 @@ export const EfficiencyBoxes: React.FC<{
   emptyNote?: string;
   /** 칸 맨 아래 줄(이번 단위). 위 두 줄과 같은 모양으로 들어간다 */
   footer?: React.ReactNode;
-  /** 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않아 설명에도 단위가 없다 */
-  noUnits?: boolean;
-}> = ({ efficiency, attackEfficiency, overall, headerAction, label = DEFAULT_PAGE_LABEL, done = false, recentOverall, footer, emptyNote, noUnits = false }) => {
+}> = ({ efficiency, attackEfficiency, overall, headerAction, label = DEFAULT_PAGE_LABEL, done = false, recentOverall, footer, emptyNote }) => {
   const has = (value?: number) => Boolean(value && value > 0);
   return (
     <section aria-label="효율" data-testid="efficiency-cell"
@@ -123,12 +121,11 @@ export const EfficiencyBoxes: React.FC<{
           {headerAction}
         </div>
         <HelpPopover label="효율 설명" triggerClassName={TINTED_HELP_BUTTON}>
-          {noUnits ? <span><b>효율</b>은 푼 장수와 걸린 시간을 모두 더해 낸 평균이에요(성장 정도를 보는 값). 자동으로 복습에 넣는 과목이라 단위로 나누지 않고 과목 평균과 견줘요.</span> : (
-          <span><b>효율</b>은 이번 단위를 처음 시작한 때부터 지금까지 푼 장수와 걸린 시간을 모두 더해 낸 평균이에요(성장 정도를 보는 값). 막 복습에 넣어 이번 단위에 아직 기록이 없으면 전체 평균이에요. 예상 시간 · 계획 · 뽀모도로 장수는 늘 전체 평균(처음부터 지금까지의 시간 합 ÷ 장수 합)으로 계산해요.</span>)}
+          <span><b>효율</b>은 이번 단위를 처음 시작한 때부터 지금까지 푼 장수와 걸린 시간을 모두 더해 낸 평균이에요(성장 정도를 보는 값). 막 복습에 넣어 이번 단위에 아직 기록이 없으면 전체 평균이에요. 예상 시간 · 계획 · 뽀모도로 장수는 늘 전체 평균(처음부터 지금까지의 시간 합 ÷ 장수 합)으로 계산해요.</span>
           <span><b>전체 효율</b>은 풀이와 정리 시간을 모두 합해서 푼 장수로 나눠요. 막힌 문제를 넘긴 만큼 정리에서 드러나서 성장을 재는 기준이 돼요.</span>
           <span><b>타임어택 효율</b>은 타임어택에서 한 장당 걸린 시간이에요. 막힌 문제는 바로 넘기니까 성장은 전체 효율로 봐요.</span>
           <span>전체 효율 아래에 <b>속도</b>(1시간 동안 푸는 장수가 얼마나 늘었는지)와 <b>공부량</b>(한 페이지에 쓴 시간이 몇 분 늘었는지)이 붙어요. 제목 옆 버튼에 적힌 기준(<b>이전 단위</b>, 이이전 단위, 평균)과 견준 값이고, 각각 오르면 초록, 내리면 빨강이에요. 오른쪽 "이전보다"는 마지막 공부로 이번 단위 평균 속도가 얼마나 바뀌었는지예요. 타임어택 효율은 값만 보여줘요.</span>
-          {!noUnits && <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 자동으로 복습에 넣는 과목은 단위가 없어서 처음부터 지금까지(직접 복습에 넣은 적이 있으면 그 뒤부터)가 한 덩어리예요. 평균은 처음부터 지금까지의 전체 평균이에요.</span>}
+          <span><b>단위</b>는 "복습에 넣기"를 누른 때로 나눠요. 이전에 복습에 넣은 때부터 이번에 넣을 때까지가 한 단위이고, 처음 단위는 처음 시작부터 첫 복습에 넣기까지예요. 복습과목은 복습 한 번이 한 단위예요. 자동으로 복습에 넣는 과목은 단위가 없어서 처음부터 지금까지(직접 복습에 넣은 적이 있으면 그 뒤부터)가 한 덩어리예요. 평균은 처음부터 지금까지의 전체 평균이에요.</span>
         </HelpPopover>
       </div>
       <EfficiencyRow testId="current-overall-efficiency" title="전체 효율" badge="성장 척도" value={has(efficiency) ? efficiency! : null}

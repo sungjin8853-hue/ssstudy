@@ -841,11 +841,10 @@ const App: React.FC = () => {
   // 9일: 오늘 할 일 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다(공부 기록 · 노트는 그대로)
   // 12일: 학습 기록 보기의 "복습하기" — 복습에 안 들어간 기록을 바로 복습에 넣는다(단위는 그대로)
   // 14일: 학습 기록 보기의 "복습 넣기" · "복습 빼기"는 기본 복습만 바꾼다
-  // 15일: 넣으면 "복습에 넣기"처럼 단위가 끝난다. 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않는다
   const handleChangeLogsReview = (logIds: string[], action: 'add' | 'remove', hasReviewSubjects: boolean) => {
     const ids = new Set(logIds);
     const nowMs = Date.now();
-    setLogs(prev => prev.map(log => (!ids.has(log.id) ? log : action === 'remove' ? removeLogFromReview(log, hasReviewSubjects) : addLogToReview(log, nowMs, Boolean(subjects.find(subject => subject.id === log.subjectId)?.autoReviewRegister)))));
+    setLogs(prev => prev.map(log => (!ids.has(log.id) ? log : action === 'remove' ? removeLogFromReview(log, hasReviewSubjects) : addLogToReview(log, nowMs))));
   };
 
   const handleExcludeFromReview = (logIds: string[]) => {

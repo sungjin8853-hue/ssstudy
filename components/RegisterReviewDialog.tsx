@@ -110,7 +110,7 @@ export const RegisterReviewDialog: React.FC<{
         </>}
         <p data-feedback-current="true" className="mt-1 text-sm font-black text-slate-700">이번 속도 <span className="text-2xl text-indigo-700">{formatSpeed(speed, pageLabel)}</span></p>
         <ul className="m-0 mt-2 flex list-none flex-col gap-1 p-0 text-[13px] font-bold text-slate-700">
-          {(chapterInfo ?? info).previousSpeed !== null && <li data-feedback-previous="true" className="text-indigo-800">바로 앞 {auto?.on ? '묶음' : '단위'} 속도 {formatSpeed((chapterInfo ?? info).previousSpeed, pageLabel)} · 추천은 이 {auto?.on ? '묶음과' : '단위와'} 견줘요</li>}
+          {(chapterInfo ?? info).previousSpeed !== null && <li data-feedback-previous="true" className="text-indigo-800">바로 앞 단위 속도 {formatSpeed((chapterInfo ?? info).previousSpeed, pageLabel)} · 추천은 이 단위와 견줘요</li>}
           <li data-feedback-average="true">평균 속도 {formatSpeed(summary.averageSpeed, pageLabel)}{summary.averageSpeed === null ? ' · 지난 기록이 없어요' : ''}</li>
           {summary.byGrade.map(item => <li key={item.grade} data-feedback-history={item.grade} className="text-slate-600">
             {SUBJECT_GRADE_LABELS[item.grade]} · 평균 속도 {formatSpeed(item.averageSpeed, pageLabel)} · {item.count}회

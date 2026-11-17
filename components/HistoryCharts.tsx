@@ -67,8 +67,6 @@ interface TrendItem {
   label: string;
   /** 복습과목이면 단위가 복습 한 번, 아니면 "복습에 넣기" 사이 */
   isReview: boolean;
-  /** 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않는다(단위별 속도 상승 칸이 없다) */
-  noUnits: boolean;
   pageLabel: string;
   /** 페이지 단위를 채울 때마다 한 점(첫 단위 대비 %) */
   unitPoints: Array<{ timestamp: number; date: string; speedIncrease: number; efficiency: number; complete: boolean }>;
@@ -155,10 +153,9 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
         : null;
       // 단위: 학습과목은 "복습에 넣기" 사이, 복습과목(복습 세션 기록)은 복습 한 번
       const parentId = group.logs.find(log => log.reviewParentSubjectId)?.reviewParentSubjectId;
-      const noUnits = !parentId && Boolean(subject?.autoReviewRegister);
       const boundaries = parentId ? reviewCompletionBoundaries(logs, parentId, group.subjectId)
         : registrationBoundaries(logs.filter(log => log.subjectId === group.subjectId));
-      const unitPoints = (noUnits ? [] : getUnitSpeedTrend(group.logs, boundaries)).map(point => {
+      const unitPoints = getUnitSpeedTrend(group.logs, boundaries).map(point => {
         const time = Date.parse(point.timestamp);
         return {
           timestamp: time,
@@ -171,7 +168,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
       const speed = buildSpeedSeries(group.logs, { timeAttack: true, windowMinutes: TREND_WINDOW_MINUTES });
       const latest = group.logs.reduce((max, log) => Math.max(max, Date.parse(log.timestamp) || 0), 0);
       return {
-        id: key, label: stageName ? `${subjectName} · ${stageName}` : subjectName, isReview: Boolean(parentId), noUnits,
+        id: key, label: stageName ? `${subjectName} · ${stageName}` : subjectName, isReview: Boolean(parentId),
         pageLabel: getPageLabel(subject), unitPoints, speed, latest
       };
     }).filter(item => item.unitPoints.length > 0 || item.speed.points.length > 0)
@@ -516,7 +513,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
           ) : selectedTrend ? <span className="rounded-full bg-slate-100 px-3.5 py-1.5 text-[13px] font-bold text-slate-500">{selectedTrend.label}</span> : null}>
           {selectedTrend ? (
             <div className="grid gap-x-8 gap-y-6 lg:grid-cols-5">
-              <div className={`min-w-0 ${selectedTrend.noUnits ? 'lg:col-span-5' : 'lg:col-span-3'}`} data-testid="speed-25">
+              <div className="min-w-0 lg:col-span-3" data-testid="speed-25">
                 <p className="mb-2 text-[15px] font-black text-slate-700">공부 1시간마다의 속도</p>
                 {speedPoints.length > 0 ? (
                   <>
@@ -563,7 +560,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
                 ) : <EmptyNote>공부 1시간을 채운 기록이 생기면 속도가 나타나요.</EmptyNote>}
               </div>
 
-              {!selectedTrend.noUnits && <div className="min-w-0 border-slate-200 lg:col-span-2 lg:border-l lg:pl-8" data-testid="speed-unit">
+              <div className="min-w-0 border-slate-200 lg:col-span-2 lg:border-l lg:pl-8" data-testid="speed-unit">
                 <p className="mb-2 text-[15px] font-black text-slate-700">단위별 속도 상승</p>
                 {unitLast ? (
                   <>
@@ -607,7 +604,7 @@ export const HistoryCharts: React.FC<Props> = ({ subjects, logs }) => {
                     </div>
                   </>
                 ) : <EmptyNote>페이지 단위를 한 번이라도 채우면 나타납니다.</EmptyNote>}
-              </div>}
+              </div>
             </div>
           ) : (
             <EmptyNote>공부 기록이 생기면 속도 추이가 나타납니다.</EmptyNote>

@@ -1,7 +1,7 @@
 import type { StudyLog, Subject } from '../types';
 import { getLocalDateKey, getLogProgressPages, getLogStudyDate, parseStudyDate } from './schedule';
 import { INITIAL_REVIEW_DELAY_MS } from './review';
-import { subjectUnitBoundaries, unitIndexAt } from './reviewUnits';
+import { registrationBoundaries, unitIndexAt } from './reviewUnits';
 import { excludeLogFromReview } from './reviewDelete';
 
 /**
@@ -75,12 +75,11 @@ export const canRemoveFromReview = (state: RecordReviewState) => state.kind === 
  * 넣은 때(reviewRegisteredAt)를 적는다. 그때 단위가 끝나 그 기록은 그 단위에 들고("지금 채우는 중"이 아니다), 아직 기다리는 다른 기록은 다음 단위가 된다.
  * 기본 복습만 뺐던 기록, 한 번 넣었다 뺀 기록은 이미 넣은 때가 있어 그 단위를 그대로 둔다.
  */
-export const addLogToReview = (log: StudyLog, nowMs: number, noUnits = false): StudyLog => {
+export const addLogToReview = (log: StudyLog, nowMs: number): StudyLog => {
   const keepSchedule = log.basicReviewSkipped && !log.unitReviewPending && log.reviewEnabled !== false && !log.isCondensed && Boolean(log.nextReviewDate);
   const wasExcluded = !log.unitReviewPending && (log.reviewEnabled === false || log.isCondensed) && !log.isReviewed;
   // 한 번 복습에 들어갔다 빠진 기록(넣은 때가 있음)은 다시 넣어도 원래 단위 그대로: 넣기 · 빼기를 오가도 단위가 옮겨 다니지 않는다
-  // 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않으니 넣은 때를 적지 않는다
-  const entersReview = !noUnits && (Boolean(log.unitReviewPending) || (wasExcluded && !log.reviewRegisteredAt));
+  const entersReview = Boolean(log.unitReviewPending) || (wasExcluded && !log.reviewRegisteredAt);
   const range = Number.isFinite(log.startPage) && Number.isFinite(log.endPage)
     ? { start: Math.min(log.startPage!, log.endPage!), end: Math.max(log.startPage!, log.endPage!) }
     : log.reviewUnitRange;
@@ -113,9 +112,9 @@ export const removeLogFromReview = (log: StudyLog, hasReviewSubjects: boolean): 
 );
 
 /** 과목의 공부 기록을 날짜별로(최근 날짜부터, 한 날 안에서는 먼저 한 것부터) */
-export const buildStudyRecord = (subject: Pick<Subject, 'id' | 'autoReviewRegister'>, logs: readonly StudyLog[], nowMs: number): StudyRecordDay[] => {
+export const buildStudyRecord = (subject: Pick<Subject, 'id'>, logs: readonly StudyLog[], nowMs: number): StudyRecordDay[] => {
   const own = logs.filter(log => log.subjectId === subject.id && isStudyRecord(log));
-  const boundaries = subjectUnitBoundaries(subject, own);
+  const boundaries = registrationBoundaries(own);
   const byDate = new Map<string, StudyRecordRow[]>();
   [...own].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).forEach(log => {
     // 정리노트의 단위와 같은 셈(noteUnits.groupLogsByReviewUnit): 넣은 기록은 넣은 때의 단위, 기다리는 기록은 지금 단위

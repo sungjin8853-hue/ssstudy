@@ -1,4 +1,4 @@
-import type { StudyLog, Subject } from '../types';
+import type { StudyLog } from '../types';
 
 /**
  * 단위(15:28 결정): 페이지 수로 나누던 "페이지 단위"를 없애고, 복습에 넣은 때로 단위를 나눈다.
@@ -26,14 +26,6 @@ export const registrationBoundaries = (logs: readonly StudyLog[]): number[] => {
   legacy.forEach(time => times.add(time));
   return [...times].sort((a, b) => a - b);
 };
-
-/**
- * 과목의 단위 경계. 17일 "자동복습 키면 단위 나누지 마": 자동으로 복습에 넣는 과목은 직접 복습에 넣은 적이 있어도 단위를 나누지 않는다
- * (경계 없음 → 정리노트는 날마다, 학습 기록 · 효율에는 단위 표기가 없다). 자동 복습을 끄면 전처럼 "복습에 넣기" 때로 나뉜다.
- */
-export const subjectUnitBoundaries = (subject: Pick<Subject, 'autoReviewRegister'> | null | undefined, logs: readonly StudyLog[]): number[] => (
-  subject?.autoReviewRegister ? [] : registrationBoundaries(logs)
-);
 
 /** 복습과목의 단위 경계: 원래 과목(parentSubjectId)의 기록을 그 복습과목으로 복습해 마친 시각들(오래된 것부터). */
 export const reviewCompletionBoundaries = (logs: readonly StudyLog[], parentSubjectId: string, reviewSubjectId: string): number[] => {

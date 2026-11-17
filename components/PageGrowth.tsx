@@ -208,10 +208,10 @@ export const UnitGrowthEfficiency: React.FC<{
     <div data-testid="unit-growth" className="flex flex-col !border-t-0">
       <EfficiencyBoxes efficiency={view.shown ? view.shown.averageTimePerPage : efficiency}
         attackEfficiency={view.shown ? view.shown.timeAttackAverageTimePerPage : attackEfficiency}
-        overall={view.overall} headerAction={compare} label={label} done={done} noUnits={noUnits}
+        overall={view.overall} headerAction={compare} label={label} done={done}
         recentOverall={view.overall ? recentChange : null}
         emptyNote={view.inherited ? '지금은 전체 평균이에요 · 이번 단위를 공부하면 이전 단위와 견줘요'
-          : noUnits ? '자동으로 복습에 넣는 과목은 공부가 쌓이면 과목 평균과 견줘요'
+          : noUnits ? '자동으로 복습에 넣는 과목은 단위가 없어요 · 공부가 쌓이면 과목 평균과 견줘요'
           : unitEnd === 'review' ? '복습을 한 번 마치면 다음 복습부터 이전 단위와 견줘요' : '복습에 넣으면 다음 단위부터 이전 단위와 견줘요'}
         footer={progress ? (
           <div className="flex flex-col gap-1">

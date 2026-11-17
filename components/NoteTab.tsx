@@ -13,7 +13,7 @@ import { groupLogsByReviewUnit, lastPageIndex, estimateMemoRows, NOTE_PAGE_ROWS,
 import type { NoteSheetPage, NoteSheetSection } from '../utils/noteUnits';
 import { copyText } from '../utils/copyText';
 import { getReviewMemoOutlineText } from '../utils/reviewMemo';
-import { subjectUnitBoundaries } from '../utils/reviewUnits';
+import { registrationBoundaries } from '../utils/reviewUnits';
 import type { DiagramArrow, DiagramItem, DiagramOperator } from '../utils/noteDiagram';
 import { createSessionMemoRecord, readSessionMemos } from '../utils/sessionMemo';
 import { NotePracticeDialog } from './NotePractice';
@@ -746,8 +746,7 @@ export const NoteTab: React.FC<{
   }, [current, onUpdateReviewMemo]);
   const currentSubject = current ? subjects.find(subject => subject.id === current.id) : undefined;
   // 단위: "복습에 넣기" 사이(이 과목의 모든 기록에서 복습에 넣은 시각으로 나눈다). 넣은 적이 없으면 하루마다
-  // 17일: 자동으로 복습에 넣는 과목은 단위를 나누지 않는다(하루마다)
-  const unitBoundaries = useMemo(() => (current ? subjectUnitBoundaries(currentSubject, logs.filter(log => log.subjectId === current.id)) : []), [current?.id, currentSubject?.autoReviewRegister, logs]);
+  const unitBoundaries = useMemo(() => (current ? registrationBoundaries(logs.filter(log => log.subjectId === current.id)) : []), [current?.id, logs]);
   const unitKey = unitBoundaries.join(',');
   const rowCache = useRef(new Map<string, number>());
   const [layoutTick, setLayoutTick] = useState(0);
