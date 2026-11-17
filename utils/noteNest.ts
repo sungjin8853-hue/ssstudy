@@ -18,7 +18,8 @@ import { reviewQuotes } from './reviewQuote';
 
 /**
  * 17일 "`//`면 모든 곳에서 엔터 친 것처럼": 줄 안의 `//`(괄호 · 따옴표 밖)를 줄바꿈으로 풀어 쓴 줄들.
- * 보통 줄은 조각마다 한 줄, 토글 제목의 `//` 뒤 조각은 그 토글 안 첫 줄들이 된다(제목에서 엔터를 친 것과 같다).
+ * 보통 줄은 조각마다 한 줄이다. 토글 제목이면 마지막 조각만 토글 제목(안의 줄들이 그 밑)이고, 앞 조각들은 토글 앞에 따로 쓴 줄이다
+ * (17일 "A>B // C 하면 왜 A 밑에 C가 있어": `//` 뒤는 앞 조각의 밑으로 들어가지 않는다. A 밑에 B와 C를 함께 두려면 `> A` 토글 안에 쓴다).
  * 빈 조각은 버린다. origin.start는 원래 줄(토글이면 제목 글) 안에서 조각 글이 시작하는 자리다.
  */
 const slashCuts = (line: string): number[] => {
@@ -60,11 +61,8 @@ export const expandSlashLinesMapped = (lines: readonly string[]): { lines: strin
     const body = toggle ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line;
     const pieces = line === REVIEW_MEMO_TOGGLE_END ? [] : slashPieces(body);
     if (!pieces.length) { out.push(line); origin.push({ line: number, start: 0, split: false }); return; }
-    // 토글 제목이 `//`로 시작하면(제목 글 없음) 제목은 비고 조각들이 안으로 들어간다
-    const titleEmpty = toggle && !body.slice(0, slashCuts(body)[0]).trim();
-    if (titleEmpty) { out.push(REVIEW_MEMO_TOGGLE_START); origin.push({ line: number, start: 0, split: true }); }
     pieces.forEach((piece, index) => {
-      out.push(`${toggle && index === 0 && !titleEmpty ? REVIEW_MEMO_TOGGLE_START : ''}${piece.text}`);
+      out.push(`${toggle && index === pieces.length - 1 ? REVIEW_MEMO_TOGGLE_START : ''}${piece.text}`);
       origin.push({ line: number, start: piece.start, split: true });
     });
   });

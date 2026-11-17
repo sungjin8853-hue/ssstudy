@@ -12444,8 +12444,8 @@ test('17일 fix-137: // fully separates the line — the row after > ends at the
     const body = text.replace(/^:::toggle /, '');
     assert.equal(line.slice(origin.start, origin.start + body.length), body);
   });
-  // 17일: 토글 제목의 // 도 엔터와 같다: 뒤 조각은 토글 안 첫 줄
-  assert.equal(expandNestLines(':::toggle X > a // b\nc : d\n:::end'), ':::toggle X\n:::toggle a\nb\nc : d\n:::end\n:::end');
+  // 17일: 토글 제목의 // 도 앞 조각 밑으로 들어가지 않는다: 앞 조각은 따로 쓴 줄, 마지막 조각이 토글 제목
+  assert.equal(expandNestLines(':::toggle X > a // b\nc : d\n:::end'), ':::toggle X\na\n:::end\n:::toggle b\nc : d\n:::end');
 });
 
 test('17일 fix-138: // is the same as pressing Enter everywhere — questions, sets, relation diagram and the note edits that go back to the line', () => {
@@ -12460,16 +12460,16 @@ test('17일 fix-138: // is the same as pressing Enter everywhere — questions, 
   for (const memo of [
     'a : // b : c', // 끝이 열린 줄도 엔터처럼 밑 줄과 이어진다
     'X > a : b // c : d', 'x , y ; z // c ; d', 'a = b // c = d ; e', '[과일] > 사과 : 빨강 // 배 : 노랑',
-    ':::toggle [A] p : // q : r\ns : t\n:::end', 'n:3.5 // sentence:first. second. // a=b', 'a - b - c // d - e']) {
+    'n:3.5 // sentence:first. second. // a=b', 'a - b - c // d - e']) {
     assert.deepEqual(qs(memo), qs(enter(memo)), memo);
     assert.deepEqual(sets(memo), sets(enter(memo)), memo);
     assert.equal(strip(parseNoteDiagram(memo)), strip(parseNoteDiagram(enter(memo))), memo);
   }
   // 노트 합치기가 읽는 줄도 엔터와 같고, 자리는 원래 줄의 그 조각이다
   const { scanNoteStatements } = loadSource('utils/noteMerge.ts');
-  for (const memo of ['p : q // X > a : b // c : d', ':::toggle T // 사과 : 빨강\n배 : 노랑\n:::end']) {
+  for (const memo of ['p : q // X > a : b // c : d', ':::toggle 사과 : 빨강 // T\n배 : 노랑\n:::end']) {
     const read = scanNoteStatements(memo);
-    assert.deepEqual(read.map(item => [item.text, item.path]), scanNoteStatements(enter(memo)).map(item => [item.text, item.path]), memo);
+    assert.deepEqual(read.map(item => [item.text, item.path]), scanNoteStatements(enter(memo).replace(':::toggle 사과 : 빨강\nT', '사과 : 빨강\n:::toggle T')).map(item => [item.text, item.path]), memo);
     read.forEach(item => assert.equal(memo.split('\n')[item.line].slice(item.start, item.end), item.text));
   }
   // 괄호 · 따옴표 안의 // 는 글자 그대로
@@ -12487,4 +12487,17 @@ test('17일 fix-138: // is the same as pressing Enter everywhere — questions, 
   const index = S.buildNoteSetIndex(['[과일] 사과 : 빨강 // [과일] 배 : 노랑']);
   const { rewriteSetMember } = loadSource('utils/noteSetEdit.ts');
   assert.equal(rewriteSetMember('[과일] 사과 : 빨강 // [과일] 배 : 노랑', index, '과일', '배', '참외'), '[과일] 사과 : 빨강 // [과일] 참외 : 노랑');
+});
+
+test('17일 fix-139: A > B // C never puts C under A — also in a toggle title, where only the last // piece is the toggle title', () => {
+  const { expandNestLines, expandSlashLines } = loadSource('utils/noteNest.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const conditionsOf = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => `${q.prompt}>${q.answer}|${q.conditions.join('&')}`).sort();
+  assert.equal(expandNestLines('A > B // C'), ':::toggle A\nB\n:::end\nC');
+  assert.deepEqual(conditionsOf('A > B : x // C : y'), ['B>x|A', 'C>y|']);
+  // 토글 제목: A > B 는 따로 쓴 줄, C 가 토글 제목이고 안의 줄은 C 밑
+  assert.equal(expandSlashLines(':::toggle A > B // C\nD : E\n:::end'), 'A > B\n:::toggle C\nD : E\n:::end');
+  assert.deepEqual(conditionsOf(':::toggle A > B : x // C\nD : E\n:::end'), ['B>x|A', 'D>E|C']);
+  // A 밑에 B와 C를 함께 두려면 토글 안에 쓴다
+  assert.deepEqual(conditionsOf(':::toggle A\nB : x\nC : y\n:::end'), ['B>x|A', 'C>y|A']);
 });
