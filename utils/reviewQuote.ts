@@ -23,7 +23,9 @@ const ROLE: Record<string, QuoteRole> = { ':': 'equal', ';': 'sequence', '<': 'r
 export const quoteGlue = (role: QuoteRole): '=' | '-' => (role === 'equal' ? '=' : '-');
 
 const OPEN_AFTER = /[\s(\[{,:;<=\-/]/;
-const CLOSE_BEFORE = /[\s)\]},:;<=\-/.]/;
+// 17일: 닫는 따옴표 뒤에 한글이 바로 붙는 글(`'ㄱ,ㄷ'뒤`, `'[의]'로`)도 따옴표다 — 한국어는 조사가 붙어 쓰여서,
+// 전에는 이런 따옴표가 아예 안 읽혀 안쪽 `,`가 "그리고"로 잘렸다(`받침 'ㄱ,ㄷ'뒤` → `ㄱ AND ㄷ`). 영어 don't는 여는 쪽 규칙이 막는다
+const CLOSE_BEFORE = /[\s)\]},:;<=\-/.]|[\uAC00-\uD7A3\u3131-\u318E]/;
 
 let cachedText: string | undefined;
 let cached: ReviewQuotes = { marks: new Map(), edges: new Set(), literal: new Set() };

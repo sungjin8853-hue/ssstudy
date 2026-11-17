@@ -131,6 +131,9 @@ const forwardOnly = (separator: string) => separator === ';' || separator === '-
 const goesBackward = (separator: string) => separator !== '>' && !forwardOnly(separator);
 
 // Only top-level delimiters split a column. Nested groups restart column numbering.
+/** 칸에 직접 쓴 이 이름들은 "그 칸이 그중 하나"라는 뜻이라(충분조건) 답으로 쓰지 않는다 */
+const EXAMPLE_LABELS = new Set(['예시', '보기', '사례', '예', 'example', 'examples', 'ex']);
+
 const splitAt = (text: string, from: number, to: number, delimiters: string) => {
   const cuts: number[] = [];
   const groups = reviewGroups(text).skip;
@@ -1540,15 +1543,26 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     const { start, end } = expression.span;
     const source = titleSource(node);
     // `@`를 풀어 바꾼 칸은 글자 범위가 원문과 달라서 안쪽을 따로 읽지 않는다
-    if (source.slice(start, end) !== (expression.raw ?? expression.text)) return;
+    // 17일: 따옴표 기호는 보이는 글에서만 빠진 것이라 원문과 견줄 때도 뺀다(전에는 `(가 = '나' = 다)`처럼 따옴표가 든 묶음의 안쪽이 통째로 안 읽혔다)
+    const quotes = reviewQuotes(source);
+    const shownSource = quotes.edges.size
+      ? Array.from({ length: Math.max(0, end - start) }, (_, offset) => start + offset).filter(at => !quotes.edges.has(at)).map(at => source[at]).join('')
+      : source.slice(start, end);
+    if (shownSource !== (expression.raw ?? expression.text)) return;
     const closed = reviewGroups(source).closed;
     for (let index = start; index < end; index += 1) {
+      // 따옴표 안은 글자 그대로라 그 안의 `( )`는 묶음이 아니다
+      if (quotes.literal.has(index) || quotes.edges.has(index)) continue;
       if (source[index] === '[') { const close = closed.get(index); if (close !== undefined) index = close; continue; }
       if (source[index] !== '(') continue;
       const close = closed.get(index);
       if (close === undefined || close >= end) continue;
       // 괄호 안은 놓인 자리의 `:`번째 분류기준을 이어받는다(31일 원칙). 안에서 직접 쓴 기준이 먼저다
-      const inner = parseExpression(source, node.id, index + 1, close, inheritedByNode.get(node.id) ?? new Map(), typeof column === 'number' ? column : 0);
+      const parsed = parseExpression(source, node.id, index + 1, close, inheritedByNode.get(node.id) ?? new Map(), typeof column === 'number' ? column : 0);
+      // 17일 "=를 경우에 따라 또는이나 대응으로": 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"(또는)다.
+      // 대응이 아니라서 "‘두 모음 사이에’에 대응하는 것은? → 울림소리 받침 뒤"처럼 논리적으로 맞힐 수 없는 문제를 내지 않는다.
+      // 칸 전체가 `=`로 이어진 것(`맴 + 이 = 매미`, `(A=B) ; C`)은 전처럼 대응이다
+      const inner: Expression = parsed.type === 'equal' ? { type: 'or', items: parsed.items } : parsed;
       if (inner.type !== 'text') splitMarkedCells(inner).forEach(innerPart => {
         const { expression: scopedInner, scope: innerScope } = scopeOf(innerPart, sets);
         const scoped = labelLoneSets(scopedInner, sets);
@@ -1717,7 +1731,13 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     question.statement = prose.statement;
     if (prose.solution) question.solution = prose.solution;
   });
-  return { questions, nodes };
+  // 17일 "[ ]의 정의는 충분조건만 해당된다": 칸에 직접 쓴 `[예시]`(`규칙 ; [예시] 맴+이=매미`)는 그 칸이 예시 하나라는 뜻이라
+  // 규칙에서 그 예시를 유도할 수 없다. 그래서 예시 칸을 **답**으로 하는 문제(다음 값 · 빈칸 · 두 걸음 뒤 · 전체 재구성)는 만들지 않는다.
+  // 예시를 보고 규칙을 맞히는 쪽은 그대로다. 필요충분으로 쓰려면 `([예시]= 맴+이=매미)`처럼 괄호 안에서 `=`로 묶어 적는다
+  // 예시 칸 **안**의 관계(`[예시] 맴 + 이 = 매미`의 맴+이 ↔ 매미)는 그 칸을 보여 준 채 묻는 것이라 그대로 둔다
+  const isExample = (column: QuestionColumn) => typeof column === 'string' && EXAMPLE_LABELS.has(column.replace(/\s+/g, ''));
+  const answerIsExample = (question: NoteQuestion) => question.columns.answer.some(isExample) && !question.columns.prompt.some(isExample);
+  return { questions: questions.filter(question => !answerIsExample(question)), nodes };
 }
 
 /**

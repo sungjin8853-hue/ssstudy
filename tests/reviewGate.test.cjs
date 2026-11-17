@@ -12611,3 +12611,29 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   const defs = removal.questionDefinitions({ covers: [{ logId: 'a', questionKey: target.key }], memos: [{ logId: 'a', memo }], setMemos: [{ logId: 'a', memo }] });
   assert.deepEqual(defs.lines.map(line => line.lineIndex), [1]);
 });
+
+test('17일 fix-144: = inside a group embedded in text is 또는 (no 대응 questions), quotes no longer hide a group, a closing quote may be followed by Hangul, and an example cell is never the answer', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const shape = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}>${q.answer}`);
+  // 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"라서 대응 문제를 내지 않는다(논리적으로 맞힐 수 없다)
+  assert.deepEqual(shape('앞 (가 = 나 = 다) 뒤 ; 결과'), ['direct|앞 (가 = 나 = 다) 뒤>결과']);
+  // 칸 전체가 `=`로 이어진 것은 전처럼 대응이다: A;B=C는 A·B를 보여 주고 C, A·C를 보여 주고 B
+  assert.deepEqual(shape('A ; B=C').filter(text => /B>C|C>B/.test(text)), ['direct|B>C', 'reverse|C>B']);
+  assert.deepEqual(shape('(가=나) ; 결과').filter(text => /가>나|나>가/.test(text)), ['direct|가>나', 'reverse|나>가']);
+  // 묶음 안의 `,`는 그대로 "그리고"다(또는으로 바뀌는 것은 `=`뿐)
+  assert.ok(shape('앞 (가 , 나) 뒤 ; 결과').some(text => text === 'direct|앞 (가 , 나) 뒤>결과'));
+  // 따옴표가 든 묶음도 안쪽을 읽는다(전에는 통째로 사라졌다)
+  assert.ok(shape("앞 (가 : '나' : 다) 뒤 ; 결과").some(text => text === 'direct|가>나'));
+  // 닫는 따옴표 뒤에 한글이 바로 붙어도 따옴표다: 안쪽 `,`는 글자
+  assert.deepEqual(shape("A: 받침 'ㄱ,ㄷ'뒤 'ㄱ,ㅅ'은 된소리"), ['direct|A>받침 ㄱ,ㄷ뒤 ㄱ,ㅅ은 된소리', 'reverse|받침 ㄱ,ㄷ뒤 ㄱ,ㅅ은 된소리>A']);
+  // 예시 칸은 답이 되지 않는다(규칙에서 예시를 유도할 수 없다). 예시를 보고 규칙을 맞히는 쪽과 예시 칸 안의 관계는 그대로
+  const memo = '조건 ; 규칙 ; [예시] 맴 + 이 = 매미';
+  const made = buildReviewQuestions(memo).questions;
+  assert.ok(!made.some(q => q.answer.includes('맴 + 이 = 매미')), 'never asks for the example');
+  assert.ok(made.some(q => q.kind === 'blank' && q.prompt.includes('맴 + 이 = 매미') && q.answer === '규칙'), 'the example may be shown');
+  assert.ok(made.some(q => q.prompt === '맴 + 이' && q.answer === '매미') && made.some(q => q.prompt === '매미' && q.answer === '맴 + 이'), 'inside the example cell stays');
+  // 필요충분으로 쓰면(괄호 안에서 `=`로 묶으면) 전처럼 답이 된다
+  assert.ok(buildReviewQuestions('조건 ; 규칙 ; ([예시]= 맴+이=매미)').questions.some(q => q.answer.includes('맴+이')));
+  // 다른 이름표(의미 · 거리)는 그대로 답이 된다
+  assert.ok(shape('재귀칭;[의미] 3인칭').some(text => text === 'direct|재귀칭>3인칭'));
+});
