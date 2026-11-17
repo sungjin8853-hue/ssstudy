@@ -9,7 +9,7 @@ import { readReviewFieldOverride } from './reviewFieldOverride';
  *  - 같은 줄의 `{이름}`: 그 줄에서 정의한 이름이면 같은 차례의 값, 아니면 노트의 집합(그 이름 밑의 항목)을 차례로 가져온다.
  *    가져올 것이 없으면 가져오지 않는다(전처럼 그 글 그대로).
  *  - 한 줄에 틀 칸이 여럿이면 같은 차례끼리 짝짓는다: `{A-B-C}야 ; {D-S-f} 가져가` → `A야 ; D 가져가`, `B야 ; S 가져가`, `C야 ; f 가져가`.
- *    값 수가 다르면 짧은 쪽까지만 만든다.
+ *    값 수가 다르면 짧은 쪽까지만 만든다. 빈 자리(`{A-B--N}`의 `--`)는 바로 앞 값을 다시 쓴 것이다: A, B, B, N.
  *  - 틀 칸이 없는 줄의 `{X}`(키워드 · 칸 이름표)는 전과 같다. 토글 제목 줄은 펼치지 않는다.
  */
 
@@ -52,7 +52,15 @@ const splitItems = (text: string): string[] => {
     else if (depth === 0 && /[-=,]/.test(character)) { items.push(text.slice(from, index)); from = index + 1; }
   }
   items.push(text.slice(from));
-  return items.map(item => item.trim()).filter(Boolean);
+  // 17일: 빈 자리(`A-B--N`의 `--`)는 바로 앞 값을 한 번 더 쓴 것이다(생략) → A, B, B, N. 맨 앞 빈 자리는 버린다
+  const filled: string[] = [];
+  items.map(item => item.trim()).forEach(item => {
+    if (item) filled.push(item);
+    else if (filled.length) filled.push(filled[filled.length - 1]);
+  });
+  // 맨 끝의 빈 자리(`{A-B-}`처럼 쓰는 중)는 값으로 치지 않는다
+  if (items.length && !items[items.length - 1].trim() && filled.length) filled.pop();
+  return filled;
 };
 
 type Part = { kind: 'list'; items: string[]; name?: string } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
