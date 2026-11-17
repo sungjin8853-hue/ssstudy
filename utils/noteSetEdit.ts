@@ -7,7 +7,7 @@ import type { NoteSetIndex } from './noteSets';
 import { topLevelCuts } from './noteDiagram';
 import { relationMarks } from './noteShorthand';
 import { expandOpenLines } from './noteOpenTail';
-import { expandNestLinesMapped, nestCuts } from './noteNest';
+import { expandNestLinesMapped, expandSlashLinesMapped, nestCuts } from './noteNest';
 
 /**
  * `[집합]()` 창에서 값을 고치거나 지울 때 노트 글에 적용하는 규칙.
@@ -102,8 +102,10 @@ export const rewriteSetMember = (memo: string, index: NoteSetIndex, set: string,
   const inside = locationTest(index, set);
   const replacement = to.replace(/\s*\n\s*/g, ' ').trim();
   const original = memo.split('\n');
-  const opened = expandOpenLines(memo).split('\n');
-  const openedOrigin = alignExpanded(original, opened);
+  // 17일: `//`는 엔터와 같다: 먼저 줄로 풀고(조각마다 원래 줄 · 자리), 끝이 열린 줄을 펼친다
+  const slashed = expandSlashLinesMapped(original);
+  const opened = expandOpenLines(slashed.lines.join('\n')).split('\n');
+  const openedOrigin = alignExpanded(slashed.lines, opened);
   // `X > Y`로 밑에 쓴 행은 X 토글 밑의 줄처럼 읽는다(3일): 행마다 원래 줄의 그 자리만 고친다
   const nested = expandNestLinesMapped(opened);
   const out = [...original];
@@ -115,10 +117,14 @@ export const rewriteSetMember = (memo: string, index: NoteSetIndex, set: string,
     if (line === REVIEW_MEMO_TOGGLE_END) { stack.pop(); return; }
     const from = nested.origin[position];
     if (!from) return;
-    const lineNumber = openedOrigin[from.line];
-    if (lineNumber < 0) return;
-    const raw = from.split ? line : original[lineNumber];
-    const base = from.split ? from.start : 0;
+    const slashedNumber = openedOrigin[from.line];
+    if (slashedNumber < 0) return;
+    const piece = slashed.origin[slashedNumber];
+    const lineNumber = piece.line;
+    const raw = from.split || piece.split ? line : original[lineNumber];
+    // 토글 제목에서 나온 조각은 제목 글 기준 자리라 원래 줄의 토글 표시 길이를 더한다
+    const titleShift = piece.split && original[lineNumber].startsWith(REVIEW_MEMO_TOGGLE_START) ? REVIEW_MEMO_TOGGLE_START.length : 0;
+    const base = (piece.split ? piece.start + titleShift : 0) + (from.split ? from.start : 0);
     const edits = editsByLine.get(lineNumber) ?? [];
     segmentsOf(raw).forEach(segment => {
       const text = segment.text.trim();

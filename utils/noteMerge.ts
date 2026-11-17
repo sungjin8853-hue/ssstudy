@@ -6,7 +6,7 @@ import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorth
 import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
-import { nestRowsOf } from './noteNest';
+import { expandSlashLinesMapped, nestRowsOf } from './noteNest';
 import { fillFrame, isFrameTitle, subFrameOf, unfillFrame } from './noteFrame';
 
 /**
@@ -525,7 +525,15 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
         ...(frame && text !== written ? { frame: { text: frame, original: written } } : {}) });
     });
   };
-  memo.split('\n').forEach((line, lineIndex) => {
+  // 17일: `//`는 엔터와 같다: 조각마다 줄로 읽고, 자리는 원래 줄 기준으로 돌려 적는다
+  const originalLines = memo.split('\n');
+  const slashed = expandSlashLinesMapped(originalLines);
+  slashed.lines.forEach((line, slashedIndex) => {
+    const from = slashed.origin[slashedIndex];
+    const lineIndex = from.line;
+    // 원래 줄에서 이 조각 글이 시작하는 자리(토글 제목에서 나온 조각은 제목 글 기준이라 토글 표시 길이를 더한다)
+    const shift = !from.split ? 0 : from.start + (originalLines[lineIndex].startsWith(REVIEW_MEMO_TOGGLE_START) ? REVIEW_MEMO_TOGGLE_START.length : 0)
+      - (line.startsWith(REVIEW_MEMO_TOGGLE_START) ? REVIEW_MEMO_TOGGLE_START.length : 0);
     if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
       pendingFrame = null;
       const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
@@ -536,7 +544,7 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
         opened.push({ entered: 0, frame: sub });
         return;
       }
-      const { rows } = rowsOf(title, REVIEW_MEMO_TOGGLE_START.length, true);
+      const { rows } = rowsOf(title, REVIEW_MEMO_TOGGLE_START.length + shift, true);
       // 형식 토글 밑의 하위 토글 제목은 형식에 넣은 글이 경로다
       if (frame && rows.length === 1) enter(fillFrame(frame, rows[0].text) ?? rows[0].text);
       else rows.forEach(row => enter(row.text));
@@ -556,7 +564,7 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
       rows.slice(0, -1).forEach(() => leave());
       if (tail) scanLine(tail.text, tail.start);
     };
-    scanLine(line, 0);
+    scanLine(line, shift);
     pendingFrame = null;
   });
   return statements;

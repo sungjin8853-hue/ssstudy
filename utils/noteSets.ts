@@ -10,7 +10,7 @@ import type { SetExprNode } from './setExpression';
 import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorthand';
 import { expandOpenLines, openTailOf } from './noteOpenTail';
 import { GHOST_CONTINUE } from './noteGhost';
-import { expandNestLines } from './noteNest';
+import { expandNestLines, expandSlashLines } from './noteNest';
 import { isQuoteMark, reviewQuotes } from './reviewQuote';
 import { readReviewFieldOverride } from './reviewFieldOverride';
 
@@ -433,7 +433,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   memos.forEach(memo => {
     const stack: string[] = [];
     // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다
-    expandFrameLines(expandNestLines(expandOpenLines(memo))).split('\n').forEach(line => {
+    expandFrameLines(expandNestLines(expandOpenLines(expandSlashLines(memo)))).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const key = see(toggleName(line.slice(REVIEW_MEMO_TOGGLE_START.length)));
         sets.add(key);
@@ -1034,7 +1034,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
   (index.sources ?? []).forEach(memo => {
     const noteWide = noteWideCriterionOf(memo) ?? undefined;
     const stack: { key: string; criterion?: string }[] = [];
-    expandFrameLines(expandNestLines(expandOpenLines(memo))).split('\n').forEach(line => {
+    expandFrameLines(expandNestLines(expandOpenLines(expandSlashLines(memo)))).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
         stack.push({ key: normSetName(toggleName(title)), criterion: splitTitleCriteria(title).criteria.at(-1) });

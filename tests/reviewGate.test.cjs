@@ -1464,8 +1464,10 @@ test('notes without logic words make no questions: no whole-note recall that sho
 test('equals is a higher-importance colon while periods, decimals and spaces stay literal', () => {
   const memo = 'n:3.5 // sentence:first. second. // a=b';
   const direct = questionsFor(memo).filter(q => q.kind === 'direct');
-  assert.deepEqual(direct.map(q => [q.prompt, q.answer, q.priority]), [['a', 'b', 1], ['n', '3.5', 1], ['sentence', 'first. second.', 1]],
-    'a=b is asked before the colon lines (= is the more important link), and it is a relation, not an OR');
+  assert.deepEqual(direct.map(q => [q.prompt, q.answer, q.priority]).sort(), [['a', 'b', 1], ['n', '3.5', 1], ['sentence', 'first. second.', 1]].sort(),
+    'a=b is a relation, not an OR');
+  // 17일: `//`는 엔터와 같다(줄 순서 그대로)
+  assert.deepEqual(direct.map(q => q.prompt), questionsFor(memo.replace(/ \/\/ /g, '\n')).filter(q => q.kind === 'direct').map(q => q.prompt));
   assert.ok(questionsFor('a=b').some(q => q.kind === 'reverse' && q.prompt === 'b' && q.answer === 'a'), '= is asked backwards like a colon');
   const { parseReviewMemoSyntax } = loadSource('utils/reviewMemoLogic.ts');
   for (const text of ['a.b', 'a. b', '[a.b.]', 'a;b.c', 'a=b']) assert.deepEqual(parseReviewMemoSyntax(text).logicalOperators, [], text);
@@ -12442,6 +12444,47 @@ test('17일 fix-137: // fully separates the line — the row after > ends at the
     const body = text.replace(/^:::toggle /, '');
     assert.equal(line.slice(origin.start, origin.start + body.length), body);
   });
-  // 토글 제목에 // 가 있으면 > 는 글자 그대로
-  assert.equal(expandNestLines(':::toggle X > a // b\nc : d\n:::end'), ':::toggle X > a // b\nc : d\n:::end');
+  // 17일: 토글 제목의 // 도 엔터와 같다: 뒤 조각은 토글 안 첫 줄
+  assert.equal(expandNestLines(':::toggle X > a // b\nc : d\n:::end'), ':::toggle X\n:::toggle a\nb\nc : d\n:::end\n:::end');
+});
+
+test('17일 fix-138: // is the same as pressing Enter everywhere — questions, sets, relation diagram and the note edits that go back to the line', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const S = loadSource('utils/noteSets.ts');
+  const { parseNoteDiagram } = loadSource('utils/noteDiagram.ts');
+  const removal = loadSource('utils/reviewRemoval.ts');
+  const enter = memo => memo.replace(/\s*\/\/\s*/g, '\n');
+  const qs = memo => buildReviewQuestions(memo).questions.map(q => [q.kind, q.prompt, q.answer, q.conditions.join('&')].join('|')).sort();
+  const sets = memo => { const index = S.buildNoteSetIndex([memo]); return [...index.display.keys()].sort().map(key => [key, S.setContents(index, key).map(row => row.name).sort()]); };
+  const strip = value => JSON.stringify(value, (key, item) => (['id', 'start', 'end', 'spans', 'line', 'offset', 'nodeId'].includes(key) ? undefined : item));
+  for (const memo of [
+    'a : // b : c', // 끝이 열린 줄도 엔터처럼 밑 줄과 이어진다
+    'X > a : b // c : d', 'x , y ; z // c ; d', 'a = b // c = d ; e', '[과일] > 사과 : 빨강 // 배 : 노랑',
+    ':::toggle [A] p : // q : r\ns : t\n:::end', 'n:3.5 // sentence:first. second. // a=b', 'a - b - c // d - e']) {
+    assert.deepEqual(qs(memo), qs(enter(memo)), memo);
+    assert.deepEqual(sets(memo), sets(enter(memo)), memo);
+    assert.equal(strip(parseNoteDiagram(memo)), strip(parseNoteDiagram(enter(memo))), memo);
+  }
+  // 노트 합치기가 읽는 줄도 엔터와 같고, 자리는 원래 줄의 그 조각이다
+  const { scanNoteStatements } = loadSource('utils/noteMerge.ts');
+  for (const memo of ['p : q // X > a : b // c : d', ':::toggle T // 사과 : 빨강\n배 : 노랑\n:::end']) {
+    const read = scanNoteStatements(memo);
+    assert.deepEqual(read.map(item => [item.text, item.path]), scanNoteStatements(enter(memo)).map(item => [item.text, item.path]), memo);
+    read.forEach(item => assert.equal(memo.split('\n')[item.line].slice(item.start, item.end), item.text));
+  }
+  // 괄호 · 따옴표 안의 // 는 글자 그대로
+  assert.ok(qs("a : 'b // c'").some(row => row.includes('b // c')));
+  // 노트에 되돌려 쓰기: 뺀 문제의 [!]는 원래 줄의 그 조각에 붙는다
+  const memo = 'p : q // 사과 : 빨강';
+  const target = buildReviewQuestions(memo).questions.find(q => q.kind === 'direct' && q.prompt === '사과');
+  const plan = removal.planReviewRemoval({ reason: 'logic', covers: [{ logId: 'a', questionKey: target.key }], memos: [{ logId: 'a', memo }], nowIso: '2026-11-17T00:00:00.000Z' });
+  assert.ok(plan[0].memo && plan[0].memo.startsWith('p : q // ') && plan[0].memo.includes('!'), plan[0].memo);
+  assert.ok(!buildReviewQuestions(plan[0].memo).questions.some(q => q.key === target.key));
+  // 문제가 나온 줄 고치기: 조각이 든 원래 줄 전체를 보여 준다
+  const defs = removal.questionDefinitions({ covers: [{ logId: 'a', questionKey: target.key }], memos: [{ logId: 'a', memo }], setMemos: [{ logId: 'a', memo }] });
+  assert.deepEqual(defs.lines.map(line => [line.lineIndex, line.text]), [[0, memo]]);
+  // 집합 값 고치기도 조각 자리에서
+  const index = S.buildNoteSetIndex(['[과일] 사과 : 빨강 // [과일] 배 : 노랑']);
+  const { rewriteSetMember } = loadSource('utils/noteSetEdit.ts');
+  assert.equal(rewriteSetMember('[과일] 사과 : 빨강 // [과일] 배 : 노랑', index, '과일', '배', '참외'), '[과일] 사과 : 빨강 // [과일] 참외 : 노랑');
 });

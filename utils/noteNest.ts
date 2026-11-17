@@ -16,6 +16,63 @@ import { reviewQuotes } from './reviewQuote';
  * 문제 만들기 · 관계도 · 집합 읽기가 이 글을 쓰고, 노트에 저장된 글은 바뀌지 않는다.
  */
 
+/**
+ * 17일 "`//`면 모든 곳에서 엔터 친 것처럼": 줄 안의 `//`(괄호 · 따옴표 밖)를 줄바꿈으로 풀어 쓴 줄들.
+ * 보통 줄은 조각마다 한 줄, 토글 제목의 `//` 뒤 조각은 그 토글 안 첫 줄들이 된다(제목에서 엔터를 친 것과 같다).
+ * 빈 조각은 버린다. origin.start는 원래 줄(토글이면 제목 글) 안에서 조각 글이 시작하는 자리다.
+ */
+const slashCuts = (line: string): number[] => {
+  if (!line.includes('//')) return [];
+  const groups = reviewGroups(line).skip;
+  const edges = [...reviewQuotes(line).edges].sort((a, b) => a - b);
+  const quoteEnd = new Map<number, number>();
+  for (let at = 0; at + 1 < edges.length; at += 2) quoteEnd.set(edges[at], edges[at + 1]);
+  const cuts: number[] = [];
+  for (let index = 0; index < line.length; index += 1) {
+    const closing = quoteEnd.get(index);
+    if (closing !== undefined) { index = closing; continue; }
+    const jump = groups.get(index);
+    if (jump !== undefined) { index = jump; continue; }
+    if (line[index] === '/' && line[index + 1] === '/') { cuts.push(index); while (line[index + 1] === '/') index += 1; }
+  }
+  return cuts;
+};
+
+const slashPieces = (body: string): NestRow[] => {
+  const cuts = slashCuts(body);
+  if (!cuts.length) return [];
+  const pieces: NestRow[] = [];
+  let from = 0;
+  [...cuts, body.length].forEach(cut => {
+    const raw = body.slice(from, cut);
+    if (raw.trim()) pieces.push({ start: from + (raw.length - raw.trimStart().length), text: raw.trim() });
+    from = cut;
+    while (body[from] === '/') from += 1;
+  });
+  return pieces;
+};
+
+export const expandSlashLinesMapped = (lines: readonly string[]): { lines: string[]; origin: NestOrigin[] } => {
+  const out: string[] = [];
+  const origin: NestOrigin[] = [];
+  lines.forEach((line, number) => {
+    const toggle = line.startsWith(REVIEW_MEMO_TOGGLE_START);
+    const body = toggle ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line;
+    const pieces = line === REVIEW_MEMO_TOGGLE_END ? [] : slashPieces(body);
+    if (!pieces.length) { out.push(line); origin.push({ line: number, start: 0, split: false }); return; }
+    // 토글 제목이 `//`로 시작하면(제목 글 없음) 제목은 비고 조각들이 안으로 들어간다
+    const titleEmpty = toggle && !body.slice(0, slashCuts(body)[0]).trim();
+    if (titleEmpty) { out.push(REVIEW_MEMO_TOGGLE_START); origin.push({ line: number, start: 0, split: true }); }
+    pieces.forEach((piece, index) => {
+      out.push(`${toggle && index === 0 && !titleEmpty ? REVIEW_MEMO_TOGGLE_START : ''}${piece.text}`);
+      origin.push({ line: number, start: piece.start, split: true });
+    });
+  });
+  return { lines: out, origin };
+};
+
+export const expandSlashLines = (memo: string): string => (memo.includes('//') ? expandSlashLinesMapped(memo.split('\n')).lines.join('\n') : memo);
+
 /** 줄에서 밑에 쓰기로 읽는 `>`의 자리들과, 첫 `>` 앞의 마지막 `//`(그 앞은 따로 쓴 칸이다, 없으면 -1), 첫 `>` 뒤 첫 `//`(그 뒤는 따로 쓴 칸이다, 없으면 -1) */
 const scanNest = (line: string): { cuts: number[]; lead: number; tail: number } => {
   if (!line.includes('>')) return { cuts: [], lead: -1, tail: -1 };
@@ -81,12 +138,26 @@ export const nestRowsOf = (body: string, title = false): { lead: NestRow | null;
   };
 };
 
-export const hasNestLines = (memo: string) => memo.includes('>') && memo.split('\n').some(line => nestCuts(line.startsWith(REVIEW_MEMO_TOGGLE_START) ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line).length > 0);
+export const hasNestLines = (memo: string) => memo.includes('//') || (memo.includes('>') && memo.split('\n').some(line => nestCuts(line.startsWith(REVIEW_MEMO_TOGGLE_START) ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line).length > 0));
 
 /** 풀어 쓴 줄이 원래 어느 줄의 어디서 왔는가: 원래 줄 번호와, 그 줄(토글이면 제목 글) 안에서 이 행 글이 시작하는 자리. 끼워 넣은 토글 끝이면 null */
 export interface NestOrigin { line: number; start: number; split: boolean }
 
+/** `//`를 줄바꿈으로 푼 뒤(17일) `>`로 밑에 쓴 행을 토글로 푼다. origin은 원래 줄 기준이다 */
 export const expandNestLinesMapped = (lines: readonly string[]): { lines: string[]; origin: Array<NestOrigin | null> } => {
+  const slashed = expandSlashLinesMapped(lines);
+  const nested = expandNestOnlyMapped(slashed.lines);
+  return {
+    lines: nested.lines,
+    origin: nested.origin.map(origin => {
+      if (!origin) return null;
+      const from = slashed.origin[origin.line];
+      return { line: from.line, start: from.start + origin.start, split: from.split || origin.split };
+    })
+  };
+};
+
+const expandNestOnlyMapped = (lines: readonly string[]): { lines: string[]; origin: Array<NestOrigin | null> } => {
   const out: string[] = [];
   const origin: Array<NestOrigin | null> = [];
   /** 열린 토글마다 그 제목에서 더 연 토글 수(그 토글이 끝날 때 함께 닫는다) */

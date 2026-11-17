@@ -8,7 +8,7 @@ import { buildNoteSetIndex, evaluateSetExpression, expandNoteSlots, fillNoteTemp
 import type { NoteSlot, NoteTemplate } from './noteSets';
 import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria } from './noteDiagram';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
-import { expandNestLines } from './noteNest';
+import { expandNestLines, expandSlashLines } from './noteNest';
 import { hasLogicMark, isLogicToggleTitle, memoLineText, stripLogicMarks } from './noteLogicMarks';
 import { mergeNoteChains, parseNoteChain, scanNoteStatements } from './noteMerge';
 import type { OpenTail } from './noteOpenTail';
@@ -788,7 +788,8 @@ const assignPairBundles = (questions: NoteQuestion[], expressions: ReadonlyMap<s
 export function buildReviewQuestions(original: string): { questions: NoteQuestion[]; nodes: QuestionNoteNode[] } {
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리). 전각 기호(`：` `；`)는 노트 기호로 읽는다(글자 수가 같아 글자 범위는 그대로).
   // 완전한 행 뒤의 `>`는 그 뒤 행을 밑에 쓴 것처럼 읽는다(3일)
-  const memo = expandNestLines(expandOpenLines(normalizeNotePunctuation(original)));
+  // 17일: `//`는 엔터 친 것과 같다(끝이 열린 줄 · 밑에 쓰기도 줄바꿈처럼)
+  const memo = expandNestLines(expandOpenLines(expandSlashLines(normalizeNotePunctuation(original))));
   const tailByNode = new Map<string, OpenTail>();
   const nodes: QuestionNoteNode[] = [];
   lineNodeIds = new Set<string>();

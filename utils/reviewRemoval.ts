@@ -60,7 +60,8 @@ const sourceLines = (located: Located) => {
 /** `>`로 밑에 쓴 줄(`X > Y`)의 행들: 원래 줄 번호마다 행 글과 그 줄 안의 시작 자리(토글 제목이면 제목 글 기준) */
 const nestPiecesByLine = (lines: readonly string[]): Map<number, Array<{ start: number; text: string }>> => {
   const result = new Map<number, Array<{ start: number; text: string }>>();
-  if (!lines.some(line => line.includes('>'))) return result;
+  // 17일: `//`로 나눈 조각도 따로 쓴 줄이다
+  if (!lines.some(line => line.includes('>') || line.includes('//'))) return result;
   const expanded = expandNestLinesMapped(lines);
   expanded.origin.forEach((origin, at) => {
     if (!origin?.split) return;
@@ -239,7 +240,15 @@ export const questionDefinitions = (input: { covers: readonly RemovalCover[]; me
     values.push(located.question.prompt, located.question.answer);
     sourceLines(located).forEach(source => {
       const lineIndex = indexOfLine(located.memo, source.line, source.isToggle);
-      if (lineIndex >= 0) pushUnique(lines, { kind: 'line', logId: cover.logId, lineIndex, text: source.line, isToggle: source.isToggle });
+      if (lineIndex >= 0) { pushUnique(lines, { kind: 'line', logId: cover.logId, lineIndex, text: source.line, isToggle: source.isToggle }); return; }
+      // 17일: `//`(또는 `>`)로 나눈 조각에서 나온 문제는 그 조각이 든 원래 줄 전체를 고치게 보여 준다
+      const memoLines = located.memo.split('\n');
+      const pieces = nestPiecesByLine(memoLines);
+      const owner = [...pieces.entries()].find(([, list]) => list.some(piece => piece.text === source.line))?.[0];
+      if (owner === undefined) return;
+      const whole = memoLines[owner];
+      const toggle = whole.startsWith(REVIEW_MEMO_TOGGLE_START);
+      pushUnique(lines, { kind: 'line', logId: cover.logId, lineIndex: owner, text: toggle ? whole.slice(REVIEW_MEMO_TOGGLE_START.length) : whole, isToggle: toggle });
     });
     const found = questionAbilities(located.question, located.nodes, input.setMemos.map(item => item.memo));
     found.forEach(ability => {
