@@ -64,6 +64,20 @@ interface Props {
   revealed: boolean;
   onReveal: () => void;
   onGrade: (result: ReviewGrade) => void;
+  /**
+   * 17일: 오답 재시험(2회차부터). 있으면 평가 버튼 대신 오답 · 정답 두 개만 보이고, 카드처럼 앞뒤로 오가며 정답을 다시 가릴 수 있다.
+   * 회차의 모든 문제에 표시하면 그 결과로 다음 회차(또는 끝)로 넘어간다.
+   */
+  retest?: {
+    position: number;
+    total: number;
+    marked: number;
+    mark?: 'wrong' | 'right';
+    onPrev: () => void;
+    onNext: () => void;
+    onHide: () => void;
+    onMark: (right: boolean) => void;
+  };
   wrongIntervalLabel: string;
   correctIntervalLabel: string;
   /** 평가마다 다음 복습까지의 간격(FSRS-6). 없으면 wrong/correctIntervalLabel을 쓴다. */
@@ -101,6 +115,37 @@ const RAIL_CHIP: Record<ReviewRailItem['status'], string> = {
   wrong: 'bg-rose-100 text-rose-900',
   done: 'bg-green-100 text-green-900'
 };
+
+/** 오답 재시험 카드 조작: 이전 · 다음, 정답 확인 · 가리기, 오답 · 정답 표시 */
+const RetestControls: React.FC<{ retest: NonNullable<Props['retest']>; revealed: boolean; onReveal: () => void }> = ({ retest, revealed, onReveal }) => (
+  <div data-testid="retest-controls" className="flex shrink-0 flex-col gap-3">
+    <div className="flex items-center justify-between gap-2">
+      <button type="button" data-testid="retest-prev" onClick={retest.onPrev} disabled={retest.position <= 1}
+        className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">◀ 이전</button>
+      <span data-testid="retest-position" className="text-center text-sm font-black text-slate-700">
+        {retest.position} / {retest.total}
+        <span className="block text-xs font-bold text-slate-500">표시 {retest.marked}/{retest.total}{retest.mark ? ` · 이 문제 ${retest.mark === 'right' ? '정답' : '오답'}` : ''}</span>
+      </span>
+      <button type="button" data-testid="retest-next" onClick={retest.onNext} disabled={retest.position >= retest.total}
+        className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">다음 ▶</button>
+    </div>
+    {!revealed ? (
+      <button type="button" onClick={onReveal}
+        className="h-[68px] rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
+    ) : (
+      <>
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" data-retest-mark="wrong" aria-pressed={retest.mark === 'wrong'} onClick={() => retest.onMark(false)}
+            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${retest.mark === 'wrong' ? 'border-rose-600 bg-rose-200 text-rose-950 ring-4 ring-rose-300' : 'border-rose-300 bg-rose-100 text-rose-900'}`}>오답</button>
+          <button type="button" data-retest-mark="right" aria-pressed={retest.mark === 'right'} onClick={() => retest.onMark(true)}
+            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${retest.mark === 'right' ? 'border-green-600 bg-green-200 text-green-950 ring-4 ring-green-300' : 'border-green-400 bg-green-100 text-green-900'}`}>정답</button>
+        </div>
+        <button type="button" data-testid="retest-hide" onClick={retest.onHide}
+          className="h-11 rounded-xl border-2 border-slate-300 bg-white text-sm font-black text-slate-700 hover:bg-slate-50">정답 다시 가리기</button>
+      </>
+    )}
+  </div>
+);
 
 export const ReviewPracticeScreen: React.FC<Props> = props => {
   const rate = props.firstTryTotal > 0 ? Math.round(props.firstTryCorrect / props.firstTryTotal * 100) : 0;
@@ -183,7 +228,9 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
                   머릿속으로 먼저 떠올려 보세요
                 </div>
               )}
-              {!props.revealed ? (
+              {props.retest ? (
+                <RetestControls retest={props.retest} revealed={props.revealed} onReveal={props.onReveal} />
+              ) : !props.revealed ? (
                 <button type="button" onClick={props.onReveal}
                   className="h-[76px] shrink-0 rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
               ) : (

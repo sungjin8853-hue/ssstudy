@@ -5745,7 +5745,8 @@ test('page unit review registration: exceptions keep the old behaviour', () => {
   assert.ok(app.includes('registerPendingReviews(subjectId, gradePendingReviews(merged, subjectId, grade, now), now)') && app.includes('onRegisterReview={handleRegisterReview}'));
   const today = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.equal((today.match(/\|\| log\.unitReviewPending/g) || []).length, 2, 'a waiting record counts as a review-included record in the edit modal');
-  assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('onRegisterReview(detailData.subject.id, grade, logIds)') && today.includes('<RegisterReviewDialog'), '복습에 넣기는 난도 창을 열고, 난도를 고르면 등록한다');
+  // 17일: 오늘 할 일의 버튼은 자동 복습 설정만 연다(복습에 넣기 · 난도는 학습량 입력에서)
+  assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('pendingCount={0} auto={') && today.includes('<RegisterReviewDialog'));
 });
 
 test('all-subjects panel: the review card tools wrap inside a narrow card instead of sticking out of it', () => {
@@ -7344,7 +7345,7 @@ test('merge records keep the text from before the merge and can be undone only w
 test('finishing a study merges the new note into earlier pages once, and the note screen can show and undo it', () => {
   const read = name => fs.readFileSync(path.resolve(__dirname, '..', name), 'utf8');
   const logger = read('components/SessionLogger.tsx');
-  assert.ok(logger.includes('mergeNewNoteIntoEarlierPages(nextLog);') && logger.indexOf('mergeNewNoteIntoEarlierPages(nextLog);') < logger.indexOf('applyCarriedSheetEdits();\n    onLogSession(nextLog);'),
+  assert.ok(logger.includes('mergeNewNoteIntoEarlierPages(nextLog);') && logger.indexOf('mergeNewNoteIntoEarlierPages(nextLog);') < logger.indexOf('applyCarriedSheetEdits();\n    onLogSession(nextLog, activeReviewRun ? undefined : currentIntake());'),
     'merged text is queued before the carried edits are applied');
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
@@ -11153,7 +11154,9 @@ test('1일: chapters for "복습에 넣기" — only never-registered records, a
   assert.equal(Date.parse(byId.a.nextReviewDate), cr.simulatedDueMs(card), 'the next review follows the simulated memory');
   assert.deepEqual(result.range, { start: 11, end: 20 });
   const today = fs.readFileSync(path.resolve(__dirname, '../components/TodaySummary.tsx'), 'utf8');
-  assert.ok(today.includes('swp_chapter_review_prompted') && today.includes('복습에 넣는 걸 추천해요'), 'a finished chapter opens the dialog once as a recommendation');
+  // 17일: 단원을 끝내면 학습량 입력의 "복습에 넣기"가 켜져 있고 추천 글이 보인다(오늘 할 일 창은 띄우지 않는다)
+  const intakeSection = fs.readFileSync(path.resolve(__dirname, '../components/ReviewIntakeSection.tsx'), 'utf8');
+  assert.ok(!today.includes('swp_chapter_review_prompted') && intakeSection.includes('복습에 넣는 걸 추천해요'), 'a finished chapter is recommended in the amount input');
 });
 
 test('1일: = in a cell asks "대응하는 것" (as before), a lone = asks "같은 것"; 2일: no # distinction — [X]:[Y] works as before', () => {
@@ -11717,12 +11720,11 @@ test('5일 여러 날 점검: 바로 복습 넣기 뒤 노트지에서 빠지는
 test('5일 여러 날 점검: 그 과목 기본 복습 칸에서도 복습에 넣기, 단원 끝냄 추천은 창을 본 뒤(닫기 · 고르기)에야 띄웠음으로 기억', () => {
   const today = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(today.includes('const canRegisterHere = Boolean(detailData && !detailData.owner);'));
-  assert.ok(today.includes('{canRegisterHere && onRegisterReview && (pendingReviewCount > 0 || autoReview) && ('));
-  assert.ok(today.includes('choosingReview && onRegisterReview && detailData && canRegisterHere && (pendingReviewCount > 0 || autoReview)'));
-  assert.ok(/if \(!idle \|\| !detailData \|\| choosingReview \|\| detailIsReview\) return;/.test(today), 'the automatic recommendation stays on the study card');
-  const effect = today.slice(today.indexOf('const finished = chapterGroups.filter'), today.indexOf('setChoosingReview(true);\n  }, [idle'));
-  assert.ok(!effect.includes('localStorage.setItem'), 'opening the recommendation does not mark it as seen');
-  assert.ok(today.includes('onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}') && today.includes('onChoose={(grade, logIds) => { rememberChapterPrompt();'));
+  // 17일: 오늘 할 일에는 자동 복습 설정만
+  assert.ok(today.includes('{canRegisterHere && canSetAutoReview && ('));
+  assert.ok(today.includes('choosingReview && detailData && canRegisterHere && canSetAutoReview && ('));
+  // 17일: 단원 끝냄 추천은 오늘 할 일 창이 아니라 학습량 입력에서(이번 공부로 단원을 끝내면 복습에 넣기가 켜져 있다)
+  assert.ok(!today.includes('rememberChapterPrompt'));
 });
 
 test('6일: ( ) 안 : ; < 색은 놓인 칸 다음 색부터 잇는다(문제의 칸 번호와 같음) — 색만 달랐다', () => {
@@ -12500,4 +12502,59 @@ test('17일 fix-139: A > B // C never puts C under A — also in a toggle title,
   assert.deepEqual(conditionsOf(':::toggle A > B : x // C\nD : E\n:::end'), ['B>x|A', 'D>E|C']);
   // A 밑에 B와 C를 함께 두려면 토글 안에 쓴다
   assert.deepEqual(conditionsOf(':::toggle A\nB : x\nC : y\n:::end'), ['B>x|A', 'C>y|A']);
+});
+
+test('17일 fix-140: review intake moves to the amount input — 복습에 넣기 + 난도 there, 오늘 할 일 keeps only the auto setting; retest cards; note-number range', () => {
+  const { reviewIntakeInfo, markAutoIntakeGrade } = loadSource('utils/reviewIntake.ts');
+  const { registerAutoReview, autoReviewAskOf } = loadSource('utils/autoReview.ts');
+  const H = 3600e3;
+  const now = Date.parse('2026-11-17T12:00:00.000Z');
+  const at = hours => new Date(now - hours * H).toISOString();
+  const base = { id: 'S', name: '국어', startPage: 1, totalPages: 40, completedPages: 10, pageLabel: 'P', chapters: [{ startPage: 1, endPage: 10 }, { startPage: 11, endPage: 20 }] };
+  const log = (id, start, end, hours, extra = {}) => ({ id, subjectId: 'S', startPage: start, endPage: end, pagesRead: end - start + 1, timeSpentMinutes: 30, timestamp: at(hours), subjectStageId: 'S', ...extra });
+  const older = log('a', 1, 10, 30, { reviewRegisteredAt: at(29), nextReviewDate: at(-10), feedbackGrade: 'good' });
+  const pending = log('b', 11, 15, 5, { unitReviewPending: true });
+  // 직접 넣는 과목: 기다리는 기록 + 이번 공부를 한 번에, 이번에 단원 2를 끝내면 추천
+  const draft = log('__intake_draft__', 16, 20, 0, { unitReviewPending: true });
+  const manual = reviewIntakeInfo(base, [older, pending], draft, false, now);
+  assert.equal(manual.kind, 'manual');
+  assert.equal(manual.feedback.count, 2);
+  assert.ok(manual.finishedChapters.length === 1 && manual.finishedChapters[0].includes('단원 2'));
+  assert.equal(reviewIntakeInfo(base, [older, pending], log('__intake_draft__', 16, 18, 0, { unitReviewPending: true }), false, now).finishedChapters.length, 0);
+  // 자동 복습 과목: 이번 저장으로 1시간이 차면 그 묶음의 난도를 고른다
+  const auto = { ...base, autoReviewRegister: true, autoReviewHours: 1 };
+  const waiting = log('w', 11, 15, 1, { unitReviewPending: true, autoReviewWaiting: true });
+  const full = reviewIntakeInfo(auto, [older, waiting], draft, false, now);
+  assert.ok(full.kind === 'auto' && full.willRegister && full.feedback && full.feedback.count === 2 && Math.round(full.minutes) === 60);
+  const short = reviewIntakeInfo(auto, [older], draft, false, now);
+  assert.ok(short.kind === 'auto' && !short.willRegister && short.feedback === null);
+  assert.ok(reviewIntakeInfo(auto, [older], draft, true, now).willRegister, 'finishing the subject puts it in anyway');
+  // 고른 난도로 넣고, 따로 다시 묻지 않는다
+  const incoming = log('n', 16, 20, 0, { unitReviewPending: true, autoReviewQueued: true });
+  const marked = markAutoIntakeGrade([older, waiting, incoming], incoming, 'hard');
+  assert.deepEqual(marked.filter(item => item.autoReviewChosenGrade).map(item => item.id), ['w', 'n']);
+  const registered = registerAutoReview(marked, 'n', 1);
+  assert.ok(registered.filter(item => item.autoReviewRegistered).every(item => item.feedbackGrade === 'hard'));
+  assert.equal(autoReviewAskOf(registered, 'S'), null, 'no popup asks again');
+  // 난도를 고르지 않고 넣은 묶음(바로 복습 넣기 등)은 전처럼 오늘 할 일에서 묻는다
+  assert.ok(autoReviewAskOf(registerAutoReview([older, waiting, incoming], 'n', 1), 'S'));
+  // 화면: 학습량 입력 · 추가 창에 복습 넣기, 오늘 할 일에는 자동 복습 설정만
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const logger = read('components/SessionLogger.tsx');
+  const today = read('components/TodaySummary.tsx');
+  const app = read('App.tsx');
+  assert.ok(logger.includes('<ReviewIntakeSection info={intakeInfo}') && today.includes('<ReviewIntakeSection info={addIntakeInfo}'));
+  assert.ok(today.includes('onAddLog(replacementLog, addIntake());') && today.includes('aria-label="자동 복습 설정"'));
+  assert.ok(app.includes("if (intake?.kind === 'register' && waits && !subject?.autoReviewRegister) return registerAllPendingNow(saved, incoming.subjectId, Date.now(), intake.grade);"));
+  // 오답 재시험: 2회차부터 오답 · 정답 두 버튼, 정답 다시 가리기, 앞뒤 이동
+  const screen = read('components/ReviewPracticeScreen.tsx');
+  assert.ok(screen.includes('data-retest-mark="wrong"') && screen.includes('data-retest-mark="right"') && screen.includes('정답 다시 가리기') && screen.includes('◀ 이전') && screen.includes('다음 ▶'));
+  assert.ok(logger.includes('const gateRetestOn = Boolean(gatePractice && gateRoundNumber > 1 && gateQuestionQueue.length > 0);'));
+  // 단위 없는 과목: 노트 번째로
+  const { numberedNotes } = loadSource('utils/notePractice.ts');
+  const days = [{ key: 'd1', kind: 'day', index: null, day: '2026-11-16', logs: [log('x', 1, 3, 20, { reviewMemo: 'a : b', studyDate: '2026-11-16' }), log('y', 4, 5, 19, { studyDate: '2026-11-16' })], spanning: [] },
+    { key: 'd2', kind: 'day', index: null, day: '2026-11-17', logs: [log('z', 6, 6, 1, { reviewMemo: 'c : d', studyDate: '2026-11-17' })], spanning: [] }];
+  assert.deepEqual(numberedNotes(days).map(note => note.label), ['1번째 노트 · 11월 16일 · p.1~3', '2번째 노트 · 11월 17일 · p.6']);
+  const practice = read('components/NotePractice.tsx');
+  assert.ok(practice.includes("{noUnits && segment('note', '노트 번째로')}"));
 });

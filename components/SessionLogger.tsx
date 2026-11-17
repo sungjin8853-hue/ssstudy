@@ -11,6 +11,9 @@ import {
 } from '../utils/math';
 import { calculateCurrentUnitEfficiency } from '../utils/pageGrowth';
 import { reviewCompletionBoundaries } from '../utils/reviewUnits';
+import { reviewIntakeInfo } from '../utils/reviewIntake';
+import type { ReviewIntake } from '../utils/reviewIntake';
+import { ReviewIntakeSection } from './ReviewIntakeSection';
 import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedReviewRange, getReviewDetailKey, getReviewStartPage, willWaitForReview } from '../utils/review';
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { chapterBoundedPomodoroMinutes, chapterPagesLeftFrom, createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
@@ -69,7 +72,8 @@ interface Props {
   detailSubjectId: string;
   onDetailSubjectChange: (subjectId: string) => void;
   renderSummary: (taskSelector: React.ReactNode, onSelectSubject: (subjectId: string) => void, completedStudySubjectIds: string[], pomodoroPlan: PomodoroPlan | null, idle?: IdleSummaryContext) => React.ReactNode;
-  onLogSession: (log: StudyLog) => void;
+  /** 17일: 학습량 입력에서 고른 복습 넣기(지금 복습에 넣기 · 자동 복습 묶음의 난도)를 함께 넘긴다 */
+  onLogSession: (log: StudyLog, intake?: ReviewIntake) => void;
   onUpdateSubjects?: (subjects: Subject[]) => void;
   onReviewAction: (logIds: string[], action: 'complete' | 'condense', reviewTimeSpentMinutes?: number, feedbackGrade?: SubjectGrade) => void;
   onAdvanceReviewSubject: (logIds: string[], completedReviewSubjectId: string, nextReviewSubjectId: string | null, reviewTimeSpentMinutes: number, measurement: ReviewMeasurement, feedbackGrade?: SubjectGrade) => void;
@@ -1013,6 +1017,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const gateRoundNumber = gatePractice?.round || 1;
   const gateStartedAtRef = useRef(0);
   const [isGateAnswerRevealed, setIsGateAnswerRevealed] = useState(false);
+  // 17일 "한 번 테스트 후 반복되는 오답 재시험": 2회차부터는 카드처럼 앞뒤로 오가며 오답 · 정답만 표시한다(정답은 다시 가릴 수 있다).
+  // 표시는 회차 안에서 언제든 바꿀 수 있고, 회차의 모든 문제에 표시하면 그 순서대로 풀이에 반영한다(틀린 것은 다음 회차로)
+  const [gateRetest, setGateRetest] = useState<{ round: number; currentId: string | null; marks: Record<string, 'wrong' | 'right'> } | null>(null);
+  const gateRetestOn = Boolean(gatePractice && gateRoundNumber > 1 && gateQuestionQueue.length > 0);
+  const gateRetestState = gateRetestOn && gateRetest && gateRetest.round === gateRoundNumber ? gateRetest : null;
+  const gateCurrentId = gateRetestState?.currentId && gateQuestionQueue.includes(gateRetestState.currentId) ? gateRetestState.currentId : gateQuestionQueue[0];
   const [resumeStudyTimerAfterReview, setResumeStudyTimerAfterReview] = useState(false);
   const [dismissedReviewSignature, setDismissedReviewSignature] = useState('');
   const [handledReviewLogIds, setHandledReviewLogIds] = useState<string[]>([]);
@@ -1105,7 +1115,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   }, [preSessionGateMemoItems, preSessionReviewGroup?.isGateRetry, gateDroppedIds]);
 
   const gateReviewQuestionSignature = gateReviewQuestions.map(question => question.id).join('|');
-  const currentGateQuestion = gateReviewQuestions.find(question => question.id === gateQuestionQueue[0]);
+  const currentGateQuestion = gateReviewQuestions.find(question => question.id === gateCurrentId);
   const isGateReviewComplete = gatePractice !== null && gateQuestionQueue.length === 0;
   const gateWrongCount = Object.values(gatePractice?.wrongCounts || {}).filter(count => count > 0).length;
   const currentGateMemoItem = currentGateQuestion
@@ -2021,6 +2031,40 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setIsGateAnswerRevealed(true);
   };
 
+  // 오답 재시험(2회차부터): 앞뒤 이동 · 표시
+  const moveGateRetest = (step: number) => {
+    if (!gateRetestOn || !gateQuestionQueue.length) return;
+    const at = Math.max(0, gateQuestionQueue.indexOf(gateCurrentId));
+    const next = Math.min(gateQuestionQueue.length - 1, Math.max(0, at + step));
+    setGateRetest({ round: gateRoundNumber, marks: gateRetestState?.marks ?? {}, currentId: gateQuestionQueue[next] });
+    setIsGateAnswerRevealed(false);
+  };
+  const markGateRetest = (right: boolean) => {
+    if (!gateRetestOn || !currentGateQuestion) return;
+    const marks: Record<string, 'wrong' | 'right'> = { ...(gateRetestState?.marks ?? {}), [currentGateQuestion.id]: right ? 'right' : 'wrong' };
+    const queue = gateQuestionQueue;
+    if (queue.every(id => marks[id])) {
+      // 회차의 모든 문제에 표시했다: 줄 순서대로 풀이에 반영한다(맞음 → 끝, 오답 → 다음 회차)
+      setGatePractice(previous => {
+        if (!previous) return previous;
+        let next = previous;
+        for (let count = 0; count < queue.length; count += 1) {
+          const id = next.queue[0];
+          if (!id || !marks[id]) break;
+          next = gradeReviewPractice(next, gateReviewQuestions, marks[id] === 'right' ? 'good' : 'again');
+        }
+        return next;
+      });
+      setGateRetest(null);
+      setIsGateAnswerRevealed(false);
+      return;
+    }
+    const at = queue.indexOf(currentGateQuestion.id);
+    const after = [...queue.slice(at + 1), ...queue.slice(0, at)].find(id => !marks[id]) ?? currentGateQuestion.id;
+    setGateRetest({ round: gateRoundNumber, marks, currentId: after });
+    setIsGateAnswerRevealed(false);
+  };
+
   const handleGateReviewResult = (result: GateReviewResult) => {
     if (!currentGateQuestion || !isGateAnswerRevealed) return;
     setGatePractice(previous => previous ? gradeReviewPractice(previous, gateReviewQuestions, result) : previous);
@@ -2402,6 +2446,32 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   /** 제외 버튼: 복습과목이 있으면 기본 복습만 → 복습과목까지 → 다시 기본 복습만, 없으면 그냥 제외 */
   const pressSkipReview = () => setReviewChoice(current => (!sessionHasReviewSubjects ? 'skipAll' : current === 'skipBasic' ? 'skipAll' : 'skipBasic'));
 
+  // 17일: 학습량 입력의 복습에 넣기 · 난도(전에는 오늘 할 일의 "복습에 넣기" 창). 단원을 끝내면 처음부터 켜 둔다(null = 아직 안 고름)
+  const [intakeOn, setIntakeOn] = useState<boolean | null>(null);
+  const [intakeGrade, setIntakeGrade] = useState<SubjectGrade | null>(null);
+  useEffect(() => { setIntakeOn(null); setIntakeGrade(null); }, [step, subjectId]);
+  const intakeInfo = useMemo(() => {
+    if (step !== 'pages' || activeReviewRun || continueMode || !selectedSubject) return null;
+    const measurement = createPageMeasurement(parseFloat(startPage), parseFloat(readAmount), Number(solvedPageCount), remainingSubjectPages, stageChapters);
+    if (!measurement) return null;
+    const draft: StudyLog = {
+      id: '__intake_draft__', subjectId, ...measurement, ...getSessionTimes(studySeconds, organizationSeconds),
+      timestamp: new Date().toISOString(), studyDate: activeStudyDate, studyWeekday: activeWeekday, isReviewed: false,
+      isCondensed: reviewChoice !== 'include', reviewEnabled: reviewChoice === 'include', unitReviewPending: true,
+      subjectStageId: getActiveSubjectStage(selectedSubject)?.id || selectedSubject.id
+    } as StudyLog;
+    if (!willWaitForReview(draft)) return null;
+    const finished = getSubjectRemainingPageCount(selectedSubject) - getLogProgressPages(draft) <= 0;
+    return reviewIntakeInfo(selectedSubject, logs, draft, finished, Date.now());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, activeReviewRun, continueMode, selectedSubject, startPage, readAmount, solvedPageCount, remainingSubjectPages, stageChapters, reviewChoice, logs, subjectId]);
+  const intakeSwitchOn = intakeInfo?.kind === 'manual' ? (intakeOn ?? intakeInfo.finishedChapters.length > 0) : false;
+  const currentIntake = (): ReviewIntake | undefined => {
+    if (!intakeInfo) return undefined;
+    if (intakeInfo.kind === 'manual') return intakeSwitchOn ? { kind: 'register', grade: intakeGrade ?? intakeInfo.feedback.recommended } : undefined;
+    return intakeInfo.willRegister && intakeInfo.feedback ? { kind: 'auto', grade: intakeGrade ?? intakeInfo.feedback.recommended } : undefined;
+  };
+
   const createCurrentSessionLog = () => {
     const sPage = parseFloat(startPage);
     const endPage = parseFloat(readAmount);
@@ -2497,7 +2567,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     // "복습에 넣기"를 누를 때 합친다(App.handleRegisterReview). 기다리지 않는 기록(복습 측정 등)은 전처럼 바로 합친다.
     if (activeReviewRun || !willWaitForReview(nextLog)) mergeNewNoteIntoEarlierPages(nextLog);
     applyCarriedSheetEdits();
-    onLogSession(nextLog);
+    onLogSession(nextLog, activeReviewRun ? undefined : currentIntake());
     if (activeReviewRun) onRecordReviewSubjectTime(activeReviewRun.logIds, subjectId, nextLog.timeSpentMinutes, getReviewMeasurement(nextLog));
     resetAll();
     setSubjectId('');
@@ -2693,7 +2763,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     const rail: ReviewRailItem[] = batch.map((question, index) => {
       const wrongCount = gatePractice?.wrongCounts[question.id] || 0;
       const status: ReviewRailItem['status'] = gatePractice?.completed.includes(question.id) ? 'done'
-        : gateQuestionQueue[0] === question.id ? 'now' : wrongCount > 0 ? 'wrong' : 'waiting';
+        : gateCurrentId === question.id ? 'now' : wrongCount > 0 ? 'wrong' : 'waiting';
       return { id: question.id, label: `${index + 1}번 · ${kindOf(question)}`, status, wrongCount };
     });
     const graded = batch.filter(question => gatePractice && question.id in gatePractice.firstCorrect);
@@ -2798,6 +2868,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         revealed={isGateAnswerRevealed}
         onReveal={handleGateReveal}
         onGrade={handleGateReviewResult}
+        retest={gateRetestOn && currentGateQuestion ? {
+          position: Math.max(0, gateQuestionQueue.indexOf(currentGateQuestion.id)) + 1,
+          total: gateQuestionQueue.length,
+          marked: gateQuestionQueue.filter(id => gateRetestState?.marks[id]).length,
+          mark: gateRetestState?.marks[currentGateQuestion.id],
+          onPrev: () => moveGateRetest(-1),
+          onNext: () => moveGateRetest(1),
+          onHide: () => setIsGateAnswerRevealed(false),
+          onMark: markGateRetest
+        } : undefined}
         correctIntervalLabel={formatReviewInterval(calculateQuestionPerformance(previousSchedule, currentWrongs, currentAttempts + 1).intervalMs)}
         wrongIntervalLabel={formatReviewInterval(calculateQuestionPerformance(previousSchedule, currentWrongs + 1, currentAttempts + 1).intervalMs)}
         gradeIntervalLabels={gradeIntervalLabels}
@@ -3545,6 +3625,11 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
                 {!intervals && <p data-feedback-later="true" className="mt-2 text-[13px] font-bold text-slate-600">다음 복습 날짜는 마지막 복습과목에서 고른 난도로 정해요</p>}
               </section>;
             })()}
+
+            {intakeInfo && (
+              <ReviewIntakeSection info={intakeInfo} pageLabel={pageLabel} on={intakeSwitchOn} onToggle={setIntakeOn}
+                grade={intakeGrade} onGrade={setIntakeGrade} />
+            )}
 
             {!activeReviewRun && (continueMode || activeResume) && (
               <section data-testid="continue-later-note" aria-label="이어서 풀기"

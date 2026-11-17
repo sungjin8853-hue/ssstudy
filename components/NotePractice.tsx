@@ -7,7 +7,7 @@ import { PracticeLevelSelector } from './PracticeLevelSelector';
 import { ReviewStyleSelector } from './ReviewStyleSelector';
 import type { ReviewGrade } from '../utils/reviewPractice';
 import {
-  appendNotePracticeRecord, buildNotePracticeCatalog, logsInPageRange, logsInUnitRange, makeNotePracticeRecord, noteUnitLabel, pageBoundsOf
+  appendNotePracticeRecord, buildNotePracticeCatalog, logsInPageRange, logsInUnitRange, makeNotePracticeRecord, noteUnitLabel, numberedNotes, pageBoundsOf
 } from '../utils/notePractice';
 import { ReviewQuestionContent } from './ReviewQuestionContent';
 
@@ -147,7 +147,7 @@ const PracticeRun: React.FC<{
   );
 };
 
-type RangeMode = 'unit' | 'page';
+type RangeMode = 'unit' | 'page' | 'note';
 
 export const NotePracticeDialog: React.FC<{
   subjectId: string;
@@ -160,7 +160,17 @@ export const NotePracticeDialog: React.FC<{
   onClose: () => void;
 }> = ({ subjectId, subjectName, units, defaultUnitKey, criterion, onClose }) => {
   const initialKey = units.some(unit => unit.key === defaultUnitKey) ? defaultUnitKey! : units[units.length - 1]?.key ?? '';
-  const [mode, setMode] = useState<RangeMode>('unit');
+  // 17일: 단위가 없는 과목(정리노트가 날마다 나뉜 과목)은 "노트 번째로" 고른다: 처음엔 고르던 쪽의 노트들
+  const noUnits = units.length > 0 && units.every(unit => unit.kind === 'day');
+  const notes = useMemo(() => numberedNotes(units), [units]);
+  const initialNotes = (() => {
+    const ids = new Set((units.find(unit => unit.key === initialKey)?.logs ?? []).map(log => log.id));
+    const at = notes.map((note, index) => (ids.has(note.log.id) ? index : -1)).filter(index => index >= 0);
+    return at.length ? [at[0], at[at.length - 1]] : [Math.max(0, notes.length - 1), Math.max(0, notes.length - 1)];
+  })();
+  const [noteFrom, setNoteFrom] = useState(initialNotes[0]);
+  const [noteTo, setNoteTo] = useState(initialNotes[1]);
+  const [mode, setMode] = useState<RangeMode>(noUnits ? 'note' : 'unit');
   const [fromKey, setFromKey] = useState(initialKey);
   const [toKey, setToKey] = useState(initialKey);
   const allLogs = useMemo(() => units.flatMap(unit => unit.logs), [units]);
@@ -184,6 +194,11 @@ export const NotePracticeDialog: React.FC<{
 
   const hasPages = pageBoundsOf(allLogs) !== null;
   const selection = useMemo(() => {
+    if (mode === 'note') {
+      const low = Math.min(noteFrom, noteTo);
+      const high = Math.max(noteFrom, noteTo);
+      return { logs: notes.slice(low, high + 1).map(note => note.log), scope: notes.length ? (low === high ? `${low + 1}번째 노트` : `${low + 1}~${high + 1}번째 노트`) : '' };
+    }
     if (mode === 'unit') {
       const first = units.find(unit => unit.key === fromKey);
       const second = units.find(unit => unit.key === toKey);
@@ -198,7 +213,7 @@ export const NotePracticeDialog: React.FC<{
     const to = Number(pageTo);
     const valid = pageFrom.trim() !== '' && pageTo.trim() !== '';
     return { logs: valid ? logsInPageRange(allLogs, from, to) : [], scope: valid ? `p.${Math.min(from, to)}~${Math.max(from, to)}` : '' };
-  }, [mode, units, fromKey, toKey, pageFrom, pageTo, allLogs]);
+  }, [mode, units, fromKey, toKey, pageFrom, pageTo, allLogs, notes, noteFrom, noteTo]);
   const questionCount = useMemo(() => buildNotePracticeCatalog(selection.logs).catalog.length, [selection.logs]);
 
   if (session) {
@@ -221,16 +236,27 @@ export const NotePracticeDialog: React.FC<{
             className="flex h-11 w-11 items-center justify-center rounded-full border border-slate-300 text-slate-900 hover:bg-slate-50"><CloseIcon /></button>
         </div>
         <div role="group" aria-label="범위 방식" className="flex gap-1 self-start rounded-xl bg-[#E7EAF8] p-1">
-          {segment('unit', '단위로')}
+          {noUnits && segment('note', '노트 번째로')}
+          {segment('unit', noUnits ? '날짜로' : '단위로')}
           {hasPages && segment('page', '페이지로')}
         </div>
-        {mode === 'unit' ? (
+        {mode === 'note' ? (
+          <div className="flex flex-col items-stretch gap-1.5">
+            <select aria-label="시작 노트" value={noteFrom} onChange={event => setNoteFrom(Number(event.target.value))} className={select}>
+              {notes.map((note, index) => <option key={note.log.id} value={index}>{note.label}</option>)}
+            </select>
+            <span className="text-center font-black text-slate-500">~</span>
+            <select aria-label="끝 노트" value={noteTo} onChange={event => setNoteTo(Number(event.target.value))} className={select}>
+              {notes.map((note, index) => <option key={note.log.id} value={index}>{note.label}</option>)}
+            </select>
+          </div>
+        ) : mode === 'unit' ? (
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="시작 단위" value={fromKey} onChange={event => setFromKey(event.target.value)} className={select}>
+            <select aria-label={noUnits ? '시작 날짜' : '시작 단위'} value={fromKey} onChange={event => setFromKey(event.target.value)} className={select}>
               {units.map(unit => <option key={unit.key} value={unit.key}>{noteUnitLabel(unit)}</option>)}
             </select>
             <span className="font-black text-slate-500">~</span>
-            <select aria-label="끝 단위" value={toKey} onChange={event => setToKey(event.target.value)} className={select}>
+            <select aria-label={noUnits ? '끝 날짜' : '끝 단위'} value={toKey} onChange={event => setToKey(event.target.value)} className={select}>
               {units.map(unit => <option key={unit.key} value={unit.key}>{noteUnitLabel(unit)}</option>)}
             </select>
           </div>

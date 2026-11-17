@@ -35,6 +35,20 @@ export const logsInUnitRange = (units: NoteUnitPage[], fromKey: string, toKey: s
     .filter(log => hasNote(log) && !seen.has(log.id) && !!seen.add(log.id));
 };
 
+/**
+ * 17일 "단위 없는 과목은 문제 풀기에서 노트 번째 값으로": 노트가 있는 기록을 오래된 것부터 1번째, 2번째 …로 센 목록과 그 이름.
+ * 이름은 "3번째 노트 · 11월 16일 · p.5~10"(페이지를 적지 않았으면 날짜까지).
+ */
+export const numberedNotes = (units: NoteUnitPage[]): { log: StudyLog; label: string }[] => {
+  const seen = new Set<string>();
+  return units.flatMap(unit => unit.logs).filter(log => hasNote(log) && !seen.has(log.id) && !!seen.add(log.id))
+    .map((log, index) => {
+      const pages = Number.isFinite(log.startPage) && Number.isFinite(log.endPage)
+        ? ` · p.${log.startPage === log.endPage ? log.startPage : `${log.startPage}~${log.endPage}`}` : '';
+      return { log, label: `${index + 1}번째 노트 · ${dayText(log.studyDate || log.timestamp.slice(0, 10))}${pages}` };
+    });
+};
+
 /** 책 페이지가 [from, to]와 겹치는 노트가 있는 기록. 페이지를 적지 않은 기록은 이 방식으로는 고를 수 없다. */
 export const logsInPageRange = (logs: StudyLog[], from: number, to: number): StudyLog[] => {
   if (!Number.isFinite(from) || !Number.isFinite(to)) return [];

@@ -51,12 +51,12 @@ export const RegisterReviewDialog: React.FC<{
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div data-testid="register-review-dialog" role="dialog" aria-modal="true" aria-label="복습에 넣기 난도 선택"
+    <div data-testid="register-review-dialog" role="dialog" aria-modal="true" aria-label={pendingCount > 0 ? '복습에 넣기 난도 선택' : '자동 복습 설정'}
       className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-3 sm:items-center"
       onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <section aria-label="난도 피드백" data-difficulty-feedback="true" className="w-full max-w-xl rounded-3xl border border-indigo-100 bg-white p-5 shadow-2xl">
         <div className="flex items-baseline justify-between gap-3">
-          <h4 className="text-lg font-black text-indigo-800">{pendingCount > 0 ? '난도 피드백' : '복습에 넣기'}</h4>
+          <h4 className="text-lg font-black text-indigo-800">{pendingCount > 0 ? '난도 피드백' : '자동 복습 설정'}</h4>
           <button type="button" onClick={onClose} aria-label="닫기"
             className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-lg font-black text-slate-600">✕</button>
         </div>

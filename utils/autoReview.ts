@@ -153,6 +153,8 @@ export const registerAutoReview = (
   const askIds = new Set(group.map(log => log.id));
   const minutes = group.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0);
   if (cut || minutes >= hours * 60 - 1e-9) {
+    // 17일: 학습량 입력에서 이 묶음의 난도를 이미 골랐으면 다시 묻지 않는다
+    if (incoming0.autoReviewChosenGrade) return register(next, group.map(log => log.id));
     return register(next, group.map(log => log.id)).map(log => (askIds.has(log.id) ? { ...log, autoReviewAsk: true } : log));
   }
   return next.map(log => (log.id === incoming.id

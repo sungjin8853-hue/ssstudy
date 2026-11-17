@@ -16,6 +16,8 @@ import { getLogProgressPages } from './utils/measurement';
 import { fsrsIntervalMs } from './utils/fsrs';
 import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
 import { chapterFeedbackOf, gradeSelectedPending, pendingChapterGroups } from './utils/chapterReview';
+import { markAutoIntakeGrade } from './utils/reviewIntake';
+import type { ReviewIntake } from './utils/reviewIntake';
 import type { SubjectGrade } from './utils/subjectFeedback';
 import { applyReviewGateOutcomes, applyReviewRemoval, clearReviewGateRetries, completeRegularReviewSchedule, getCurrentReviewIntervalMs, restoreReviewRemoval, ReviewGateOutcome, skipEditIntake, updateReviewGateMemo } from './utils/reviewGate';
 import { readEditIntake } from './utils/reviewEditIntake';
@@ -492,7 +494,7 @@ const App: React.FC = () => {
     );
   };
 
-  const handleLogSession = (log: StudyLog) => {
+  const handleLogSession = (log: StudyLog, intake?: ReviewIntake) => {
     const subject = subjects.find(item => item.id === log.subjectId);
     const skipReview = shouldSkipReviewForLog(log, subject);
     const folderSnapshots = getFolderSnapshots(subject?.tagIds || [], tagDefinitions);
@@ -529,7 +531,12 @@ const App: React.FC = () => {
       const waits = result.incoming.unitReviewPending;
       const incoming = subject?.autoReviewRegister && waits ? { ...result.incoming, autoReviewQueued: true }
         : !waits && result.incoming.autoReviewCut ? { ...result.incoming, autoReviewCut: undefined } : result.incoming;
-      return [...result.logs, incoming];
+      const saved = [...result.logs, incoming];
+      // 17일: 학습량 입력에서 고른 복습 넣기. 자동 복습 묶음이면 고른 난도를 적어 두고(넣을 때 그 난도, 따로 묻지 않는다),
+      // 아니면 이 과목의 기다리는 기록(이번 공부 포함)을 고른 난도로 지금 복습에 넣는다(전의 "복습에 넣기" 창과 같다)
+      if (intake?.kind === 'auto' && incoming.autoReviewQueued) return markAutoIntakeGrade(saved, incoming, intake.grade);
+      if (intake?.kind === 'register' && waits && !subject?.autoReviewRegister) return registerAllPendingNow(saved, incoming.subjectId, Date.now(), intake.grade);
+      return saved;
     });
     setSubjects(prev => prev.map(sub => {
       if (sub.id === log.subjectId) {
@@ -765,14 +772,14 @@ const App: React.FC = () => {
   };
 
   // 복습에 넣기 창에서 고를 때와 같은 추천 난도로, 이 과목의 대기 기록을 모두 바로 복습에 넣는다(4일: 측정 도중 "바로 복습 넣기")
-  const registerAllPendingNow = (base: StudyLog[], subjectId: string, nowMs: number): StudyLog[] => {
+  const registerAllPendingNow = (base: StudyLog[], subjectId: string, nowMs: number, chosen?: SubjectGrade): StudyLog[] => {
     const subject = subjects.find(item => item.id === subjectId);
     const merged = mergePendingNotes(base, subjectId);
     const groups = subject ? pendingChapterGroups(subject, merged) : [];
     const selected = groups.flatMap(group => group.logs);
     if (!selected.length) return merged;
     const ids = selected.map(log => log.id);
-    const grade = chapterFeedbackOf(merged, subjectId, selected, nowMs).recommended ?? 'good';
+    const grade = chosen ?? chapterFeedbackOf(merged, subjectId, selected, nowMs).recommended ?? 'good';
     return registerPendingReviews(subjectId, gradeSelectedPending(merged, subjectId, ids, grade), nowMs, ids).logs
       .map(log => (log.autoReviewCut ? { ...log, autoReviewCut: undefined } : log));
   };

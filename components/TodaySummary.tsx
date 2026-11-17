@@ -3,7 +3,7 @@ import { registrationBoundaries, reviewCompletionBoundaries } from '../utils/rev
 import React, { useEffect, useMemo, useState } from 'react';
 import { StudyLog, Subject, ReviewMemoDocument } from '../types';
 import { calculateRecentTimedPageAverage, calculateReviewChangeAmounts, calculateStats, getReviewSpeedSeries, calculateSubjectReviewAverageTimePerPage, calculateTimeAttackAverage, getReviewEfficiencySamples } from '../utils/math';
-import { BASIC_REVIEW_DETAIL_PREFIX, carriedReviewState, getRepeatedReviewRange, getReviewStartPage } from '../utils/review';
+import { BASIC_REVIEW_DETAIL_PREFIX, carriedReviewState, getRepeatedReviewRange, getReviewStartPage, willWaitForReview } from '../utils/review';
 import { getMeasurementRemainingPages, getPomodoroPageTarget, getRemainingPomodoroSessions, getReviewPomodoro, PomodoroPlan } from '../utils/measurement';
 import { PomodoroMinutesStepper } from './PomodoroMinutesStepper';
 import { StudyRecordDialog } from './StudyRecordDialog';
@@ -36,6 +36,9 @@ import { NoteSheet } from './NoteSheet';
 import { EfficiencyBoxes } from './EfficiencyBoxes';
 import { MeasurementTutorial } from './Tutorials';
 import { RegisterReviewDialog } from './RegisterReviewDialog';
+import { ReviewIntakeSection } from './ReviewIntakeSection';
+import { reviewIntakeInfo } from '../utils/reviewIntake';
+import type { ReviewIntake } from '../utils/reviewIntake';
 import { ReviewDeleteDialog } from './ReviewDeleteDialog';
 import { AheadFinishPanel, AheadSummary } from './AheadDayCard';
 import { AutoReviewFeedbackDialog } from './AutoReviewFeedbackDialog';
@@ -67,7 +70,8 @@ interface Props {
   onChooseAutoReviewGrade?: (subjectId: string, groupAt: string, grade?: SubjectGrade) => void;
   activeWeekday: number;
   activeStudyDate: string;
-  onAddLog: (log: StudyLog) => void;
+  /** 17일: 학습 기록 추가 창에서 고른 복습 넣기(지금 복습에 넣기 · 자동 복습 묶음의 난도)를 함께 넘긴다 */
+  onAddLog: (log: StudyLog, intake?: ReviewIntake) => void;
   onReplaceLogs: (logIds: string[], replacementLog: StudyLog) => void;
   /** 9일: 복습 칸의 "복습 삭제" — 고른 기록을 복습 제외로 바꾼다 */
   onExcludeFromReview?: (logIds: string[]) => void;
@@ -760,7 +764,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     if (modalMode === 'edit' && editingSummary) {
       onReplaceLogs(editingSummary.logs.map(log => log.id), replacementLog);
     } else {
-      onAddLog(replacementLog);
+      onAddLog(replacementLog, addIntake());
     }
 
     closeModal();
@@ -858,36 +862,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const [deletingReview, setDeletingReview] = useState(false);
   const reviewTaskLogs = detailData && onExcludeFromReview && idle?.reviewTaskLogs?.length && idle.selectedDetailKey === detailSubjectId ? idle.reviewTaskLogs : null;
   useEffect(() => { if (!reviewTaskLogs) setDeletingReview(false); }, [reviewTaskLogs]);
-  // 단원별 복습에 넣기(1일 요청): 아직 복습에 넣지 않은 기록을 단원으로 묶는다. 창을 열 때 처음 고를 단원과 알림 글
-  const chapterGroups = useMemo(() => (detailData && canRegisterHere && pendingReviewCount > 0 ? pendingChapterGroups(detailData.subject, logs, pagePos) : []), [detailData, canRegisterHere, pendingReviewCount, logs, pagePos]);
-  /** prompted: 단원을 끝내 자동으로 띄운 창이면 그 단원들(창을 닫거나 고를 때 "띄웠음"으로 기억한다) */
-  const [reviewPick, setReviewPick] = useState<{ keys: string[]; notice?: string; prompted?: string[] } | null>(null);
-  const CHAPTER_PROMPT_SEEN = 'swp_chapter_review_prompted';
-  // 5일 점검: 띄웠음은 사용자가 창을 본 뒤(닫기 · 고르기)에 기억한다. 전에는 띄우자마자 기억해서, 저장 직후 다음 할 일로 넘어가며
-  // 창이 바로 닫히면 그 단원 추천을 다시 볼 수 없었다
-  const rememberChapterPrompt = () => {
-    const prompted = reviewPick?.prompted;
-    if (!prompted?.length) return;
-    try {
-      const seen: string[] = JSON.parse(localStorage.getItem(CHAPTER_PROMPT_SEEN) || '[]');
-      localStorage.setItem(CHAPTER_PROMPT_SEEN, JSON.stringify([...seen, ...prompted.filter(key => !seen.includes(key))].slice(-500)));
-    } catch { /* 기억하지 못해도 추천은 한다 */ }
-  };
-  const openRegisterReview = () => { setReviewPick({ keys: chapterGroups.map(group => group.key) }); setChoosingReview(true); };
-  // 단원 하나를 끝내면 복습에 넣기를 추천한다: 끝낸 단원마다 한 번 창이 뜨고 그 단원이 골라져 있다(학습 실행 첫 화면에서만)
-  useEffect(() => {
-    if (!idle || !detailData || choosingReview || detailIsReview) return;
-    // 자동 복습으로 모으는 중인 기록만 있는 단원은 창을 띄우지 않는다(4일: 시간이 차면 알아서 넣는다)
-    const finished = chapterGroups.filter(group => group.finished && group.number !== null && group.logs.some(log => !(autoReview && log.autoReviewWaiting)));
-    if (!finished.length) return;
-    let seen: string[] = [];
-    try { seen = JSON.parse(localStorage.getItem(CHAPTER_PROMPT_SEEN) || '[]'); } catch { seen = []; }
-    const fresh = finished.filter(group => !seen.includes(`${detailData.subject.id}:${group.key}`));
-    if (!fresh.length) return;
-    setReviewPick({ keys: finished.map(group => group.key), notice: `${fresh.map(group => group.label).join(', ')}을(를) 끝냈어요. 복습에 넣는 걸 추천해요.`,
-      prompted: fresh.map(group => `${detailData.subject.id}:${group.key}`) });
-    setChoosingReview(true);
-  }, [idle, detailData, chapterGroups, choosingReview, detailIsReview]);
+  // 17일: 오늘 할 일의 버튼은 자동 복습 설정만 연다(복습에 넣기 · 난도는 학습량 입력에서)
+  const openRegisterReview = () => setChoosingReview(true);
+  // 단원을 끝내면 복습에 넣기를 권하는 창도 17일부터는 학습량 입력에서 권한다(이번 공부로 단원을 끝내면 "복습에 넣기"가 켜져 있다)
   // "학습량 변경" 창: 학습량 추가와 오늘 한 기록(고치기 · 지우기)이 한곳에 모인다
   const [changingAmount, setChangingAmount] = useState(false);
   useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
@@ -901,7 +878,6 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const autoAsk = useMemo(() => (detailData && !detailIsReview ? autoReviewAskOf(logs, detailData.subject.id) : null), [logs, detailData, detailIsReview]);
   const autoWaiting = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.autoReviewWaiting && log.subjectId === detailData.subject.id) : []), [logs, detailData, detailIsReview]);
   // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다(자동으로 넣는 중이면 설정을 보도록 둔다)
-  useEffect(() => { if (pendingReviewCount === 0 && !autoReview) setChoosingReview(false); }, [pendingReviewCount, autoReview]);
   useEffect(() => { setChoosingReview(false); }, [detailData?.subject.id]);
   // 제목 뒤에 이어 붙이는 과목: 이 과목 → 후행과목, 각 과목에 붙은 복습과목은 대괄호. 예: A-B[C]-D. 이을 것이 없으면 이름만 보인다.
   const chainSegments = detailData && !detailIsReview ? getSubjectChain(detailData.subject, subjects) : [];
@@ -942,6 +918,29 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
     const chapters = calculatedRange.chapters;
     if (!(count > 0)) { setEditEndPage(editStartPage - 1); return; }
     setEditEndPage(chapters.length > 0 ? endPageForSolved(chapters, editStartPage, count) ?? editStartPage : editStartPage + count - 1);
+  };
+  // 17일: 학습 기록 추가 창의 복습에 넣기 · 난도(학습량 입력과 같다)
+  const [addIntakeOn, setAddIntakeOn] = useState<boolean | null>(null);
+  const [addIntakeGrade, setAddIntakeGrade] = useState<SubjectGrade | null>(null);
+  useEffect(() => { setAddIntakeOn(null); setAddIntakeGrade(null); }, [subjectId, addingInline]);
+  const addIntakeInfo = useMemo(() => {
+    if (!addingInline || !selectedSubject || !includeReview || !(calculatedPages > 0)) return null;
+    const minutes = editMinutes.trim() === '' ? calculatedPages * addKnownAverage : Number(editMinutes);
+    const draft = {
+      id: '__intake_draft__', subjectId: selectedSubject.id, pagesRead: calculatedPages, timeSpentMinutes: Number.isFinite(minutes) ? minutes : 0,
+      startPage: editStartPage, endPage: editEndPage, timestamp: new Date().toISOString(), studyDate: activeStudyDate, isReviewed: false,
+      isCondensed: false, reviewEnabled: true, unitReviewPending: true, manualEntry: true,
+      subjectStageId: getActiveSubjectStage(selectedSubject)?.id || selectedSubject.id
+    } as StudyLog;
+    if (!willWaitForReview(draft)) return null;
+    const finished = getSubjectRemainingPageCount(selectedSubject) - calculatedPages <= 0;
+    return reviewIntakeInfo(selectedSubject, logs, draft, finished, Date.now());
+  }, [addingInline, selectedSubject, includeReview, calculatedPages, editMinutes, addKnownAverage, editStartPage, editEndPage, activeStudyDate, logs]);
+  const addIntakeSwitch = addIntakeInfo?.kind === 'manual' ? (addIntakeOn ?? addIntakeInfo.finishedChapters.length > 0) : false;
+  const addIntake = (): ReviewIntake | undefined => {
+    if (!addIntakeInfo) return undefined;
+    if (addIntakeInfo.kind === 'manual') return addIntakeSwitch ? { kind: 'register', grade: addIntakeGrade ?? addIntakeInfo.feedback.recommended } : undefined;
+    return addIntakeInfo.willRegister && addIntakeInfo.feedback ? { kind: 'auto', grade: addIntakeGrade ?? addIntakeInfo.feedback.recommended } : undefined;
   };
   const addField = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-lg font-black text-slate-900 outline-none focus:border-indigo-500';
   const amountDialog = changingAmount ? (
@@ -1005,6 +1004,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
                     onChange={(memo, document) => { setReviewMemo(memo); setReviewMemoDocument(document); }}
                     minHeight={320} maxHeight={560} placeholder="정리노트" theme="light" grid symbolBar />
                 </div>
+              )}
+              {addIntakeInfo && (
+                <ReviewIntakeSection info={addIntakeInfo} pageLabel={addLabel} on={addIntakeSwitch} onToggle={setAddIntakeOn}
+                  grade={addIntakeGrade} onGrade={setAddIntakeGrade} />
               )}
               {addNeedsMinutes && <p data-testid="amount-needs-minutes" className="text-[13px] font-bold text-rose-700">이 과목은 아직 잰 효율이 없어서 시간을 넣어야 해요.</p>}
               <button type="button" data-testid="amount-save" onClick={saveLog} disabled={!(calculatedPages > 0) || addNeedsMinutes}
@@ -1190,11 +1193,10 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               <span aria-hidden="true">📋</span>학습 기록 보기
             </button>
           )}
-          {canRegisterHere && onRegisterReview && (pendingReviewCount > 0 || autoReview) && (
-            <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="복습에 넣기" className={headerButton}>
-              <span aria-hidden="true">↻</span>복습에 넣기
-              {autoReview && <span data-testid="auto-review-badge" className="rounded-full bg-emerald-100 px-2 text-xs font-black leading-5 text-emerald-800">자동</span>}
-              {pendingReviewCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{pendingReviewCount}</span>}
+          {canRegisterHere && canSetAutoReview && (
+            <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="자동 복습 설정" className={headerButton}>
+              <span aria-hidden="true">↻</span>자동 복습
+              <span data-testid="auto-review-badge" className={`rounded-full px-2 text-xs font-black leading-5 ${autoReview ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>{autoReview ? '켬' : '끔'}</span>
             </button>
           )}
           {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
@@ -1224,13 +1226,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           onUpdateSubjects={onUpdateSubjects} onClose={() => setEditingTemp(false)} />
       )}
 
-      {choosingReview && onRegisterReview && detailData && canRegisterHere && (pendingReviewCount > 0 || autoReview) && (
-        <RegisterReviewDialog key={`${detailData.subject.id}:${(reviewPick?.keys ?? []).join(',')}`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
-          pendingCount={pendingReviewCount} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview, hours: autoReviewHoursOf(detailData.subject), onHoursChange: setAutoReviewHours,
+      {choosingReview && detailData && canRegisterHere && canSetAutoReview && (
+        <RegisterReviewDialog key={`${detailData.subject.id}:settings`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
+          pendingCount={0} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview, hours: autoReviewHoursOf(detailData.subject), onHoursChange: setAutoReviewHours,
             waitingCount: autoWaiting.length, waitingMinutes: autoWaiting.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0) } : undefined}
-          chapters={chapterGroups.length ? { groups: chapterGroups, initialKeys: reviewPick?.keys ?? chapterGroups.map(group => group.key), logs, subjectId: detailData.subject.id, notice: reviewPick?.notice } : undefined}
-          onClose={() => { rememberChapterPrompt(); setChoosingReview(false); }}
-          onChoose={(grade, logIds) => { rememberChapterPrompt(); onRegisterReview(detailData.subject.id, grade, logIds); setChoosingReview(false); }} />
+          onClose={() => setChoosingReview(false)}
+          onChoose={() => setChoosingReview(false)} />
       )}
 
       {deletingReview && reviewTaskLogs && onExcludeFromReview && detailData && (
