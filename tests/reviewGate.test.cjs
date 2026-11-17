@@ -11240,7 +11240,7 @@ test('3일: a > after a complete row puts the rest of the line under that row (l
   assert.equal(expandNestLines('[A] > [B] A:[N] C'), ':::toggle [A]\n[B] A:[N] C\n:::end');
   assert.equal(expandNestLines('X > Y > Z'), ':::toggle X\n:::toggle Y\nZ\n:::end\n:::end', 'each > goes one deeper');
   assert.equal(expandNestLines(':::toggle T > U\nk : v\n:::end\nw'), ':::toggle T\n:::toggle U\nk : v\n:::end\n:::end\nw', 'in a toggle title the lines inside sit under the last row');
-  assert.equal(expandNestLines('a : b // X > c : d // e : f'), 'a : b\n:::toggle X\nc : d // e : f\n:::end', 'the row before > starts after the last //; after > runs to the end of the line');
+  assert.equal(expandNestLines('a : b // X > c : d // e : f'), 'a : b\n:::toggle X\nc : d\n:::end\ne : f', '17일: the row before > starts after the last //; after > runs to the next // (what follows is its own line)');
   ['A :> B', 'A -> B', 'A => B', 'A >= B', '[a>b] c', "'a > b' : c", 'A > ', '> A', 'A >> B'].forEach(line => assert.deepEqual(nestCuts(line), [], `${line}: > stays a letter`));
   const show = memo => questionsFor(memo).map(q => `${q.kind}:${q.statement || q.prompt}→${q.answer}`);
   assert.deepEqual(show('[A] > [B] A:[N] C'), show(':::toggle [A]\n[B] A:[N] C\n:::end'));
@@ -12422,4 +12422,26 @@ test('15일 fix-134: today\'s recommended range stops at the stage end page and 
   const logger = fs.readFileSync(path.join(__dirname, '..', 'components/SessionLogger.tsx'), 'utf8');
   const summary = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(logger.includes('오늘 권장 ${formatRecommendedRanges(') && summary.includes('recommendedRangeParts(detailData.subject, detailStartPage, recommendedPages, formatNumber)'));
+});
+
+test('17일 fix-137: // fully separates the line — the row after > ends at the next //, and what follows is read as a new line', () => {
+  const { expandNestLines, expandNestLinesMapped } = loadSource('utils/noteNest.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const shape = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => `${q.prompt}>${q.answer}|${q.conditions.join(',')}`);
+  assert.deepEqual(shape('X > a : b // c : d'), ['a>b|X', 'c>d|']);
+  assert.deepEqual(shape('X > a : b // Y > c : d'), ['a>b|X', 'c>d|Y']);
+  assert.equal(expandNestLines('X > a // Y > b // c'), ':::toggle X\na\n:::end\n:::toggle Y\nb\n:::end\nc');
+  const { nestCuts } = loadSource('utils/noteNest.ts');
+  assert.deepEqual(nestCuts('X > a // Y > b // c'), [2, 11], 'the > after // is a nest too (editor Enter)');
+  // 원래 줄의 자리: 행마다 그 글이 시작하는 곳
+  const line = 'p : q // X > a : b // c : d // Y > e : f';
+  const mapped = expandNestLinesMapped([line]);
+  mapped.lines.forEach((text, at) => {
+    const origin = mapped.origin[at];
+    if (!origin || !origin.split) return;
+    const body = text.replace(/^:::toggle /, '');
+    assert.equal(line.slice(origin.start, origin.start + body.length), body);
+  });
+  // 토글 제목에 // 가 있으면 > 는 글자 그대로
+  assert.equal(expandNestLines(':::toggle X > a // b\nc : d\n:::end'), ':::toggle X > a // b\nc : d\n:::end');
 });

@@ -11,13 +11,14 @@ import { reviewQuotes } from './reviewQuote';
  *  - 앞이 비었거나 뒤가 비면, 또 연결어에 붙여 쓴 `=>` `->` `:>`는 `>`가 그냥 글자다.
  *    `[ ]` `( )` 안과 따옴표 안의 `>`, `>>` · `>=`도 글자다.
  *  - `//`로 칸을 나눈 줄에서 `>` 앞의 행은 바로 앞 `//` 뒤부터다: `a : b // X > c : d`는 `a : b`와 X 밑의 `c : d`다.
- *    `>` 뒤는 줄 끝까지 그 행 밑이다(`X > a : b // c : d`는 둘 다 X 밑). 토글 제목에 `//`가 있으면 `>`는 글자다.
+ *    17일 "// 뒤와 완전히 분리": `>` 뒤 행은 다음 `//`까지다. `X > a : b // c : d`는 X 밑의 `a : b`와 따로 쓴 `c : d`다
+ *    (`//` 뒤는 새 줄처럼 다시 읽는다: `X > a // Y > b`는 X 밑의 a, Y 밑의 b). 토글 제목에 `//`가 있으면 `>`는 글자다.
  * 문제 만들기 · 관계도 · 집합 읽기가 이 글을 쓰고, 노트에 저장된 글은 바뀌지 않는다.
  */
 
-/** 줄에서 밑에 쓰기로 읽는 `>`의 자리들과, 첫 `>` 앞의 마지막 `//`(그 앞은 따로 쓴 칸이다, 없으면 -1) */
-const scanNest = (line: string): { cuts: number[]; lead: number } => {
-  if (!line.includes('>')) return { cuts: [], lead: -1 };
+/** 줄에서 밑에 쓰기로 읽는 `>`의 자리들과, 첫 `>` 앞의 마지막 `//`(그 앞은 따로 쓴 칸이다, 없으면 -1), 첫 `>` 뒤 첫 `//`(그 뒤는 따로 쓴 칸이다, 없으면 -1) */
+const scanNest = (line: string): { cuts: number[]; lead: number; tail: number } => {
+  if (!line.includes('>')) return { cuts: [], lead: -1, tail: -1 };
   const groups = reviewGroups(line).skip;
   // 따옴표 `'…'` 안은 건너뛴다(여는 것과 닫는 것이 차례로 짝을 이룬다)
   const edges = [...reviewQuotes(line).edges].sort((a, b) => a - b);
@@ -26,12 +27,16 @@ const scanNest = (line: string): { cuts: number[]; lead: number } => {
   const cuts: number[] = [];
   let from = 0;
   let lead = -1;
+  let tail = -1;
   for (let index = 0; index < line.length; index += 1) {
     const closing = quoteEnd.get(index);
     if (closing !== undefined) { index = closing; continue; }
     const jump = groups.get(index);
     if (jump !== undefined) { index = jump; continue; }
-    if (!cuts.length && line[index] === '/' && line[index + 1] === '/') { lead = index; from = index + 2; index += 1; continue; }
+    if (line[index] === '/' && line[index + 1] === '/') {
+      if (cuts.length) { tail = index; break; }
+      lead = index; from = index + 2; index += 1; continue;
+    }
     if (line[index] !== '>') continue;
     if (line[index + 1] === '>' || line[index + 1] === '=' || line[index - 1] === '>') continue;
     const before = line.slice(from, index);
@@ -41,30 +46,38 @@ const scanNest = (line: string): { cuts: number[]; lead: number } => {
     cuts.push(index);
     from = index + 1;
   }
-  return { cuts, lead: cuts.length ? lead : -1 };
+  return { cuts, lead: cuts.length ? lead : -1, tail: cuts.length ? tail : -1 };
 };
 
 /** 줄(토글 제목이면 제목 글)에서 밑에 쓰기로 읽는 `>`의 자리들 */
-export const nestCuts = (line: string): number[] => scanNest(line).cuts;
+export const nestCuts = (line: string): number[] => {
+  const { cuts, tail } = scanNest(line);
+  // 17일: `//` 뒤(tail)는 새 줄처럼 다시 읽으니 그 안의 `>`도 밑에 쓰기다
+  return tail >= 0 ? [...cuts, ...nestCuts(line.slice(tail + 2)).map(at => at + tail + 2)] : cuts;
+};
 
 export interface NestRow { start: number; text: string }
 
 /**
  * `>`로 나눈 행들(줄 안 시작 자리와 글). lead는 첫 `>` 앞의 `//` 앞에 따로 쓴 칸들(그 줄의 보통 칸), 없으면 null.
+ * tail은 마지막 행 뒤 `//` 뒤의 글(17일: 따로 쓴 칸, 새 줄처럼 다시 읽는다), 없으면 null.
  * `>`가 없으면 null. 토글 제목(title)에 `//`가 있으면 `>`는 글자다.
  */
-export const nestRowsOf = (body: string, title = false): { lead: NestRow | null; rows: NestRow[] } | null => {
-  const { cuts, lead } = scanNest(body);
-  if (!cuts.length || (title && lead >= 0)) return null;
+export const nestRowsOf = (body: string, title = false): { lead: NestRow | null; rows: NestRow[]; tail: NestRow | null; tailFrom: number } | null => {
+  const { cuts, lead, tail } = scanNest(body);
+  if (!cuts.length || (title && (lead >= 0 || tail >= 0))) return null;
   const piece = (start: number, end: number): NestRow => {
     const raw = body.slice(start, end);
     return { start: start + (raw.length - raw.trimStart().length), text: raw.trim() };
   };
   const first = lead >= 0 ? lead + 2 : 0;
-  const bounds = [first - 1, ...cuts, body.length];
+  const bounds = [first - 1, ...cuts, tail >= 0 ? tail : body.length];
   return {
     lead: lead >= 0 ? piece(0, lead) : null,
-    rows: bounds.slice(1).map((end, index) => piece(bounds[index] + 1, end))
+    rows: bounds.slice(1).map((end, index) => piece(bounds[index] + 1, end)),
+    tail: tail >= 0 ? piece(tail + 2, body.length) : null,
+    /** tail 글이 시작하는 자리(`//` 바로 뒤), 없으면 -1 */
+    tailFrom: tail >= 0 ? tail + 2 : -1
   };
 };
 
@@ -86,17 +99,31 @@ export const expandNestLinesMapped = (lines: readonly string[]): { lines: string
       return;
     }
     const toggle = line.startsWith(REVIEW_MEMO_TOGGLE_START);
-    const body = toggle ? line.slice(REVIEW_MEMO_TOGGLE_START.length) : line;
-    const split = nestRowsOf(body, toggle);
-    if (toggle) extra.push(split ? split.rows.length - 1 : 0);
-    if (!split) { out.push(line); origin.push({ line: number, start: 0, split: false }); return; }
-    if (split.lead && split.lead.text) { out.push(split.lead.text); origin.push({ line: number, start: split.lead.start, split: true }); }
-    split.rows.forEach((row, index) => {
-      const last = index === split.rows.length - 1;
-      out.push(`${!last || toggle ? REVIEW_MEMO_TOGGLE_START : ''}${row.text}`);
-      origin.push({ line: number, start: row.start, split: true });
-    });
-    if (!toggle) split.rows.slice(1).forEach(() => { out.push(REVIEW_MEMO_TOGGLE_END); origin.push(null); });
+    if (toggle) {
+      const split = nestRowsOf(line.slice(REVIEW_MEMO_TOGGLE_START.length), true);
+      extra.push(split ? split.rows.length - 1 : 0);
+      if (!split) { out.push(line); origin.push({ line: number, start: 0, split: false }); return; }
+      split.rows.forEach(row => { out.push(`${REVIEW_MEMO_TOGGLE_START}${row.text}`); origin.push({ line: number, start: row.start, split: true }); });
+      return;
+    }
+    // 보통 줄: 마지막 행 뒤 `//` 뒤(tail)는 행들의 토글을 닫은 뒤 새 줄처럼 다시 읽는다(17일)
+    const emit = (body: string, base: number, whole: boolean) => {
+      const split = nestRowsOf(body, false);
+      if (!split) {
+        if (whole) { out.push(line); origin.push({ line: number, start: 0, split: false }); }
+        else if (body.trim()) { out.push(body.trim()); origin.push({ line: number, start: base + (body.length - body.trimStart().length), split: true }); }
+        return;
+      }
+      if (split.lead && split.lead.text) { out.push(split.lead.text); origin.push({ line: number, start: base + split.lead.start, split: true }); }
+      split.rows.forEach((row, index) => {
+        const last = index === split.rows.length - 1;
+        out.push(`${!last ? REVIEW_MEMO_TOGGLE_START : ''}${row.text}`);
+        origin.push({ line: number, start: base + row.start, split: true });
+      });
+      split.rows.slice(1).forEach(() => { out.push(REVIEW_MEMO_TOGGLE_END); origin.push(null); });
+      if (split.tailFrom >= 0) emit(body.slice(split.tailFrom), base + split.tailFrom, false);
+    };
+    emit(line, 0, true);
   });
   // 닫지 않은 토글에서 더 연 토글은 글 끝까지 열린 채로 둔다(닫지 않은 토글과 같다)
   return { lines: out, origin };

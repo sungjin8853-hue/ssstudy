@@ -498,7 +498,9 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
     const split = nestRowsOf(text, title);
     if (!split) return { lead: null, rows: [{ start: base, text }] };
     const shift = (row: { start: number; text: string }) => ({ start: base + row.start, text: row.text });
-    return { lead: split.lead && split.lead.text ? shift(split.lead) : null, rows: split.rows.map(shift) };
+    // 17일: 마지막 행 뒤 `//` 뒤(tail)는 따로 쓴 줄이다
+    return { lead: split.lead && split.lead.text ? shift(split.lead) : null, rows: split.rows.map(shift),
+      tail: split.tailFrom >= 0 ? { start: base + split.tailFrom, text: text.slice(split.tailFrom) } : null };
   };
   /** 열린 토글마다: 그 토글이 연 경로 수, 그 토글이 형식이면 (겹친) 형식 글 */
   const opened: Array<{ entered: number; frame: string | null }> = [];
@@ -546,11 +548,15 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
     // 형식 토글 밑의 끝이 열린 줄(`B:`)은 바로 밑 줄과 한 줄이다(4일 점검): 그 줄은 따로 읽지 않고 밑 줄이 `A:B:V:#` 형식으로 읽힌다
     const openFrame = opened.at(-1)?.frame && !pendingFrame ? subFrameOf(line.trim(), opened.at(-1)!.frame) : null;
     if (openFrame && !isFrameTitle(line.trim())) { pendingFrame = openFrame; return; }
-    const { lead, rows } = rowsOf(line, 0, false);
-    if (lead) scanRow(lead, lineIndex);
-    rows.slice(0, -1).forEach(row => enter(row.text));
-    scanRow(rows[rows.length - 1], lineIndex);
-    rows.slice(0, -1).forEach(() => leave());
+    const scanLine = (text: string, base: number) => {
+      const { lead, rows, tail } = rowsOf(text, base, false);
+      if (lead) scanRow(lead, lineIndex);
+      rows.slice(0, -1).forEach(row => enter(row.text));
+      scanRow(rows[rows.length - 1], lineIndex);
+      rows.slice(0, -1).forEach(() => leave());
+      if (tail) scanLine(tail.text, tail.start);
+    };
+    scanLine(line, 0);
     pendingFrame = null;
   });
   return statements;
