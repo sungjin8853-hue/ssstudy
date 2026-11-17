@@ -11,6 +11,7 @@ import { readReviewFieldOverride } from './reviewFieldOverride';
  *  - 한 줄에 틀 칸이 여럿이면 같은 차례끼리 짝짓는다: `{A-B-C}야 ; {D-S-f} 가져가` → `A야 ; D 가져가`, `B야 ; S 가져가`, `C야 ; f 가져가`.
  *    값 수가 다르면 짧은 쪽까지만 만든다. 빈 자리(`{A-B--N}`의 `--`)는 바로 앞 값을 다시 쓴 것이다: A, B, B, N.
  *  - 틀 칸이 없는 줄의 `{X}`(키워드 · 칸 이름표)는 전과 같다. 토글 제목 줄은 펼치지 않는다.
+ *  - `{ }` 안의 `( )`는 값 하나다: 가장 바깥 `-` `=` `,`로만 나누고, 괄호 안에는 연결어(`:` `;` `<`) · `//` · `[ ]` 등 무엇이든 쓸 수 있다.
  */
 
 interface Brace { start: number; end: number; inner: string; label: boolean }
@@ -63,6 +64,21 @@ const splitItems = (text: string): string[] => {
   return filled;
 };
 
+/** 괄호 `( )` · 따옴표 안을 뺀 글(그 안의 연결어 · 논리어는 값의 일부라 이름표인지 가를 때 보지 않는다) */
+const outsideGroups = (text: string): string => {
+  let out = '';
+  let depth = 0;
+  let quote = false;
+  for (const character of text) {
+    if (character === "'") { quote = !quote; continue; }
+    if (quote) continue;
+    if (character === '(') { depth += 1; continue; }
+    if (character === ')') { depth = Math.max(0, depth - 1); continue; }
+    if (!depth) out += character;
+  }
+  return out;
+};
+
 type Part = { kind: 'list'; items: string[]; name?: string } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
 
 /**
@@ -72,8 +88,10 @@ type Part = { kind: 'list'; items: string[]; name?: string } | { kind: 'ref'; na
 const readBrace = (inner: string, label = false, templateLine = false): Part => {
   if (label) {
     const name = (/^\s*\[([^\]]+)\]\s*$/.exec(inner)?.[1] ?? inner).trim();
-    if (!name || /[:;<\/]/.test(inner) || /.\[/.test(inner.trim())) return { kind: 'keep' };
-    if (!/[-=,]/.test(name)) return { kind: 'ref', name, label: true };
+    // 17일 "( ) 안 연결어나 다른 것들도 들어갈 수 있게": 괄호 · 따옴표 안의 `:` `;` `<` `//` `[ ]`는 값의 일부다
+    const bare = outsideGroups(inner);
+    if (!name || /[:;<\/]/.test(bare) || /.\[/.test(bare.trim())) return { kind: 'keep' };
+    if (!/[-=,]/.test(outsideGroups(name))) return { kind: 'ref', name, label: true };
     if (!templateLine) return { kind: 'keep' };
   }
   const named = /^\s*\[([^\]]+)\]\s*(.*)$/.exec(inner);
@@ -87,7 +105,10 @@ const readBrace = (inner: string, label = false, templateLine = false): Part => 
 const norm = (text: string) => text.replace(/\s+/g, '');
 
 /** 이 줄이 틀 줄인가(틀 칸이 하나라도 있다) */
-export const isTemplateLine = (line: string) => line.includes('{') && bracesOf(line).some(brace => !brace.label && readBrace(brace.inner).kind === 'list');
+export const isTemplateLine = (line: string) => line.includes('{') && bracesOf(line).some(brace => (!brace.label
+  ? readBrace(brace.inner).kind === 'list'
+  // 이름표 자리라도 `[이름]`을 붙였거나 `( )` 값이 든 목록이면 틀 칸이다(`Z : {(가:나)-다} 안녕`)
+  : readBrace(brace.inner, true, true).kind === 'list' && (/^\s*\[[^\]]+\]/.test(brace.inner) || brace.inner.includes('('))));
 
 /**
  * 틀 줄을 값마다 한 줄로 푼다. resolve(이름)는 노트의 집합 밑 항목(없으면 빈 목록).

@@ -1335,8 +1335,16 @@ export const braceSuggestions = (index: NoteSetIndex, text: string, caret: numbe
   if ((before.match(/\[/g) ?? []).length > (before.match(/\]/g) ?? []).length) return [];
   const named = /^\s*\[([^\]]*)\]\s*/.exec(before);
   const body = named ? before.slice(named[0].length) : before;
-  const separators = [...body.matchAll(/[-=,]/g)];
-  const tokenOffset = separators.length ? (separators.at(-1)!.index ?? 0) + 1 : 0;
+  // 가장 바깥 `-` `=` `,`만 값을 나눈다(괄호 안은 값의 일부). 괄호 안에서 쓰는 중이면 추천하지 않는다
+  let depth = 0;
+  const separators: number[] = [];
+  for (let at = 0; at < body.length; at += 1) {
+    if (body[at] === '(') depth += 1;
+    else if (body[at] === ')') depth = Math.max(0, depth - 1);
+    else if (!depth && /[-=,]/.test(body[at])) separators.push(at);
+  }
+  if (depth > 0) return [];
+  const tokenOffset = separators.length ? separators[separators.length - 1] + 1 : 0;
   const rawToken = body.slice(tokenOffset);
   const lead = rawToken.length - rawToken.trimStart().length;
   const from = caret - rawToken.length + lead;

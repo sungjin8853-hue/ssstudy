@@ -12572,6 +12572,11 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   assert.deepEqual(qs('{A-B-N}야;{D-S-f-h} 가져가'), ['A야>D 가져가', 'B야>S 가져가', 'N야>f 가져가']);
   // `--`는 앞 값을 생략한 것: {A-B--N} = A, B, B, N (사용자 예: A야 D가져가 · B야 S가져가 · B야 f가져가 · N야 h가져가)
   assert.equal(expandBraceTemplates('{A-B--N}야;{D-S-f-h} 가져가'), 'A야;D 가져가\nB야;S 가져가\nB야;f 가져가\nN야;h 가져가');
+  // ( ) 안에는 연결어 · // · [ ]도 쓸 수 있다(값의 일부)
+  assert.equal(expandBraceTemplates('{(A;B)-(C<D)}야 ; {(가:나)-다} 안녕'), '(A;B)야 ; (가:나) 안녕\n(C<D)야 ; 다 안녕');
+  assert.equal(expandBraceTemplates('Z : {(가:나)-다} 안녕'), 'Z : (가:나) 안녕\nZ : 다 안녕');
+  assert.equal(expandBraceTemplates('{(A:B)=C} : {(1;2), 3}'), '(A:B) : (1;2)\nC : 3');
+  assert.equal(expandBraceTemplates('a:{원인:조건/설명,[분류]=관점-세부} b,c:d'), 'a:{원인:조건/설명,[분류]=관점-세부} b,c:d', 'labels stay');
   // ( )가 있으면 가장 바깥 논리로만 나눈다(괄호 안은 한 값)
   assert.equal(expandBraceTemplates('{(A-B)-C}야 ; {(가,나)=다} 안녕'), '(A-B)야 ; (가,나) 안녕\nC야 ; 다 안녕');
   // = , 도 값 목록
