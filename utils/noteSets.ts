@@ -11,6 +11,7 @@ import { isNoteShorthandOn, relationMarks, trailingRelation } from './noteShorth
 import { expandOpenLines, openTailOf } from './noteOpenTail';
 import { GHOST_CONTINUE } from './noteGhost';
 import { expandNestLines, expandSlashLines } from './noteNest';
+import { expandBraceTemplates } from './noteTemplate';
 import { isQuoteMark, reviewQuotes } from './reviewQuote';
 import { readReviewFieldOverride } from './reviewFieldOverride';
 
@@ -433,7 +434,7 @@ export const buildNoteSetIndex = (memos: readonly string[]): NoteSetIndex => {
   memos.forEach(memo => {
     const stack: string[] = [];
     // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다
-    expandFrameLines(expandNestLines(expandOpenLines(expandSlashLines(memo)))).split('\n').forEach(line => {
+    expandFrameLines(expandNestLines(expandOpenLines(expandBraceTemplates(expandSlashLines(memo))))).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const key = see(toggleName(line.slice(REVIEW_MEMO_TOGGLE_START.length)));
         sets.add(key);
@@ -1034,7 +1035,7 @@ export const rowsOfSet = (index: NoteSetIndex, name: string): SetRow[] => {
   (index.sources ?? []).forEach(memo => {
     const noteWide = noteWideCriterionOf(memo) ?? undefined;
     const stack: { key: string; criterion?: string }[] = [];
-    expandFrameLines(expandNestLines(expandOpenLines(expandSlashLines(memo)))).split('\n').forEach(line => {
+    expandFrameLines(expandNestLines(expandOpenLines(expandBraceTemplates(expandSlashLines(memo))))).split('\n').forEach(line => {
       if (line.startsWith(REVIEW_MEMO_TOGGLE_START)) {
         const title = line.slice(REVIEW_MEMO_TOGGLE_START.length);
         stack.push({ key: normSetName(toggleName(title)), criterion: splitTitleCriteria(title).criteria.at(-1) });
@@ -1310,4 +1311,62 @@ export const setMembersTrigger = (text: string, caret: number): string | null =>
     }
   }
   return null;
+};
+
+/**
+ * 17일 "`{}` 안에서도 추천 잘 뜨게": `{ }` 틀 칸 안에 커서가 있으면 지금 쓰는 값(`-` `=` `,` 뒤)을 추천한다.
+ *  - `{[과일] 사과-` 처럼 이름을 붙인 틀 칸: 그 집합 밑 항목 중 아직 쓰지 않은 것.
+ *  - 이름 없이 값을 이어 쓰는 중(`{사과-`): 앞에 쓴 값이 든 집합의 다른 항목.
+ *  - 첫 값을 쓰는 중(`{과`): 집합 이름과, 같은 줄의 `{[이름] …}`에서 정의한 이름.
+ * `{[` 안(집합 이름 자리)은 `[ ]` 추천이 맡는다. 바꿀 범위는 지금 쓰는 값 하나다.
+ */
+export const braceSuggestions = (index: NoteSetIndex, text: string, caret: number): BracketSuggestion[] => {
+  const lineStart = caret === 0 ? 0 : text.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndAt = text.indexOf('\n', caret);
+  const lineEnd = lineEndAt < 0 ? text.length : lineEndAt;
+  let open = -1;
+  for (let position = caret - 1; position >= lineStart; position -= 1) {
+    if (text[position] === '}') return [];
+    if (text[position] === '{') { open = position; break; }
+  }
+  if (open < 0) return [];
+  const before = text.slice(open + 1, caret);
+  // `{[이름` 처럼 `[ ]` 안이면 그쪽 추천
+  if ((before.match(/\[/g) ?? []).length > (before.match(/\]/g) ?? []).length) return [];
+  const named = /^\s*\[([^\]]*)\]\s*/.exec(before);
+  const body = named ? before.slice(named[0].length) : before;
+  const separators = [...body.matchAll(/[-=,]/g)];
+  const tokenOffset = separators.length ? (separators.at(-1)!.index ?? 0) + 1 : 0;
+  const rawToken = body.slice(tokenOffset);
+  const lead = rawToken.length - rawToken.trimStart().length;
+  const from = caret - rawToken.length + lead;
+  let to = caret;
+  while (to < lineEnd && !/[-=,}]/.test(text[to])) to += 1;
+  while (to > caret && /\s/.test(text[to - 1])) to -= 1;
+  const typed = normSetName(rawToken);
+  const written = new Set(body.split(/[-=,]/).map(normSetName).filter(Boolean));
+  written.delete(typed);
+  const membersOf = (name: string) => (index.sets.has(normSetName(name)) || index.sets.has(normSetName(`[${name}]`))
+    ? setContents(index, name).filter(row => row.depth === 0).map(row => row.name) : []);
+  let pool: string[] = [];
+  let tag: BracketSuggestion['tag'] = '셀';
+  if (named && named[1].trim()) {
+    pool = membersOf(named[1].trim());
+  } else if (separators.length) {
+    const first = normSetName(body.split(/[-=,]/)[0] ?? '');
+    const owners = [...index.sets].filter(set => (index.children.get(set) ?? []).includes(first));
+    pool = owners.flatMap(owner => (index.children.get(owner) ?? []).map(key => index.display.get(key) ?? key));
+  } else {
+    tag = '집합';
+    const line = text.slice(lineStart, lineEnd);
+    const sameLine = [...line.matchAll(/\{\s*\[([^\]]+)\]/g)].map(match => match[1].trim());
+    pool = [...sameLine, ...knownSetNames(index).map(bareSetName)];
+  }
+  const seen = new Set<string>();
+  return pool.filter(name => {
+    const key = normSetName(name);
+    if (!key || seen.has(key) || written.has(key) || key === typed || /[{}]/.test(name)) return false;
+    seen.add(key);
+    return !typed || key.includes(typed);
+  }).slice(0, 40).map(name => ({ text: name, label: name, from, to, tag }));
 };

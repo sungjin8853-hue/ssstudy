@@ -1,3 +1,4 @@
+import { expandBraceTemplates, isTemplateLine } from './noteTemplate';
 import type { ReviewMemoOldLine, ReviewRemovedQuestion, ReviewRemovedReason, StudyLog } from '../types';
 import { buildReviewQuestions } from './reviewQuestions';
 import type { NoteQuestion, QuestionNoteNode } from './reviewQuestions';
@@ -244,8 +245,10 @@ export const questionDefinitions = (input: { covers: readonly RemovalCover[]; me
       // 17일: `//`(또는 `>`)로 나눈 조각에서 나온 문제는 그 조각이 든 원래 줄 전체를 고치게 보여 준다
       const memoLines = located.memo.split('\n');
       const pieces = nestPiecesByLine(memoLines);
-      const owner = [...pieces.entries()].find(([, list]) => list.some(piece => piece.text === source.line))?.[0];
-      if (owner === undefined) return;
+      // 17일: `{ }` 틀 줄에서 펼친 줄이면 그 틀 줄을 고친다
+      const owner = [...pieces.entries()].find(([, list]) => list.some(piece => piece.text === source.line))?.[0]
+        ?? memoLines.findIndex(line => isTemplateLine(line) && expandBraceTemplates(memoLineText(line)).split('\n').some(piece => piece.trim() === source.line.trim()));
+      if (owner === undefined || owner < 0) return;
       const whole = memoLines[owner];
       const toggle = whole.startsWith(REVIEW_MEMO_TOGGLE_START);
       pushUnique(lines, { kind: 'line', logId: cover.logId, lineIndex: owner, text: toggle ? whole.slice(REVIEW_MEMO_TOGGLE_START.length) : whole, isToggle: toggle });

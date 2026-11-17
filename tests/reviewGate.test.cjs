@@ -12558,3 +12558,47 @@ test('17일 fix-140: review intake moves to the amount input — 복습에 넣�
   const practice = read('components/NotePractice.tsx');
   assert.ok(practice.includes("{noUnits && segment('note', '노트 번째로')}"));
 });
+
+test('17일 fix-141: { } templates — a line with a value list in braces is written once per value; same-line names and note sets are filled in order', () => {
+  const { expandBraceTemplates, isTemplateLine } = loadSource('utils/noteTemplate.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const S = loadSource('utils/noteSets.ts');
+  const qs = memo => buildReviewQuestions(memo).questions.filter(q => q.kind === 'direct').map(q => `${q.prompt}>${q.answer}`);
+  // 사용자 예: {[C] A-B-C}야 ; {C} 안녕 = A야;A 안녕 // B야;B 안녕 // C야;C 안녕
+  assert.equal(expandBraceTemplates('{[C] A-B-C}야 ; {C} 안녕'), 'A야 ; A 안녕\nB야 ; B 안녕\nC야 ; C 안녕');
+  assert.deepEqual(qs('{[C] A-B-C}야 ; {C} 안녕'), qs('A야;A 안녕 // B야;B 안녕 // C야;C 안녕'));
+  assert.ok(!buildReviewQuestions('{[C] A-B-C}야 ; {C} 안녕').questions.some(q => q.kind === 'order' || /다음에 오는/.test(q.prompt)), 'no questions about A-B-C itself');
+  // 같은 줄의 여러 틀 칸은 차례끼리
+  assert.deepEqual(qs('{A-B-N}야;{D-S-f-h} 가져가'), ['A야>D 가져가', 'B야>S 가져가', 'N야>f 가져가']);
+  // = , 도 값 목록
+  assert.equal(expandBraceTemplates('{A=B} : {1,2}'), 'A : 1\nB : 2');
+  // 노트의 집합(셀 밑 항목)을 가져온다, 없으면 그 글 그대로
+  assert.deepEqual(qs(':::toggle [과일]\n사과\n배\n:::end\n{과일} : {[색] 빨강, 노랑}'), ['사과>빨강', '배>노랑']);
+  assert.deepEqual(qs('{X} : {1-2}'), ['X>1', 'X>2']);
+  // 틀 칸이 없는 줄의 {X}(키워드)와 칸 이름표는 전과 같다
+  assert.ok(!isTemplateLine('사과 : {빨강}') && !isTemplateLine('{원소}-{원소} : 값') && !isTemplateLine('a:{원인:조건/설명,[분류]=관점-세부} b,c:d'));
+  assert.deepEqual(qs('{[C] A-B}야 ; {원인} 안녕'), ['A야>안녕', 'B야>안녕']);
+  // 문제를 만드는 틀이지 실제 논리가 아니다: { } 안의 [C]는 집합을 만들지 않고, - = , 문제(순서 · 같음 · 그리고)도 없다
+  const index = S.buildNoteSetIndex(['{[문자] 가-나-다}야 ; {문자} 안녕']);
+  assert.ok(!index.sets.has('문자'));
+  assert.ok(!buildReviewQuestions('{[C] A=B}야 ; {C} 안녕').questions.some(q => /같은|다음에 오는|그리고|AND/.test(q.prompt + q.answer)));
+  // 연결 · 첨가: 틀 줄은 이어 붙이지 않는다(새 틀 줄을 이전 쪽에 붙이지도, 이전 쪽 틀 줄에 새 줄을 붙이지도 않는다)
+  const merge = loadSource('utils/noteMerge.ts');
+  assert.deepEqual(merge.scanNoteStatements('{[C] A-B-C}야 ; {C} 안녕\nC-D : 문자').map(item => item.text), ['C-D : 문자']);
+  assert.deepEqual(merge.mergeNoteIntoEarlier('{[C] A-B-C}야 ; {C} 안녕', [{ id: 'e', memo: 'A야 ; A 안녕\nA-B-C : 문자' }]), []);
+  // { } 안 추천: 이름 붙인 틀 칸은 그 집합 항목(쓴 것 빼고), 이어 쓰면 앞 값과 같은 집합, 첫 값은 집합 이름 · 같은 줄에서 정의한 이름
+  const fruit = S.buildNoteSetIndex([':::toggle [과일]\n사과\n배\n포도\n:::end']);
+  const suggest = text => S.braceSuggestions(fruit, text, text.length).map(item => item.text);
+  assert.deepEqual(suggest('{[과일] '), ['사과', '배', '포도']);
+  assert.deepEqual(suggest('{[과일] 사과-배-'), ['포도']);
+  assert.deepEqual(suggest('{사과='), ['배', '포도']);
+  assert.deepEqual(suggest('{과'), ['과일']);
+  assert.deepEqual(suggest('{[C] A-B}야 ; {'), ['C', '과일']);
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'components/ReviewMemoEditor.tsx'), 'utf8').includes('braceSuggestions(buildNoteSetIndex('));
+  // 문제가 나온 줄 고치기: 펼친 줄의 문제는 그 틀 줄을 보여 준다
+  const removal = loadSource('utils/reviewRemoval.ts');
+  const memo = 'x : y\n{[C] A-B}야 ; {C} 안녕';
+  const target = buildReviewQuestions(memo).questions.find(q => q.kind === 'direct' && q.prompt === 'B야');
+  const defs = removal.questionDefinitions({ covers: [{ logId: 'a', questionKey: target.key }], memos: [{ logId: 'a', memo }], setMemos: [{ logId: 'a', memo }] });
+  assert.deepEqual(defs.lines.map(line => line.lineIndex), [1]);
+});

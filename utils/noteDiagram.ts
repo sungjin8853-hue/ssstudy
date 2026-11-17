@@ -9,6 +9,7 @@ import { quotedMarkCuts, reviewQuotes } from './reviewQuote';
 import { normalizeNotePunctuation } from './notePunctuation';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
 import { expandNestLines, expandSlashLines } from './noteNest';
+import { expandBraceTemplates } from './noteTemplate';
 
 /**
  * 정리노트 글을 관계도(화면 표시용)로 바꾼다. 문제 만들기와는 별개이고, 값을 저장하거나 바꾸지 않는다.
@@ -411,7 +412,7 @@ const walkBlocks = (memo: string, inherited: string[], chain: string[][], expans
 /** 노트 글을 관계도로. criterion은 세션 노트의 분류 기준(맨 앞 기준)이고, 토글 제목의 `[ ]`가 그 안에서 기준을 바꾼다. */
 export const parseNoteDiagram = (written: string, criterion?: string | null, expansions?: DiagramExpansions): DiagramItem[] => {
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리)
-  const memo = expandFrameLines(expandNestLines(expandOpenLines(expandSlashLines(normalizeNotePunctuation(written)))));
+  const memo = expandFrameLines(expandNestLines(expandOpenLines(expandBraceTemplates(expandSlashLines(normalizeNotePunctuation(written))))));
   const top = parseCriterionLabels(criterion || noteCriterionOf(memo));
   return walkDiagram(memo, top, top.length ? [top] : [], expansions);
 };

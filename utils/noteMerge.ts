@@ -7,6 +7,7 @@ import { reviewQuotes } from './reviewQuote';
 import { matchingBracket } from './setExpression';
 import { openTailOf } from './noteOpenTail';
 import { expandSlashLinesMapped, nestRowsOf } from './noteNest';
+import { isTemplateLine } from './noteTemplate';
 import { fillFrame, isFrameTitle, subFrameOf, unfillFrame } from './noteFrame';
 
 /**
@@ -518,6 +519,9 @@ export const scanNoteStatements = (memo: string): NoteStatement[] => {
       // 형식 토글 밑 줄은 형식에 넣은 글로 읽는다(4일: 연결 · 첨가가 펼친 줄로 일어난다)
       const text = frame && written && !written.includes('#') ? fillFrame(frame, written) ?? written : written;
       if (!text || topLevelCuts(text, relationMarks()).length === 0) return;
+      // 17일 "문제를 만드는 로직이지 실제 논리가 아니야 · 특히 연결 첨가에서": `{ }` 틀 줄은 문제를 만드는 틀이라 이어 붙이지 않는다
+      // (틀 줄을 이전 쪽에 연결 · 첨가하지 않고, 이전 쪽의 틀 줄에 새 줄을 붙이지도 않는다. `{ }` 안의 `-` `=` `,`는 실제 순서 · 같음 · 그리고가 아니다)
+      if (isTemplateLine(text)) return;
       const lead = raw.length - raw.trimStart().length;
       const start = row.start + bounds[index] + 1 + lead;
       const scope = scopes[scopes.length - 1];

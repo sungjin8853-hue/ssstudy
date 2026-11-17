@@ -4,7 +4,8 @@ import { isReviewSlash } from './reviewSlash';
 import { calculateReviewQuestionDifficulty, compareReviewQuestionDifficulty } from './reviewDifficulty';
 import type { ReviewQuestionDifficulty } from './reviewDifficulty';
 import { getReviewFieldOverrides, readReviewFieldOverride, reviewGroups, stripReviewFieldOverrides } from './reviewFieldOverride';
-import { buildNoteSetIndex, evaluateSetExpression, expandNoteSlots, fillNoteTemplate, leadingCriterionOf, normSetName, questionAbilities, readNoteSetLine, readNoteSlots, readNoteTemplate, setLinksOf, slotCellsOf } from './noteSets';
+import { expandBraceTemplates } from './noteTemplate';
+import { buildNoteSetIndex, setContents, evaluateSetExpression, expandNoteSlots, fillNoteTemplate, leadingCriterionOf, normSetName, questionAbilities, readNoteSetLine, readNoteSlots, readNoteTemplate, setLinksOf, slotCellsOf } from './noteSets';
 import type { NoteSlot, NoteTemplate } from './noteSets';
 import { blankTitleCriteria, looksLikeCriterion, noteCriterionOf, splitTitleCriteria } from './noteDiagram';
 import { blankOpenLogic, expandOpenLines, openTailOf } from './noteOpenTail';
@@ -789,7 +790,13 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   // 맨 끝이 덜 끝난 줄은 바로 밑 줄을 토글 아래 줄처럼 품는다(가장 먼저 처리). 전각 기호(`：` `；`)는 노트 기호로 읽는다(글자 수가 같아 글자 범위는 그대로).
   // 완전한 행 뒤의 `>`는 그 뒤 행을 밑에 쓴 것처럼 읽는다(3일)
   // 17일: `//`는 엔터 친 것과 같다(끝이 열린 줄 · 밑에 쓰기도 줄바꿈처럼)
-  const memo = expandNestLines(expandOpenLines(expandSlashLines(normalizeNotePunctuation(original))));
+  // 17일: `{ }` 틀 줄은 값마다 한 줄로 푼다(`{[C] A-B-C}야 ; {C} 안녕`). 같은 줄에서 정의하지 않은 `{이름}`은 노트의 그 집합 밑 항목을 가져온다
+  let templateIndex: ReturnType<typeof buildNoteSetIndex> | null = null;
+  const templateMembers = (name: string) => {
+    templateIndex ??= buildNoteSetIndex([original]);
+    return templateIndex.sets.has(normSetName(name)) ? setContents(templateIndex, name).filter(row => row.depth === 0).map(row => row.name) : [];
+  };
+  const memo = expandNestLines(expandOpenLines(expandBraceTemplates(expandSlashLines(normalizeNotePunctuation(original)), templateMembers)));
   const tailByNode = new Map<string, OpenTail>();
   const nodes: QuestionNoteNode[] = [];
   lineNodeIds = new Set<string>();
