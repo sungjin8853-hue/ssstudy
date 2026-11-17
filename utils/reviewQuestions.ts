@@ -131,9 +131,6 @@ const forwardOnly = (separator: string) => separator === ';' || separator === '-
 const goesBackward = (separator: string) => separator !== '>' && !forwardOnly(separator);
 
 // Only top-level delimiters split a column. Nested groups restart column numbering.
-/** 칸에 직접 쓴 이 이름들은 "그 칸이 그중 하나"라는 뜻이라(충분조건) 답으로 쓰지 않는다 */
-const EXAMPLE_LABELS = new Set(['예시', '보기', '사례', '예', 'example', 'examples', 'ex']);
-
 const splitAt = (text: string, from: number, to: number, delimiters: string) => {
   const cuts: number[] = [];
   const groups = reviewGroups(text).skip;
@@ -1731,13 +1728,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     question.statement = prose.statement;
     if (prose.solution) question.solution = prose.solution;
   });
-  // 17일 "[ ]의 정의는 충분조건만 해당된다": 칸에 직접 쓴 `[예시]`(`규칙 ; [예시] 맴+이=매미`)는 그 칸이 예시 하나라는 뜻이라
-  // 규칙에서 그 예시를 유도할 수 없다. 그래서 예시 칸을 **답**으로 하는 문제(다음 값 · 빈칸 · 두 걸음 뒤 · 전체 재구성)는 만들지 않는다.
-  // 예시를 보고 규칙을 맞히는 쪽은 그대로다. 필요충분으로 쓰려면 `([예시]= 맴+이=매미)`처럼 괄호 안에서 `=`로 묶어 적는다
-  // 예시 칸 **안**의 관계(`[예시] 맴 + 이 = 매미`의 맴+이 ↔ 매미)는 그 칸을 보여 준 채 묻는 것이라 그대로 둔다
-  const isExample = (column: QuestionColumn) => typeof column === 'string' && EXAMPLE_LABELS.has(column.replace(/\s+/g, ''));
-  const answerIsExample = (question: NoteQuestion) => question.columns.answer.some(isExample) && !question.columns.prompt.some(isExample);
-  return { questions: questions.filter(question => !answerIsExample(question)), nodes };
+  return { questions, nodes };
 }
 
 /**

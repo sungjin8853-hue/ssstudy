@@ -12612,7 +12612,7 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   assert.deepEqual(defs.lines.map(line => line.lineIndex), [1]);
 });
 
-test('17일 fix-144: = inside a group embedded in text is 또는 (no 대응 questions), quotes no longer hide a group, a closing quote may be followed by Hangul, and an example cell is never the answer', () => {
+test('17일 fix-144 · 18일 fix-145: = inside a group embedded in text is 또는 (no 대응 questions), quotes no longer hide a group, a closing quote may be followed by Hangul, and , then = keeps asking the place first', () => {
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const shape = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}>${q.answer}`);
   // 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"라서 대응 문제를 내지 않는다(논리적으로 맞힐 수 없다)
@@ -12626,14 +12626,11 @@ test('17일 fix-144: = inside a group embedded in text is 또는 (no 대응 ques
   assert.ok(shape("앞 (가 : '나' : 다) 뒤 ; 결과").some(text => text === 'direct|가>나'));
   // 닫는 따옴표 뒤에 한글이 바로 붙어도 따옴표다: 안쪽 `,`는 글자
   assert.deepEqual(shape("A: 받침 'ㄱ,ㄷ'뒤 'ㄱ,ㅅ'은 된소리"), ['direct|A>받침 ㄱ,ㄷ뒤 ㄱ,ㅅ은 된소리', 'reverse|받침 ㄱ,ㄷ뒤 ㄱ,ㅅ은 된소리>A']);
-  // 예시 칸은 답이 되지 않는다(규칙에서 예시를 유도할 수 없다). 예시를 보고 규칙을 맞히는 쪽과 예시 칸 안의 관계는 그대로
-  const memo = '조건 ; 규칙 ; [예시] 맴 + 이 = 매미';
-  const made = buildReviewQuestions(memo).questions;
-  assert.ok(!made.some(q => q.answer.includes('맴 + 이 = 매미')), 'never asks for the example');
-  assert.ok(made.some(q => q.kind === 'blank' && q.prompt.includes('맴 + 이 = 매미') && q.answer === '규칙'), 'the example may be shown');
-  assert.ok(made.some(q => q.prompt === '맴 + 이' && q.answer === '매미') && made.some(q => q.prompt === '매미' && q.answer === '맴 + 이'), 'inside the example cell stays');
-  // 필요충분으로 쓰면(괄호 안에서 `=`로 묶으면) 전처럼 답이 된다
-  assert.ok(buildReviewQuestions('조건 ; 규칙 ; ([예시]= 맴+이=매미)').questions.some(q => q.answer.includes('맴+이')));
-  // 다른 이름표(의미 · 거리)는 그대로 답이 된다
+  // 18일 "충분조건은 걍 하지마": `[예시]` 칸도 전처럼 답이 된다(칸 이름표로 문제를 빼지 않는다)
+  const made = buildReviewQuestions('조건 ; 규칙 ; [예시] 맴 + 이 = 매미').questions;
+  assert.ok(made.some(q => q.answer.includes('맴 + 이 = 매미')) && made.some(q => q.prompt === '맴 + 이' && q.answer === '매미'));
   assert.ok(shape('재귀칭;[의미] 3인칭').some(text => text === 'direct|재귀칭>3인칭'));
+  // `,`는 그리고: 먼저 `,`로 자리를 맞히고, 그 자리 안에서 `=`로 대응을 묻는다(18일)
+  assert.deepEqual(shape('X ; (A=B),(N=V)'), ['direct|A>B', 'reverse|B>A', 'direct|N>V', 'reverse|V>N',
+    'remaining|X>N = V', 'remaining|X>A = B', 'direct|X>(A = B) AND (N = V)']);
 });
