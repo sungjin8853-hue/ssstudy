@@ -12634,3 +12634,10 @@ test('17일 fix-144 · 18일 fix-145: = inside a group embedded in text is 또�
   assert.deepEqual(shape('X ; (A=B),(N=V)'), ['direct|A>B', 'reverse|B>A', 'direct|N>V', 'reverse|V>N',
     'remaining|X>N = V', 'remaining|X>A = B', 'direct|X>(A = B) AND (N = V)']);
 });
+
+test('18일 fix-146: a group that skips a column ((;A)) is headed by its first written cell, not the empty one', () => {
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const made = buildReviewQuestions('X ; (;A),(B;C)').questions;
+  assert.ok(made.some(q => q.kind === 'direct' && q.prompt === 'X' && q.answer === 'A AND B'), made.map(q => `${q.prompt}>${q.answer}`).join(' / '));
+  assert.ok(!made.some(q => /^\s*AND|AND\s*$/.test(q.answer) || q.conditions.some(text => /^\s*충족/.test(text))), 'no empty cell leaks into an answer or a condition');
+});

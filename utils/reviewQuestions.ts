@@ -329,7 +329,8 @@ const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (e
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
 
 const head = (expression: Expression): Expression => {
-  if (expression.type === 'relation') return head(expression.fields[0]);
+  // 18일: 칸을 건너뛴 묶음(`(;A)`)의 머리는 빈 칸이 아니라 처음 쓴 칸이다(전에는 답이 "　AND B"처럼 빈 칸을 달고 나왔다)
+  if (expression.type === 'relation') return head(expression.fields.find(field => nonempty(field)) ?? expression.fields[0]);
   if (expression.type === 'text') return expression;
   return { ...expression, items: expression.items.map(head) };
 };
