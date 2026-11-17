@@ -334,6 +334,7 @@ const head = (expression: Expression): Expression => {
   if (expression.type === 'text') return expression;
   return { ...expression, items: expression.items.map(head) };
 };
+const spanKey = (span: AnswerSpan) => `${span.nodeId}:${span.start}-${span.end}`;
 const spans = (expression: Expression): AnswerSpan[] => expression.type === 'text'
   ? (nonempty(expression) ? [expression.span] : [])
   : expression.type === 'relation' ? expression.fields.flatMap(spans) : expression.items.flatMap(spans);
@@ -1682,6 +1683,20 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   }
   questions.forEach(question => Object.assign(question, calculateReviewQuestionDifficulty(question.answerSpans,
     [...question.promptSpans, ...question.conditionSpans.flat()])));
+  // 18일 "답을 맞추는데 필요한 조건만 줘야지": 문제마다 값으로 보여 주는 칸을 적어 둔다(아래에서 쓴다).
+  // 줄마다의 범위를 합치기 전에 적는다: 합친 뒤에는 여러 줄에 똑같이 있는 문제가 줄마다의 범위를 다 들고 있어서 어느 쪽이 더 적은지 셀 수 없다
+  // 형식 `#` 틀로 펼친 줄은 칸마다의 범위가 없고(줄 전체가 한 범위다) 칸 번호로만 가리므로, 그 줄에서는 줄 + 칸 번호로 센다
+  const framedOf = (question: NoteQuestion) => {
+    const span = question.answerSpans[0] ?? question.promptSpans[0];
+    return span && span.generated !== undefined ? `${spanKey(span)}:${span.generated}` : null;
+  };
+  const shownByQuestion = new Map<NoteQuestion, { shown: Set<string>; answer: string }>(questions.map(question => {
+    const framed = framedOf(question);
+    return [question, {
+      shown: new Set(framed ? question.columns.prompt.map(column => `${framed}@${JSON.stringify(column)}`) : question.promptSpans.map(spanKey)),
+      answer: `${framed ? `${framed}@${JSON.stringify(question.columns.answer)}` : question.answerSpans.map(spanKey).sort().join('|')}\u0000${question.answer}`,
+    }];
+  }));
   // 같은 문제가 또 있던 줄의 글자 범위도 가림에 쓰이도록 합친다(난도는 위에서 한 줄 기준으로 이미 계산했다)
   duplicateSpans.forEach(({ answerSpans, promptSpans }, question) => {
     question.answerSpans.push(...answerSpans);
@@ -1729,7 +1744,24 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     question.statement = prose.statement;
     if (prose.solution) question.solution = prose.solution;
   });
-  return { questions, nodes };
+  // 18일 "답을 맞추는데 필요한 조건만 줘야지": 같은 답을 묻는 문제가 여럿이면, 보여 주는 칸이 더 적은 것으로 이미 답이 정해진다.
+  // 그보다 더 보여 주는 문제는 필요 없는 조건을 얹은 것이라 내지 않는다(`A → ＿ → …`가 있으면 `A → ＿ → B → C`는 빼고,
+  // "두 걸음 뒤"가 있으면 그 사이를 다 보여 주는 빈칸은 뺀다). 보여 주는 칸이 똑같으면 둘 다 둔다(모양만 다른 문제)
+  // 조건(`x 이후` · `A 충족`)은 그 칸을 가리키는 말이라 세지 않는다. 문제에 값으로 보여 주는 칸만 센다
+  const byAnswer = new Map<string, Array<{ question: NoteQuestion; shown: Set<string> }>>();
+  questions.forEach(question => {
+    const marked = shownByQuestion.get(question);
+    if (!marked) return;
+    byAnswer.set(marked.answer, [...(byAnswer.get(marked.answer) ?? []), { question, shown: marked.shown }]);
+  });
+  const extra = new Set<string>();
+  byAnswer.forEach(list => {
+    if (list.length < 2) return;
+    list.forEach(item => {
+      if (list.some(other => other !== item && other.shown.size < item.shown.size && [...other.shown].every(key => item.shown.has(key)))) extra.add(item.question.key);
+    });
+  });
+  return { questions: extra.size ? questions.filter(question => !extra.has(question.key)) : questions, nodes };
 }
 
 /**

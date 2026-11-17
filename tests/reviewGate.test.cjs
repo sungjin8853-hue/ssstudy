@@ -6839,20 +6839,16 @@ test('a slash separates statements only when written twice (//); a single slash 
   assert.equal(parseNoteDiagram('a:b // c:d').length, 2);
 });
 
-test('fill-in-the-blank questions: the rest of a chain is shown; one blank moves right, then fewer clues, and only then more blanks', () => {
+test('18일 fix-147: a blank shows only the clues needed to answer it — the neighbouring value, then more blanks', () => {
   const blanks = memo => questionsFor(memo).filter(q => q.kind === 'blank');
   assert.equal(blanks('A:B').length, 0, 'a pair has no blank type');
-  const three = blanks('A:B:C');
-  assert.deepEqual(three.slice(0, 3).map(q => [q.prompt, q.answer]), [['＿ → B → C', 'A'], ['A → ＿ → C', 'B'], ['A → B → ＿', 'C']]);
+  assert.deepEqual(blanks('A:B:C').map(q => [q.prompt, q.answer]), [['＿ → B → …', 'A'], ['A → ＿ → …', 'B'], ['… → B → ＿', 'C']]);
   const four = blanks('A:B:C:D');
-  const fullClues = four.filter(q => !q.answer.includes('→') && !q.prompt.includes('…'));
-  assert.deepEqual(fullClues.map(q => q.answer), ['A', 'B', 'C', 'D'], 'one blank moves to the right as it gets harder');
-  const fewerClues = four.filter(q => !q.answer.includes('→') && q.prompt.includes('…'));
+  const one = four.filter(q => !q.answer.includes('→'));
   const moreBlanks = four.filter(q => q.answer.includes('→'));
-  const top = list => Math.max(...list.map(q => q.difficulty)), low = list => Math.min(...list.map(q => q.difficulty));
-  assert.ok(low(fewerClues) > top(fullClues) && fewerClues.length > 0, 'hiding clues is harder than showing them all');
-  assert.ok(low(moreBlanks) > low(fewerClues) && moreBlanks.some(q => q.difficulty > top(fewerClues)), 'adding blanks is the harder step');
-  assert.ok(four.some(q => q.prompt === '… → B → ＿ → D'), 'clues farthest from the blank are hidden first');
+  assert.deepEqual(one.map(q => q.answer), ['A', 'B', 'C', 'D'], 'every cell is blanked once');
+  assert.ok(one.every(q => q.prompt.includes('…')), 'the clues that are not needed are hidden (they used to be shown)');
+  assert.ok(Math.min(...moreBlanks.map(q => q.difficulty)) > Math.max(...one.map(q => q.difficulty)), 'adding blanks is the harder step');
   const sorted = [...four].sort((a, b) => a.difficulty - b.difficulty);
   assert.deepEqual(sorted.map(q => q.level), [...sorted.map(q => q.level)].sort(), 'levels never go down with difficulty');
 });
@@ -6953,18 +6949,15 @@ test('pair tiers: important + important first, important + less second, less + l
 });
 
 test('blank questions are only asked when the shown conditions determine the answer through the relation direction', () => {
+  // 18일 fix-147: 보여 주는 단서는 답을 정하는 데 필요한 것뿐이라, 나머지 칸은 `…`로 가린다
   const prompts = memo => questionsFor(memo).filter(q => q.kind === 'blank').map(q => q.prompt);
-  assert.ok(prompts('A<B<C').includes('＿ → B → C') && prompts('A<B<C').includes('A → ＿ → C'), 'a reverse relation is walked backwards');
-  assert.ok(!prompts('A<B<C').includes('A → B → ＿'), 'C cannot be found from B when B<C only points back');
-  assert.ok(prompts('A<B:C').includes('＿ → B → C'), 'A is found from B through "<"');
-  assert.ok(prompts('A:B<C').includes('＿ → B → C'), 'A:B can be asked backwards');
-  assert.ok(!prompts('A:B<C').includes('A → B → ＿'), 'C is not found from B when B<C is one way back');
-  assert.ok(prompts('A;B;C').includes('A → B → ＿') && prompts('A;B;C').includes('A → ＿ → C'), 'a ; relation is walked forwards');
-  assert.ok(!prompts('A;B;C').includes('＿ → B → C'), 'A cannot be found from B when A;B only points forward');
-  assert.ok(prompts('A:B;C').includes('A → B → ＿'), 'A:B;C walks forward to C');
-  assert.ok(prompts('A:B;C').includes('＿ → B → C'), 'A:B can still be asked backwards');
-  assert.ok(prompts('A;B:C').includes('A → B → ＿') && !prompts('A;B:C').includes('＿ → B → C'), 'A;B is one way forward, so A is not found back from B');
-  assert.ok(prompts('A:B:C').includes('A → B → ＿') && prompts('A:B:C').includes('A → ＿ → C'), 'forward questions stay');
+  assert.deepEqual(prompts('A<B<C'), ['＿ → B → …'], 'a reverse relation is walked backwards; C cannot be found from B');
+  assert.deepEqual(prompts('A<B:C'), ['＿ → B → …', '… → B → ＿'], 'A is found from B through "<"');
+  assert.deepEqual(prompts('A:B<C'), ['＿ → B → …', 'A → ＿ → …'], 'C is not found from B when B<C is one way back');
+  assert.deepEqual(prompts('A;B;C'), ['A → ＿ → …', '… → B → ＿'], 'a ; relation is walked forwards, so A is not found back from B');
+  assert.deepEqual(prompts('A:B;C'), ['＿ → B → …', 'A → ＿ → …', '… → B → ＿'], 'A:B can still be asked backwards');
+  assert.deepEqual(prompts('A;B:C'), ['A → ＿ → …', '… → B → ＿'], 'A;B is one way forward');
+  assert.deepEqual(prompts('A:B:C'), ['＿ → B → …', 'A → ＿ → …', '… → B → ＿'], 'both ways stay');
   const withParent = questionsFor(':::toggle 조건\nA:B:C\n:::end').filter(q => q.kind === 'blank');
   assert.ok(withParent.length > 0 && withParent.every(q => q.conditions.includes('조건')), 'blank questions keep the parent toggle conditions');
 });
@@ -7208,7 +7201,8 @@ test('every question kind is asked as a workbook sentence: no AND/OR in the ques
   assert.equal(by('A:B:C:D', 'far', 'A').statement, '‘A’부터 두 걸음 뒤의 값은?');
   assert.ok(questionsFor('A:B:C:D').some(q => q.kind === 'far' && q.prompt === 'D' && q.answer === 'A' && q.statement === '‘D’부터 세 걸음 앞의 값은?'));
   // 줄 안의 칸을 가린 문제
-  assert.ok(questionsFor('A:B:C:D').some(q => q.kind === 'blank' && q.statement === '‘A → ( ㉠ ) → ( ㉡ ) → D’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.' && q.answer === 'B → C'));
+  // 18일 fix-147: 답을 정하는 데 필요 없는 끝 칸(D)은 가린다
+  assert.ok(questionsFor('A:B:C:D').some(q => q.kind === 'blank' && q.statement === '‘A → ( ㉠ ) → ( ㉡ ) → …’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오. (…는 생략)' && q.answer === 'B → C'));
   // 한 칸 안의 `=` 이웃 쌍과 위쪽 토글 칸
   assert.equal(by('A:p=q', 'direct', 'p').statement, '‘A’ 다음 자리의 ‘p’에 대응하는 것은?');
   assert.ok(questionsFor('A:p-q=r').some(q => q.statement === '‘A’ → ‘p’ 다음 자리의 ‘q’에 대응하는 것은?'));
@@ -7225,9 +7219,8 @@ test('ability-convert cards are sentences too: the given values are in the sente
   assert.deepEqual(statements('[a] b ; [c] d'), [['‘a’에서 ‘b’의 c은(는)?', 'd']]);
   assert.deepEqual(statements('[a] b < [c] d'), [['‘c’에서 ‘d’의 a은(는)?', 'b']]);
   const chain = statements('[a] b ; [c] d ; [u] e').map(item => item[0]);
-  assert.ok(chain.includes('‘a’에서 ‘b’, ‘u’에서 ‘e’ 사이의 c은(는)?'), 'a row with the middle hidden');
-  assert.ok(chain.includes('‘a’에서 ‘b’, ‘c’에서 ‘d’ 다음의 u은(는)?'), 'a row with the last hidden');
-  assert.ok(chain.includes('‘a’에서 ‘b’의 c · u을(를) 차례로 쓰시오.'), 'two answers in order');
+  // 18일 fix-147: 줄 전체를 보여 주던 변주(양 끝을 다 보여 주는 것)는 앞 칸만으로 답이 정해져 내지 않는다
+  assert.deepEqual(chain, ['‘a’에서 ‘b’의 c은(는)?', '‘c’에서 ‘d’의 u은(는)?', '‘a’에서 ‘b’의 c · u을(를) 차례로 쓰시오.']);
   // 칸 안을 가린 변주
   const cell = statements('[과정] 풀이 ; [단계] 읽기-정리-확인').map(item => item[0]);
   assert.ok(cell.includes('‘과정’에서 ‘풀이’의 단계 ‘( ㉠ )-( ㉡ )-확인’에서 ㉠, ㉡에 알맞은 것을 차례로 쓰시오.'));
@@ -7243,18 +7236,17 @@ test('ability-convert cards are sentences too: the given values are in the sente
 
 test('an = cell of three words blanks every word and every pair as a prose question worded as a relation that holds', () => {
   const blanks = questionsFor('A:p=q=r').filter(q => q.kind === 'blank' && q.statement);
+  // 18일 fix-147: 한 낱말만 가린 변주는 이웃 낱말만으로 답이 정해져(‘q’에 대응하는 것은?) 따로 내지 않는다. 두 낱말을 가린 것만 남는다
   assert.deepEqual(blanks.map(q => q.statement), [
-    '‘A’에서는 ‘( ㉠ ) = q = r’ 관계가 성립한다. ㉠에 알맞은 것은?',
-    '‘A’에서는 ‘p = ( ㉠ ) = r’ 관계가 성립한다. ㉠에 알맞은 것은?',
-    '‘A’에서는 ‘p = q = ( ㉠ )’ 관계가 성립한다. ㉠에 알맞은 것은?',
     '‘A’에서는 ‘( ㉠ ) = ( ㉡ ) = r’ 관계가 성립한다. ㉠, ㉡에 알맞은 것을 차례로 쓰시오.',
     '‘A’에서는 ‘( ㉠ ) = q = ( ㉡ )’ 관계가 성립한다. ㉠, ㉡에 알맞은 것을 차례로 쓰시오.',
     '‘A’에서는 ‘p = ( ㉠ ) = ( ㉡ )’ 관계가 성립한다. ㉠, ㉡에 알맞은 것을 차례로 쓰시오.'
   ]);
-  assert.deepEqual(blanks.map(q => q.answer), ['p', 'q', 'r', '㉠ p   ㉡ q', '㉠ p   ㉡ r', '㉠ q   ㉡ r']);
+  assert.deepEqual(blanks.map(q => q.answer), ['㉠ p   ㉡ q', '㉠ p   ㉡ r', '㉠ q   ㉡ r']);
   // `=`가 `-`보다 단단히 묶인다: `q = r`은 순서 안의 한 덩어리
   const mixed = questionsFor('A:p-q=r');
-  assert.ok(mixed.some(q => q.statement === '‘A’에서는 ‘( ㉠ ) → (q = r)’ 순서로 이어진다. ㉠에 알맞은 것은?'));
+  // 18일 fix-147: 같은 것을 더 적은 단서로 묻는 "바로 앞에 오는 것은?"이 있어 빈칸 변주는 내지 않는다
+  assert.ok(mixed.some(q => q.kind === 'order-previous' && q.prompt === 'q = r' && q.answer === 'p'));
   assert.ok(mixed.some(q => q.kind === 'direct' && q.prompt === 'q' && q.answer === 'r' && q.conditions.join('|') === 'A 이후|p 이후'));
 });
 
@@ -8130,15 +8122,14 @@ test('a logic chunk is one cell: A:B,C is the cells A and "B,C", and its inside 
     [['A', 'B', 'a>b'], ['A', 'C', 'a>c']]);
   // 한 줄 전체의 빈칸: 집합은 가리지 않고 값만 가린다. 두 칸만 남는 것은 단위 문제와 같아서 내지 않는다.
   const rows = questionsFor('[a] b ; [c] d ; [e] f').filter(q => q.convert?.variation === 'row');
-  assert.deepEqual(rows.map(q => q.prompt).sort(), [`b → ${MASK} → ${MASK}`, `b → ${MASK} → f`, `b → d → ${MASK}`].sort());
-  const middle = rows.find(q => q.prompt === `b → ${MASK} → f`);
-  assert.deepEqual([middle.convert.given, middle.convert.required, middle.answer], [[0, 2], [1], 'd']);
-  assert.deepEqual(middle.convert.steps.map(step => step.set), ['a', 'c', 'e']);
+  // 18일 fix-147: 한 칸만 가린 변주는 앞 칸만으로 답이 정해져 단위 문제가 이미 묻는다. 두 칸을 가린 것만 남는다
+  assert.deepEqual(rows.map(q => q.prompt), [`b → ${MASK} → ${MASK}`]);
+  assert.deepEqual([rows[0].convert.given, rows[0].convert.required, rows[0].answer], [[0], [1, 2], 'd → f']);
+  assert.deepEqual(rows[0].convert.steps.map(step => step.set), ['a', 'c', 'e']);
   assert.ok(!questionsFor('[a] b ; [c] d ; [e] f').some(q => ['blank', 'reconstruct'].includes(q.kind)), 'no raw [ ] text is blanked any more');
   // 쉬울수록 가린 칸이 적고, 칸을 더 가릴수록 어렵다
-  const easyRow = rows.find(q => q.prompt === `b → d → ${MASK}`);
-  const hardRow = rows.find(q => q.prompt === `b → ${MASK} → ${MASK}`);
-  assert.ok(easyRow.difficulty < hardRow.difficulty);
+  const cellRows = questionsFor('[과정] 풀이 ; [단계] 읽기-정리-확인').filter(q => q.convert?.variation);
+  assert.ok(cellRows.length > 0 && cellRows.every(q => (q.convert.required ?? []).length >= 1), 'masked variations still exist inside a cell');
 });
 
 test('@ points at the cell just before : ; < = (or the toggle title): bare @ is its value, [@] is its sets', () => {
@@ -8345,21 +8336,20 @@ test('a logic cell makes questions that blank every detail cell at least once, w
   const blanked = memo => new Set(cellBlanks(memo).flatMap(q => q.answer.split('   ').map(part => part.replace(/^㉠ |^㉡ /, ''))));
   // A; p-d-s: p와 d는 줄글 빈칸으로, 끝 항목 s는 "남은 조건"(앞 항목을 충족하면 남은 것)이 이미 묻는다 → 세 칸 모두 한 번씩, 빈칸 둘인 문제도 있다
   const sequence = questionsFor('A; p-d-s');
+  // 18일 fix-147: 한 칸만 가린 빈칸은 이웃 칸만으로 답이 정해져(순서 문제가 이미 묻는다) 빼고, 두 칸을 가린 것만 남는다
   assert.deepEqual([...blanked('A; p-d-s')].sort(), ['d', 'p', 's']);
-  const answers = new Set(sequence.filter(q => q.kind === 'remaining').map(q => q.answer));
-  assert.ok(answers.has('s') && answers.has('d → s'), 'the trailing ones are asked by the remaining-conditions questions');
-  assert.deepEqual(cellBlanks('A; p-d-s').map(q => q.answer), ['p', 'd', '㉠ p   ㉡ d', '㉠ p   ㉡ s']);
+  // 18일 fix-147: 순서 칸의 "남은 조건"은 앞 칸을 다 보여 줘야 해서, 바로 앞 칸만 보여 주는 순서 문제가 대신 묻는다
+  const answers = new Set(sequence.filter(q => ['order-next', 'order-reconstruct', 'far'].includes(q.kind)).map(q => q.answer));
+  assert.ok(answers.has('s') && answers.has('d → s'), 'the trailing ones are asked by the order questions');
+  assert.deepEqual(cellBlanks('A; p-d-s').map(q => q.answer), ['㉠ p   ㉡ d', '㉠ p   ㉡ s']);
   // 줄글 문장(문제집처럼): 값은 따옴표로 묶고 빈칸은 ㉠ ㉡ 번호
   assert.deepEqual(cellBlanks('A; p-d-s').map(q => q.statement), [
-    '‘A’에서는 ‘( ㉠ ) → d → s’ 순서로 이어진다. ㉠에 알맞은 것은?',
-    '‘A’에서는 ‘p → ( ㉠ ) → s’ 순서로 이어진다. ㉠에 알맞은 것은?',
     '‘A’에서는 ‘( ㉠ ) → ( ㉡ ) → s’ 순서로 이어진다. ㉠, ㉡에 알맞은 것을 차례로 쓰시오.',
     '‘A’에서는 ‘( ㉠ ) → d → ( ㉡ )’ 순서로 이어진다. ㉠, ㉡에 알맞은 것을 차례로 쓰시오.'
   ]);
-  // 자유도가 커질수록 어렵다: 빈칸 하나 < 빈칸 둘 < 건너뛴 빈칸 둘
-  const [one, , two, skip] = cellBlanks('A; p-d-s');
-  assert.ok(one.difficulty < two.difficulty && two.difficulty < skip.difficulty);
-  assert.ok(one.level <= two.level && two.level <= skip.level && one.level < skip.level);
+  // 자유도가 커질수록 어렵다: 빈칸 둘 < 건너뛴 빈칸 둘
+  const [two, skip] = cellBlanks('A; p-d-s');
+  assert.ok(two.difficulty < skip.difficulty && two.level <= skip.level);
   // `;`는 앞으로만, `<`는 거꾸로만, `:`는 양쪽
   assert.ok(cellBlanks('A; p-d-s').every(q => q.direction === 'forward'));
   assert.ok(cellBlanks('p-d-s < A').every(q => q.direction === 'reverse') && cellBlanks('p-d-s < A').length > 0);
@@ -8378,7 +8368,7 @@ test('a logic cell makes questions that blank every detail cell at least once, w
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { ReviewQuestionContent } = loadSource('components/ReviewQuestionContent.tsx');
-  const card = cellBlanks('A; p-d-s')[2];
+  const card = cellBlanks('A; p-d-s')[0];
   const closed = renderToStaticMarkup(React.createElement(ReviewQuestionContent, { memo: 'A; p-d-s', question: card, criterion: null, revealed: false }));
   assert.ok(closed.includes('data-question-statement="true"') && plainText(closed).includes('‘A’에서는 ‘( ㉠ ) → ( ㉡ ) → s’ 순서로 이어진다.'));
   assert.ok(!closed.includes('㉠ p'));
