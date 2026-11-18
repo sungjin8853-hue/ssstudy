@@ -19,9 +19,14 @@ export const countCellBlanks = (pieces: readonly CellPiece[]) => pieces.filter(p
 
 /** 문장에 쓰는 글: 논리어 AND·OR는 풀어 쓰고(`a, b` · `a 또는 b`), 순서(→)와 같음(=)은 그대로 둔다 */
 export const readableLabel = (label: string): string => {
-  // `[과일]`처럼 집합 이름만 쓴 토글 제목은 괄호 없이 읽는다(4일 점검: "‘[과일]’에서"로 괄호가 보이던 것)
-  const lone = /^\[([^\[\]]+)\]$/.exec(label.trim());
-  return (lone ? lone[1].trim() : label).replace(/ AND /g, ', ').replace(/ OR /g, ' 또는 ');
+  // `[과일]`처럼 집합 이름만 쓴 칸은 괄호 없이 읽는다(4일 점검: "‘[과일]’에서"로 괄호가 보이던 것).
+  // 18일: 제목 전체가 집합 이름일 때만 벗기던 것을 연결어로 나눈 칸마다 벗긴다 — 관계 제목이 조건으로 쓰일 때 괄호가 그대로 보였다
+  // (`[받침의 발음];;뒤 형식형태소` → `받침의 발음;;뒤 형식형태소`: 표준 발음법 노트에서 321문제 중 196문제).
+  // 값을 같이 쓴 칸(`[A] x`)은 그대로 둔다 — 괄호를 떼면 `A x`가 한 이름처럼 읽힌다
+  return label.trim().split(/([:;<])/).map(piece => {
+    const lone = /^\s*\[([^\[\]]+)\]\s*$/.exec(piece);
+    return lone ? lone[1].trim() : piece;
+  }).join('').replace(/ AND /g, ', ').replace(/ OR /g, ' 또는 ');
 };
 
 /** 속성 이름이 있으면 값 앞에 붙인다: `정의 ‘p’` (이름이 없으면 값만) */
