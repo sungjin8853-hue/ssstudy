@@ -1550,8 +1550,31 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const parsed = parseExpression(source, node.id, index + 1, close, inheritedByNode.get(node.id) ?? new Map(), typeof column === 'number' ? column : 0);
       // 17일 "=를 경우에 따라 또는이나 대응으로": 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"(또는)다.
       // 대응이 아니라서 "‘두 모음 사이에’에 대응하는 것은? → 울림소리 받침 뒤"처럼 논리적으로 맞힐 수 없는 문제를 내지 않는다.
-      // 칸 전체가 `=`로 이어진 것(`맴 + 이 = 매미`, `(A=B) ; C`)은 전처럼 대응이다
-      const inner: Expression = parsed.type === 'equal' ? { type: 'or', items: parsed.items } : parsed;
+      // 칸 전체가 `=`로 이어진 것(`맴 + 이 = 매미`, `(A=B) ; C`)은 전처럼 대응이다.
+      // 18일: "글 속에 낀"은 묶음에 글자가 바로 붙어 있는 것이다(`(A=B) 는` · `받침 (ㄱ=ㄷ)뒤`). 옆이 기호(`,` · `(` · `;`)면 그 자리를 혼자 쓴 묶음이라 대응이다
+      // (`((석류='[성뉴]'),(협력='[혐녁]');…`처럼 닫는 괄호가 빠진 줄에서 `,` 뒤의 묶음까지 또는으로 읽어 대응 문제가 사라졌다)
+      const lead = source.slice(start, index).trimEnd();
+      const tail = source.slice(close + 1, end).trimStart();
+      const wordChar = (char: string | undefined) => char !== undefined && char !== '' && !/[\s,\-=:;<>()[\]'"|/]/.test(char);
+      const embedded = wordChar(lead.slice(-1)) || wordChar(tail.slice(0, 1));
+      const inner: Expression = parsed.type === 'equal' && embedded ? { type: 'or', items: parsed.items } : parsed;
+      // 18일 "A만 보고 B를 맞추는 것이 아닌 A는을 보고 A자리에 B가 올수 있음을 맞추는 문제여야해":
+      // 그 자리에 놓인 경우 하나를 넣은 칸(`A 는`)을 보여 주고, 그 자리에 또 올 수 있는 경우를 묻는다.
+      // A와 B를 대응으로 묻지 않는다 — 괄호 안 값은 홀로 쓰임의 뜻이 아니라 그 `;`번째에서 칸 글과 함께 쓰인 판정이다
+      if (parsed.type === 'equal' && embedded && inner.type === 'or' && inner.items.length >= 2) {
+        const [first, ...others] = inner.items;
+        const slot = expressionLabel(first);
+        // 칸은 그 자리에 경우 하나를 넣어 보인다: `(A=B) 는` → `A 는`(묶음 자리에 첫 경우를 넣는다)
+        const filled = `${source.slice(start, index)}${slot}${source.slice(close + 1, end)}`.replace(/\s+/g, ' ').trim();
+        const answer = others.map(expressionLabel).join(' OR ');
+        const conditions = [...ancestorConditions(node), ...neighbor];
+        add({ prompt: filled, answer, direction: 'forward', kind: 'remaining', form: 'together',
+          statement: `‘${filled}’에서 ‘${slot}’ 자리에 올 수 있는 ${others.length > 1 ? '것을 모두 쓰시오.' : '다른 것은?'}`,
+          solution: others.length > 1 ? others.map(expressionLabel).join(', ') : undefined,
+          ...rank(0, 0), conditions: conditions.map(item => item.text), conditionSpans: conditions.map(item => item.spans),
+          answerSpans: others.flatMap(spans), promptSpans: [expression.span],
+          columns: { prompt: [column], answer: [column], conditions: conditions.map(item => item.columns) } });
+      }
       if (inner.type !== 'text') splitMarkedCells(inner).forEach(innerPart => {
         const { expression: scopedInner, scope: innerScope } = scopeOf(innerPart, sets);
         const scoped = labelLoneSets(scopedInner, sets);

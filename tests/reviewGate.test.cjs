@@ -12606,8 +12606,19 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
 test('17일 fix-144 · 18일 fix-145: = inside a group embedded in text is 또는 (no 대응 questions), quotes no longer hide a group, a closing quote may be followed by Hangul, and , then = keeps asking the place first', () => {
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const shape = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}>${q.answer}`);
-  // 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"라서 대응 문제를 내지 않는다(논리적으로 맞힐 수 없다)
-  assert.deepEqual(shape('앞 (가 = 나 = 다) 뒤 ; 결과'), ['direct|앞 (가 = 나 = 다) 뒤>결과']);
+  // 칸 글 속에 낀 묶음의 `=`는 "여러 경우 중 하나"라서 대응 문제를 내지 않는다(논리적으로 맞힐 수 없다).
+  // 18일 fix-150: 그 자리에 경우 하나를 넣은 칸(`앞 가 뒤`)을 보여 주고, 그 자리에 또 올 수 있는 경우를 묻는다
+  assert.deepEqual(shape('앞 (가 = 나 = 다) 뒤 ; 결과'), ['remaining|앞 가 뒤>나 OR 다', 'direct|앞 (가 = 나 = 다) 뒤>결과']);
+  const slot = buildReviewQuestions('앞 (가 = 나 = 다) 뒤 ; 결과').questions.find(q => q.kind === 'remaining');
+  assert.equal(slot.statement, '‘앞 가 뒤’에서 ‘가’ 자리에 올 수 있는 것을 모두 쓰시오.');
+  assert.equal(slot.solution, '나, 다');
+  const two = buildReviewQuestions('(A=B) 는 ; N이다').questions.find(q => q.kind === 'remaining');
+  assert.equal(two.statement, '‘A 는’에서 ‘A’ 자리에 올 수 있는 다른 것은?');
+  assert.equal(two.answer, 'B');
+  // 18일: "글 속에 낀"은 글자가 바로 붙은 것이다. 옆이 기호면 그 자리를 혼자 쓴 묶음이라 대응이다(닫는 괄호가 빠진 줄에서도)
+  assert.deepEqual(shape('받침 (ㄱ=ㄷ)뒤 ; 된소리'), ['remaining|받침 ㄱ뒤>ㄷ', 'direct|받침 (ㄱ=ㄷ)뒤>된소리']);
+  assert.ok(shape("X ; ((석류='[성뉴]'),(협력='[혐녁]');ㄱㅂ뒤에 ㄹ").some(text => text === 'direct|석류>[성뉴]'));
+  assert.ok(!shape("X ; ((석류='[성뉴]'),(협력='[혐녁]');ㄱㅂ뒤에 ㄹ").some(text => text.includes('자리에')));
   // 칸 전체가 `=`로 이어진 것은 전처럼 대응이다: A;B=C는 A·B를 보여 주고 C, A·C를 보여 주고 B
   assert.deepEqual(shape('A ; B=C').filter(text => /B>C|C>B/.test(text)), ['direct|B>C', 'reverse|C>B']);
   assert.deepEqual(shape('(가=나) ; 결과').filter(text => /가>나|나>가/.test(text)), ['direct|가>나', 'reverse|나>가']);
