@@ -7713,18 +7713,19 @@ test('a relation toggle title gives its lines hidden classification sets: > [A] 
   assert.deepEqual(lines(':::toggle [A] B: [C] D\n.[p] h:j\n:::end'), []);
   assert.deepEqual(questionsFor(':::toggle [A] B: [C] D\n.[p] h:j\n:::end').filter(q => q.kind === 'convert' && !['B', 'D'].includes(q.prompt)).map(q => [q.prompt, q.answer, q.convert.steps.map(step => step.set).join('>')]), [['.[p] h', 'j', 'A.B>C.D'], ['j', '.[p] h', 'C.D>A.B']]);
   assert.deepEqual(lines(':::toggle [A] B: [C] D\n[p] h:[q] j\n:::end'), [['h', 'j', 'p>q'], ['j', 'h', 'q>p']]);
-  // 안쪽 토글 제목에 직접 쓴 [ ]도 그 칸의 바깥 분류를 버린다. [ ]가 없는 칸은 바깥 것을 이어받는다
-  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: [G] H\nh:j\n:::end\n:::end'), [['h', 'j', 'E.F>G.H'], ['j', 'h', 'G.H>E.F']]);
-  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: H\nh:j\n:::end\n:::end'), [['h', 'j', 'E.F>C.D'], ['j', 'h', 'C.D>E.F']]);
+  // 18일 "fix-120 이전처럼 하자": 안쪽 토글 제목도 바깥 제목이 그 칸 번호에 준 분류 위에 쌓인다(버리지 않는다).
+  // 제목 칸에 `[ ]`가 없어도(H) 그 칸의 값으로 쌓인다 — 줄에 직접 쓴 `[ ]`(아래 [p] · [q])만 그 칸의 분류를 대신한다
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: [G] H\nh:j\n:::end\n:::end'), [['h', 'j', 'A.B.E.F>C.D.G.H'], ['j', 'h', 'C.D.G.H>A.B.E.F']]);
+  assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle [E] F: H\nh:j\n:::end\n:::end'), [['h', 'j', 'A.B.E.F>C.D.H'], ['j', 'h', 'C.D.H>A.B.E.F']]);
   // 안쪽 토글 제목에 [ ]가 없으면 바깥 분류만 이어받는다
   assert.deepEqual(lines(':::toggle [A] B: [C] D\n:::toggle E:F\nh:j\n:::end\n:::end'), [['h', 'j', 'A.B>C.D'], ['j', 'h', 'C.D>A.B']]);
   // [ ]가 하나도 없는 제목(A:C)이나 끝이 열린 제목(A:)은 분류 집합을 만들지 않는다: 보통 관계 문제 그대로
   assert.deepEqual(lines(':::toggle A:C\nh:j\n:::end'), []);
   assert.ok(questionsFor(':::toggle A:C\nh:j\n:::end').some(q => q.kind === 'direct' && q.prompt === 'h' && q.answer === 'j'));
   assert.deepEqual(lines(':::toggle [A] B:\nh:j\n:::end'), []);
-  // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨": 둘째 칸 D에 [ ]가 없으면 그 칸은 이어받지 않는다(첫 칸 A.B만): 능력 변환이 아닌 보통 관계
-  assert.deepEqual(lines(':::toggle [A] B: D\nh:j\n:::end'), []);
-  assert.ok(questionsFor(':::toggle [A] B: D\nh:j\n:::end').some(q => q.kind === 'direct' && q.prompt === 'h' && q.answer === 'j'));
+  // 18일 "fix-120 이전처럼 하자": 둘째 칸 D에 [ ]가 없어도 그 칸의 값으로 이어받는다(A.B > D).
+  // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨"은 이 경우를 뺀 말이었다(`[A:B]` 기준이 칸 번호대로 준 자리까지 같이 빠졌다)
+  assert.deepEqual(lines(':::toggle [A] B: D\nh:j\n:::end'), [['h', 'j', 'A.B>D'], ['j', 'h', 'D>A.B']]);
   // 줄에 칸이 더 많아도 칸 번호가 맞는 곳만 이어받고, 이어받을 게 없는 칸에 [ ]가 없으면 문제로 만들지 않는다
   const three = questionsFor(':::toggle [A] B: [C] D\nh:j:k\n:::end').filter(q => q.kind === 'convert' && q.prompt === 'j' && q.answer === 'k');
   assert.deepEqual(three, [], 'the third field has no set');

@@ -1131,8 +1131,6 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
    * 끝이 열린 제목(`A:`)과 `[ ]`가 하나도 없는 제목(`A:C`)은 분류 집합을 만들지 않는다.
    */
   const titleParts = new Map<string, string[][] | null>();
-  /** 토글 제목의 칸마다 `[ ]`를 직접 썼는가(분류기준 이름만 붙은 칸은 아니다) */
-  const titleWritten = new Map<string, boolean[]>();
   const titlePartsOf = (parent: QuestionNoteNode): string[][] | null => {
     if (frameNodes.has(parent.id)) return null;
     if (titleParts.has(parent.id)) return titleParts.get(parent.id)!;
@@ -1142,15 +1140,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       if (parsed.type === 'relation') {
         const reads = parsed.fields.map(field => (nonempty(field) ? readCell(head(field)) : null));
         if (reads.filter(Boolean).length >= 2 && reads.some(read => read && read.sets.length)) {
-          // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨": 둘째 칸부터는 제목에 `[ ]`를 직접 쓴 칸만 아래 줄의 그 칸 번호로 이어진다
-          // (분류기준 이름만 붙은 칸은 직접 쓴 것이 아니다). 첫 칸은 토글 아래 줄들이 들어 있는 곳이라 그대로 이어진다.
-          result = reads.map((read, position) => {
-            if (!read) return [];
-            const spelled = leavesOf(parsed.fields[position])[0]?.spelled ?? [];
-            if (position > 0 && !read.sets.some(set => !spelled.includes(set))) return [];
-            return [...read.sets, read.cell];
-          });
-          titleWritten.set(parent.id, reads.map((read, position) => !!read && read.sets.some(set => !(leavesOf(parsed.fields[position])[0]?.spelled ?? []).includes(set))));
+          // 18일 "fix-120 이전처럼 하자": 제목의 칸은 모두 아래 줄의 그 칸 번호로 이어진다.
+          // 10일 "연결어 다음 번째 부분에 []가 없으면 적용 안 됨"으로 둘째 칸부터 `[ ]`를 직접 쓴 칸만 이어 주게 좁혔더니,
+          // `[A:B]` 기준이 칸 번호대로 준 자리까지 같이 빠졌다(그 말은 이 경우를 뺀 말이었다)
+          result = reads.map(read => (read ? [...read.sets, read.cell] : []));
         }
       }
     }
@@ -1161,10 +1154,7 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
     const chain: QuestionNoteNode[] = [];
     for (let parentId = node.parentId; parentId; parentId = byId.get(parentId)!.parentId) chain.unshift(byId.get(parentId)!);
     const merged: string[][] = [];
-    // 10일: 안쪽 토글 제목도 "밑"이라, 칸 앞에 `[ ]`를 직접 쓴 칸은 바깥 제목이 그 칸 번호에 이어 준 집합을 버리고 새로 시작한다
-    chain.forEach(parent => (titlePartsOf(parent) ?? []).forEach((parts, position) => {
-      merged[position] = titleWritten.get(parent.id)?.[position] ? [...parts] : [...(merged[position] ?? []), ...parts];
-    }));
+    chain.forEach(parent => (titlePartsOf(parent) ?? []).forEach((parts, position) => { merged[position] = [...(merged[position] ?? []), ...parts]; }));
     return merged;
   };
   const implicitByExpression = new Map<Expression, string[][]>();
