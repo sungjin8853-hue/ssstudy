@@ -12566,12 +12566,13 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   // ( ) 안에는 연결어 · // · [ ]도 쓸 수 있다(값의 일부)
   assert.equal(expandBraceTemplates('{(A;B)-(C<D)}야 ; {(가:나)-다} 안녕'), '(A;B)야 ; (가:나) 안녕\n(C<D)야 ; 다 안녕');
   assert.equal(expandBraceTemplates('Z : {(가:나)-다} 안녕'), 'Z : (가:나) 안녕\nZ : 다 안녕');
-  assert.equal(expandBraceTemplates('{(A:B)=C} : {(1;2), 3}'), '(A:B) : (1;2)\nC : 3');
+  // 19일 fix-152: `=`로 이어 쓴 쪽은 서로 같은 것이라, 한 칸짜리 쪽이 있는 차례에는 서로 온다
+  assert.equal(expandBraceTemplates('{(A:B)=C} : {(1;2), 3}'), '(A:B) : (1;2)\nC : 3\n(A:B) : 3\nC : (1;2)');
   assert.equal(expandBraceTemplates('a:{원인:조건/설명,[분류]=관점-세부} b,c:d'), 'a:{원인:조건/설명,[분류]=관점-세부} b,c:d', 'labels stay');
   // ( )가 있으면 가장 바깥 논리로만 나눈다(괄호 안은 한 값)
-  assert.equal(expandBraceTemplates('{(A-B)-C}야 ; {(가,나)=다} 안녕'), '(A-B)야 ; (가,나) 안녕\nC야 ; 다 안녕');
-  // = , 도 값 목록
-  assert.equal(expandBraceTemplates('{A=B} : {1,2}'), 'A : 1\nB : 2');
+  assert.equal(expandBraceTemplates('{(A-B)-C}야 ; {(가,나)=다} 안녕'), '(A-B)야 ; (가,나) 안녕\nC야 ; 다 안녕\nC야 ; (가,나) 안녕\n(A-B)야 ; 다 안녕');
+  // = , 도 값 목록. 19일 fix-152: `=` 쪽이 둘 다 한 칸이면 서로의 차례에도 온다
+  assert.equal(expandBraceTemplates('{A=B} : {1,2}'), 'A : 1\nB : 2\nA : 2\nB : 1');
   // 노트의 집합(셀 밑 항목)을 가져온다, 없으면 그 글 그대로
   assert.deepEqual(qs(':::toggle [과일]\n사과\n배\n:::end\n{과일} : {[색] 빨강, 노랑}'), ['사과>빨강', '배>노랑']);
   assert.deepEqual(qs('{X} : {1-2}'), ['X>1', 'X>2']);
@@ -12603,22 +12604,26 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   assert.deepEqual(defs.lines.map(line => line.lineIndex), [1]);
 });
 
-test('19일: `=`로 이어 쓴 틀 쪽은 서로 대응한다(여러 칸으로 된 쪽은 상대 차례에도 오고, `==`는 모든 차례와 짝짓는다). 중첩 `{ }`는 중첩 횟수가 같은 것끼리 짝짓는다', () => {
+test('19일: `=`로 이어 쓴 틀 쪽은 서로 같은 것이라 한 칸짜리 쪽의 차례에 서로 온다(`==`는 뒤에 같은 쪽을 다시 쓴 것). 중첩 `{ }`는 중첩 횟수가 같은 것끼리 짝짓는다', () => {
   const { expandBraceTemplates, isTemplateLine } = loadSource('utils/noteTemplate.ts');
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const lines = line => expandBraceTemplates(line).split('\n');
   // 사용자 예: {a,b=c};{q-w-e} 는 a;q b;w c;e a,b;e
   assert.deepEqual(lines('{a,b=c};{q-w-e}'), ['a;q', 'b;w', 'c;e', 'a,b;e']);
   // 사용자 예: {(a,b)==c};{q-w-e} 는 (a,b);q (a,b);w (a,b);e c;q c;w c;e
-  assert.deepEqual(lines('{(a,b)==c};{q-w-e}'), ['(a,b);q', '(a,b);w', '(a,b);e', 'c;q', 'c;w', 'c;e']);
+  // `==`는 `(a,b)=(a,b)=c`라 한 칸짜리 쪽이 셋이고, 서로의 차례에 모두 온다
+  assert.deepEqual(lines('{(a,b)==c};{q-w-e}').sort(), ['(a,b);e', '(a,b);q', '(a,b);w', 'c;e', 'c;q', 'c;w']);
+  // a===v면 a=a=a=v다
+  assert.deepEqual(lines('{a===v};{q-w-e-r}').sort(), ['a;e', 'a;q', 'a;r', 'a;w', 'v;e', 'v;q', 'v;r', 'v;w']);
   // 사용자 예: {s-a};d;f 면 s;d;f a;d;f
   assert.deepEqual(lines('{s-a};d;f'), ['s;d;f', 'a;d;f']);
   // 사용자 예: {{a-b}-{n-f}};{h-i} 는 {a-n} {b-f}가 되며 한번 더 작동하여 a;h n;i b;h f;i
   assert.deepEqual(lines('{{a-b}-{n-f}};{h-i}'), ['a;h', 'n;i', 'b;h', 'f;i']);
   assert.ok(isTemplateLine('{{a-b}-{n-f}};{h-i}'));
-  // 양쪽이 다 여러 칸이면 양쪽 다 상대 차례에도 온다. `=` 하나로 한 칸씩 쓴 것은 전처럼 차례끼리만 짝짓는다
-  assert.deepEqual(lines('{a,b=c,d};{q-w-e-r}'), ['a;q', 'b;w', 'c;e', 'd;r', 'a,b;e', 'c,d;q']);
-  assert.deepEqual(lines('{a=b};{q-w}'), ['a;q', 'b;w']);
+  // 한 칸짜리 쪽이 없으면(양쪽이 다 여러 칸) 차례끼리만 짝짓는다 — 여러 칸으로 된 쪽은 한 칸 자리에 들어갈 수 없다
+  assert.deepEqual(lines('{a,b=c,d};{q-w-e-r}'), ['a;q', 'b;w', 'c;e', 'd;r']);
+  // 양쪽이 한 칸이면 서로의 차례에 온다
+  assert.deepEqual(lines('{a=b};{q-w}').sort(), ['a;q', 'a;w', 'b;q', 'b;w']);
   // 중첩 안에 틀이 아닌 값이 섞이면 그 값은 차례마다 그대로 쓴다. 빈 자리(`--`)와 이름표는 전과 같다
   assert.deepEqual(lines('{{a-b}-x};{h-i}'), ['a;h', 'x;i', 'b;h', 'x;i']);
   assert.deepEqual(lines('{A-B--N}야;{D-S-f-h} 가져가'), ['A야;D 가져가', 'B야;S 가져가', 'B야;f 가져가', 'N야;h 가져가']);

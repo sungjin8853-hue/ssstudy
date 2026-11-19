@@ -164,32 +164,41 @@ const outsideGroups = (text: string): string => {
 };
 
 type Alias = { at: number; text: string };
-type Part = { kind: 'list'; items: string[]; name?: string; cross?: boolean; aliases?: Alias[] } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
+type Part = { kind: 'list'; items: string[]; name?: string; aliases?: Alias[] } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
 
 /**
- * 19일 `{a,b=c}` · `{(a,b)==c}`: `=`로 이어 쓴 쪽들은 서로 대응하는 쪽이다.
- *  - `=` 하나: 차례대로 짝짓는 것은 그대로고(`a;q` `b;w` `c;e`), 여러 칸으로 된 쪽(`a,b`)은 그 쪽 전체가 대응하는 쪽의 차례에도 온다(`a,b;e`).
- *  - `==`: 쪽마다 상대 틀의 모든 차례와 짝짓는다(`(a,b);q` `(a,b);w` `(a,b);e` · `c;q` `c;w` `c;e`).
+ * 19일 "=는 모든 차례와 짝짓는 거야 ==처럼 두번 쓴거는 뒤에 같은거라는 거, 왼쪽의 것이 오른쪽의 것과 같다":
+ * `=`로 이어 쓴 쪽들은 서로 같은 것이라, 한 칸짜리 쪽이 있는 차례에는 다른 쪽들도 (그 쪽 전체로) 올 수 있다.
+ *  - `{a,b=c};{q-w-e}` → `a;q` `b;w` `c;e`(차례대로) + `a,b;e`(한 칸짜리 쪽 `c`의 차례에 왼쪽 쪽 전체가 온다).
+ *    `c`는 여러 칸으로 된 쪽(`a,b`)의 차례에는 오지 않는다 — 한 칸에 들어갈 자리가 아니다.
+ *  - `{(a,b)==c}`는 `(a,b)=(a,b)=c`다(`==`의 빈 자리는 바로 앞 쪽을 다시 쓴 것). 세 쪽이 다 한 칸이라 서로의 차례에 모두 와서
+ *    `(a,b);q` `(a,b);w` `(a,b);e` `c;q` `c;w` `c;e`가 된다. `a===v`면 `a=a=a=v`다.
+ *  - `( )` 안은 `{ }`의 틀 논리가 닿지 않는 그 안의 실제 논리다(`(a,b)`는 한 칸이고, 그 안의 `,`는 "그리고").
  */
-const readSides = (inner: string): { items: string[]; cross?: boolean; aliases?: Alias[] } => {
-  const crossCuts = topCuts(inner, (character, index) => character === '=' && inner[index + 1] === '=');
-  if (crossCuts.length) {
-    const sides: string[] = [];
-    let from = 0;
-    crossCuts.forEach(at => { sides.push(inner.slice(from, at)); from = at + 2; });
-    sides.push(inner.slice(from));
-    const items = sides.flatMap(side => splitItems(side));
-    return items.length > 1 ? { items, cross: true } : { items };
-  }
-  const equalCuts = topCuts(inner, (character, index) => character === '=' && inner[index - 1] !== '=' && inner[index + 1] !== '=');
-  const items = splitItems(inner);
-  if (equalCuts.length !== 1) return { items };
-  const sides = [inner.slice(0, equalCuts[0]), inner.slice(equalCuts[0] + 1)];
-  const counts = sides.map(side => splitItems(side).length);
-  const starts = [0, counts[0]];
-  const aliases = sides.flatMap((side, index) => (counts[index] > 1 && counts[1 - index] > 0 && side.trim()
-    ? [{ at: starts[1 - index], text: side.trim() }] : []));
-  return aliases.length && aliases.every(alias => alias.at < items.length) ? { items, aliases } : { items };
+const readSides = (inner: string): { items: string[]; aliases?: Alias[] } => {
+  const { items: written, marks } = splitParts(inner);
+  const items: string[] = [];
+  const origin: number[] = [];
+  written.map(item => item.trim()).forEach((item, index) => {
+    if (item) { items.push(item); origin.push(index); }
+    else if (items.length) { items.push(items[items.length - 1]); origin.push(index); }
+  });
+  // 맨 끝의 빈 자리(`{A-B-}`처럼 쓰는 중)는 값으로 치지 않는다
+  if (written.length && !written[written.length - 1].trim() && items.length) { items.pop(); origin.pop(); }
+  if (items.length < 2) return { items };
+  const sides: { text: string; from: number; count: number }[] = [];
+  items.forEach((item, at) => {
+    const mark = origin[at] > 0 ? marks[origin[at] - 1] : null;
+    if (!sides.length || mark === '=') sides.push({ text: item, from: at, count: 1 });
+    else {
+      const side = sides[sides.length - 1];
+      side.text += `${mark}${item}`;
+      side.count += 1;
+    }
+  });
+  if (sides.length < 2) return { items };
+  const aliases = sides.flatMap(side => sides.filter(other => other !== side && other.count === 1).map(other => ({ at: other.from, text: side.text })));
+  return { items, aliases };
 };
 
 /**
@@ -207,8 +216,8 @@ const readBrace = (inner: string, label = false, templateLine = false): Part => 
   }
   const named = /^\s*\[([^\]]+)\]\s*(.*)$/.exec(inner);
   if (named && named[2].trim()) return { kind: 'list', ...readSides(named[2]), name: named[1].trim() };
-  const { items, cross, aliases } = readSides(inner);
-  if (items.length > 1) return { kind: 'list', items, cross, aliases };
+  const { items, aliases } = readSides(inner);
+  if (items.length > 1) return { kind: 'list', items, aliases };
   const name = (named ? named[1] : inner).trim();
   return name ? { kind: 'ref', name } : { kind: 'keep' };
 };
@@ -253,32 +262,26 @@ export const expandBraceTemplates = (memo: string, resolve?: (name: string) => s
       }
       return null;
     });
-    // `==`로 쓴 틀 칸은 차례끼리 짝짓지 않고 상대 틀의 모든 차례와 짝짓는다
-    const crossed = parts.map(part => (part.kind === 'list' && part.cross ? part.items : null));
-    const lengths = lists.filter((list, index): list is string[] => list !== null && !crossed[index]).map(list => list.length);
-    const count = lengths.length ? Math.min(...lengths) : 1;
+    const lengths = lists.filter((list): list is string[] => list !== null).map(list => list.length);
+    const count = Math.min(...lengths);
     if (!(count > 0)) return [line];
     const definitions = defineSets ? parts.flatMap(part => (part.kind === 'list' && part.name ? part.items.map(item => `[${part.name}] ${item}`) : [])) : [];
-    const write = (at: number, pick: Map<number, string>) => {
+    const write = (at: number, pick?: { index: number; text: string }) => {
       let out = '';
       let from = 0;
       braces.forEach((brace, index) => {
         const list = lists[index];
-        const chosen = pick.get(index) ?? (list && !crossed[index] ? list[at] : undefined);
+        const chosen = pick && pick.index === index ? pick.text : list ? list[at] : undefined;
         out += line.slice(from, brace.start) + (chosen ?? line.slice(brace.start, brace.end));
         from = brace.end;
       });
       return out + line.slice(from);
     };
-    // `==` 틀 칸이 여럿이면 칸마다의 모든 값끼리 조합한다
-    const picks = crossed.reduce<Map<number, string>[]>((rows, items, index) => (items
-      ? rows.flatMap(row => items.map(item => new Map([...row, [index, item]] as [number, string][])))
-      : rows), [new Map<number, string>()]);
-    const rows = picks.flatMap(pick => Array.from({ length: count }, (_, at) => write(at, pick)));
-    // 여러 칸으로 된 쪽(`{a,b=c}`의 `a,b`)은 대응하는 쪽의 차례에도 온다
-    const extra = parts.flatMap((part, index) => (part.kind === 'list' && part.aliases && !crossed[index]
-      ? part.aliases.filter(alias => alias.at < count).flatMap(alias => picks.map(pick => write(alias.at, new Map([...pick, [index, alias.text]] as [number, string][]))))
+    const rows = Array.from({ length: count }, (_, at) => write(at));
+    // `=`로 이어 쓴 쪽은 한 칸짜리 쪽이 있는 차례에도 (그 쪽 전체로) 온다
+    const extra = parts.flatMap((part, index) => (part.kind === 'list' && part.aliases
+      ? part.aliases.filter(alias => alias.at < count).map(alias => write(alias.at, { index, text: alias.text }))
       : []));
-    return [...definitions, ...rows, ...extra];
+    return [...new Set([...definitions, ...rows, ...extra])];
   }).join('\n');
 };
