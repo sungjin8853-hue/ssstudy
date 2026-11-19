@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ListOrder, Subject, StudyLog, TagDefinition } from '../types';
 import { calculateStats, calculateSubjectReviewAverageTimePerPage } from '../utils/math';
 import { getNextReviewIntervalMs, INITIAL_REVIEW_DELAY_MS } from '../utils/review';
-import { ReviewGrowthSettings } from './PageGrowth';
+import { ReviewGrowthSettings, SubjectPlaceSettings } from './PageGrowth';
+import { findSubjectPlace, planSubjectMove, subjectsUnderSubject } from '../utils/subjectMove';
+import type { SubjectMovePlan, SubjectMover, SubjectMoveTarget } from '../utils/subjectMove';
 import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { AlwaysBasicReviewToggle } from './AlwaysBasicReviewToggle';
@@ -45,6 +47,8 @@ interface Props {
   onUpdateSubject?: (updated: Subject) => void;
   onUpdateSubjects?: (updated: Subject[]) => void;
   onDeleteSubject?: (id: string) => void;
+  /** 19일: 복습과목의 위치 변경 · 유형 변환(과목 저장 · 후행과목으로 바뀐 과목 삭제 · 기록 옮기기를 한 번에) */
+  onMoveSubject?: (plan: SubjectMovePlan) => void;
   onUpdateTags?: (tags: TagDefinition[]) => void;
   onAddSubject?: (subject: Subject) => void;
   onDeleteFolder?: (folderId: string) => void;
@@ -73,6 +77,7 @@ export const Analytics: React.FC<Props> = ({
   onUpdateSubject, 
   onUpdateSubjects,
   onDeleteSubject,
+  onMoveSubject,
   onUpdateTags,
   onAddSubject,
   onDeleteFolder,
@@ -210,6 +215,8 @@ export const Analytics: React.FC<Props> = ({
 
   // 단계 연필(✎) 안에서 새 복습과목 만들기: 이름 · 시작/끝 페이지 · 단원 범위 · 단위 이름. 마감일은 그 과목을 따른다(복습과목은 원래 과목의 마감일을 물려받는다).
   const [newReviewForm, setNewReviewForm] = useState<{ name: string; startPage: number; endPage: number; chapterText: string; pageLabel: string } | null>(null);
+  // 19일 "후행과목도 똑같이 수정가능하며": 위치 · 유형을 고치는 단계
+  const [stageMoveId, setStageMoveId] = useState<string | null>(null);
   const createReviewSubjectInline = (owner: Subject) => {
     if (!newReviewForm || !stageEditForm) return;
     const chapterParse = parseChapterText(newReviewForm.chapterText);
@@ -439,6 +446,62 @@ export const Analytics: React.FC<Props> = ({
         getDiffDays(planned.targetDate)
       )
     };
+  };
+
+  // 19일 "위치변경 및 유형 변환": 지금 붙어 있는 과목 · 옮길 수 있는 곳 · 옮기기
+  const movePlaceOf = (subjectId: string) => {
+    const place = findSubjectPlace(subjects, subjectId);
+    const owner = place.kind === 'review' ? subjects.find(item => item.id === place.ownerId) : undefined;
+    return { place, ownerName: owner?.name ?? null };
+  };
+  const movePlacesFor = (subjectId: string) => {
+    const blocked = subjectsUnderSubject(subjects, subjectId);
+    return subjects.filter(item => !blocked.has(item.id)).map(item => ({
+      ownerId: item.id, ownerName: item.name,
+      stages: (item.followUpSubjects || []).map(stage => ({ id: stage.id, name: stage.name }))
+    }));
+  };
+  const moveEndDates = (selfId: string) => subjects.filter(item => item.id !== selfId && item.targetDate)
+    .map(item => ({ id: item.id, name: item.name, date: item.targetDate }));
+  /**
+   * 19일 "끝나는 날짜를 최신순으로 나열하며 해당 때에 전체 하루 평균 공부시간을 제시한다 … 추가하는 해당 과목 시간까지 포함한 시간":
+   * 그 과목을 홀로 선 과목으로 놓고(그 자리에서 떼고) 고른 시작 · 끝 날짜와 한 페이지당 시간으로 한 주 계획을 다시 세워 하루 평균을 낸다.
+   */
+  const moveDailyAverage = (mover: SubjectMover) => (startDate: string, targetDate: string, minutesPerPage: number): number | null => {
+    if (!targetDate || !(minutesPerPage > 0)) return null;
+    const today = activeStudyDate || getLocalDateKey(new Date());
+    const plan = planSubjectMove(subjects, mover, { kind: 'standalone' }, { startDate, targetDate }, today);
+    if (!plan) return null;
+    const changed = new Map(plan.changed.map(subject => [subject.id, subject]));
+    const list = subjects.map(subject => changed.get(subject.id) ?? subject).filter(subject => subject.id !== plan.removedSubjectId);
+    const withAdded = plan.addedSubject ? [...list, plan.addedSubject] : list;
+    const movedId = mover.kind === 'subject' ? mover.id : mover.stageId;
+    // 그날의 하루 평균이므로 한 주 계획도 그날 기준으로 센다(그때 이미 끝나는 과목은 빠진다)
+    const from = startDate ? parseStudyDate(startDate) : new Date();
+    const prepared = withAdded.map(subject => {
+      if (subject.id !== movedId) return subject;
+      const dated = { ...subject, initialAverageTimePerPage: minutesPerPage, planResetDate: startDate || today, targetDate };
+      // 고른 시작 · 끝 날짜 사이로 이 과목의 요일별 양을 다시 나눈다(저장돼 있던 예전 계획을 쓰지 않도록)
+      return { ...dated, scheduledWeekdayPages: calculateFreshWeekdayPagePlan(dated, getSubjectRemainingPageCount(dated), Math.max(1, getDiffDays(targetDate, from)), from) };
+    });
+    const minutes = buildWeekPlan(prepared, logs, from).activeDayAverageMinutes;
+    return minutes > 0 ? minutes : null;
+  };
+  const minutesPerPageOf = (subjectId: string) => {
+    const own = logs.filter(log => log.subjectId === subjectId);
+    const measured = calculateStats(own, 0, 0, subjects.find(item => item.id === subjectId)?.initialAverageTimePerPage).averageTimePerPage;
+    return Math.round((measured || 0) * 10) / 10;
+  };
+  const applySubjectMove = (mover: SubjectMover, ownerIdNow: string | null, choice: { mode: 'standalone' | 'followUp' | 'review'; ownerId?: string; stageId?: string; startDate: string; targetDate: string }) => {
+    const target: SubjectMoveTarget = choice.mode === 'standalone' ? { kind: 'standalone' }
+      : choice.mode === 'followUp' ? { kind: 'followUp', ownerId: choice.ownerId || ownerIdNow || '' }
+        : { kind: 'review', ownerId: choice.ownerId!, stageId: choice.stageId };
+    if (target.kind !== 'standalone' && !target.ownerId) return;
+    const plan = planSubjectMove(subjects, mover, target, { startDate: choice.startDate, targetDate: choice.targetDate }, activeStudyDate || getLocalDateKey(new Date()));
+    if (!plan) return;
+    onMoveSubject?.(plan);
+    setGrowthEditingSubjectId(null);
+    setStageMoveId(null);
   };
 
   const openSubjectSummaryEditor = (subject: Subject, requestedStageId?: string) => {
@@ -1745,21 +1808,51 @@ export const Analytics: React.FC<Props> = ({
                                 )}
                               </>
                             ) : (
-                              <button
-                                type="button"
-                                aria-label={`${stage.name} 수정`}
-                                onClick={event => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  openInlineStageEditor(sub, stage);
-                                }}
-                                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-sm font-black text-slate-400 hover:text-indigo-600"
-                              >
-                                ✎
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label={`${stage.name} 수정`}
+                                  onClick={event => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    openInlineStageEditor(sub, stage);
+                                  }}
+                                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-sm font-black text-slate-400 hover:text-indigo-600"
+                                >
+                                  ✎
+                                </button>
+                                {stage.isFollowUp && onMoveSubject && (
+                                  <button
+                                    type="button"
+                                    data-testid="stage-move"
+                                    aria-label={`${stage.name} 위치 변경`}
+                                    aria-expanded={stageMoveId === stage.id}
+                                    onClick={event => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      setStageMoveId(current => (current === stage.id ? null : stage.id));
+                                    }}
+                                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-sm font-black text-slate-400 hover:text-indigo-600"
+                                  >
+                                    ⇄
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
                         </div>
+                        {stage.isFollowUp && stageMoveId === stage.id && onMoveSubject && (
+                          <SubjectPlaceSettings
+                            subjectName={stage.name}
+                            ownerName={null}
+                            startDate=""
+                            targetDate={sub.targetDate}
+                            places={movePlacesFor(stage.id)}
+                            endDates={moveEndDates(stage.id)}
+                            dailyAverage={moveDailyAverage({ kind: 'stage', ownerId: sub.id, stageId: stage.id })}
+                            minutesPerPage={minutesPerPageOf(sub.id)}
+                            onApply={choice => applySubjectMove({ kind: 'stage', ownerId: sub.id, stageId: stage.id }, sub.id, choice)} />
+                        )}
 
                         {!isInlineEditing && (
                           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200/70">
@@ -1843,6 +1936,18 @@ export const Analytics: React.FC<Props> = ({
                                       const original = subjects.find(subject => subject.id === reviewSubject.id);
                                       if (original) onUpdateSubject?.({ ...original, reviewGrowthDisplay: value });
                                     }} />}
+                                  {growthEditingSubjectId === reviewSubject.id && (
+                                    <SubjectPlaceSettings
+                                      subjectName={reviewSubject.name}
+                                      ownerName={movePlaceOf(reviewSubject.id).ownerName}
+                                      startDate={reviewSubject.planResetDate || ''}
+                                      targetDate={reviewSubject.targetDate}
+                                      places={movePlacesFor(reviewSubject.id)}
+                                      endDates={moveEndDates(reviewSubject.id)}
+                                      dailyAverage={moveDailyAverage({ kind: 'subject', id: reviewSubject.id })}
+                                      minutesPerPage={minutesPerPageOf(reviewSubject.id)}
+                                      onApply={choice => applySubjectMove({ kind: 'subject', id: reviewSubject.id }, movePlaceOf(reviewSubject.id).place.kind === 'review' ? (movePlaceOf(reviewSubject.id).place as { ownerId: string }).ownerId : null, choice)} />
+                                  )}
                                   {reviewValueOpen && renderValueBlock(
                                     reviewValueKey, getPageLabel(reviewSubject), weekNeed.reviews[reviewValueKey] || emptyWeek, speedOfSubject?.reviews[reviewSubject.id], reviewMinutesPerPage
                                   )}

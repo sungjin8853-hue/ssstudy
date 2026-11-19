@@ -12681,3 +12681,50 @@ test('18일 fix-146: a group that skips a column ((;A)) is headed by its first w
   assert.ok(made.some(q => q.kind === 'direct' && q.prompt === 'X' && q.answer === 'A AND B'), made.map(q => `${q.prompt}>${q.answer}`).join(' / '));
   assert.ok(!made.some(q => /^\s*AND|AND\s*$/.test(q.answer) || q.conditions.some(text => /^\s*충족/.test(text))), 'no empty cell leaks into an answer or a condition');
 });
+
+test('19일: 복습과목 · 후행과목의 위치 변경과 유형 변환 — 밑에 딸린 복습과목은 같이 가고, 후행과목이 복습과목이 되면 그 밑 복습과목은 새 상위과목으로 올라간다', () => {
+  const { planSubjectMove, findSubjectPlace, subjectsUnderSubject, applySubjectLogMove } = loadSource('utils/subjectMove.ts');
+  const base = (id, extra = {}) => ({ id, name: id, totalPages: 100, completedPages: 10, targetDate: '2026-12-31', startPage: 1, ...extra });
+  const subjects = [
+    base('A', { reviewSubjectIds: ['R'], followUpSubjects: [{ id: 'F', name: 'A 2회독', startPage: 1, endPage: 100, completedPage: 20, reviewSubjectIds: ['FR'] }] }),
+    base('R'), base('FR'), base('B')
+  ];
+  const find = (plan, id) => plan.changed.find(subject => subject.id === id);
+  assert.deepEqual(findSubjectPlace(subjects, 'R'), { kind: 'review', ownerId: 'A', stageId: 'A' });
+  assert.deepEqual(findSubjectPlace(subjects, 'FR'), { kind: 'review', ownerId: 'A', stageId: 'F' });
+  assert.deepEqual(findSubjectPlace(subjects, 'B'), { kind: 'standalone' });
+
+  // 복습과목 → 일반 과목(시작 날짜를 비우면 오늘)
+  const solo = planSubjectMove(subjects, { kind: 'subject', id: 'R' }, { kind: 'standalone' }, {}, '2026-11-19');
+  assert.deepEqual(find(solo, 'A').reviewSubjectIds, []);
+  assert.equal(find(solo, 'R').planResetDate, '2026-11-19');
+  // 복습과목 → 다른 과목의 복습과목(끝 날짜도 함께 쓴다)
+  const toB = planSubjectMove(subjects, { kind: 'subject', id: 'R' }, { kind: 'review', ownerId: 'B' }, { startDate: '2026-12-01', targetDate: '2027-02-01' }, '2026-11-19');
+  assert.deepEqual(find(toB, 'B').reviewSubjectIds, ['R']);
+  assert.deepEqual([find(toB, 'R').planResetDate, find(toB, 'R').targetDate], ['2026-12-01', '2027-02-01']);
+  // 복습과목 → 지금 과목의 후행과목(과목은 목록에서 빠지고 기록은 그 단계로 옮긴다)
+  const asStage = planSubjectMove(subjects, { kind: 'subject', id: 'R' }, { kind: 'followUp', ownerId: 'A' }, {}, '2026-11-19');
+  assert.equal(asStage.removedSubjectId, 'R');
+  assert.deepEqual(find(asStage, 'A').followUpSubjects.map(stage => stage.id), ['F', 'R']);
+  assert.deepEqual(asStage.logMove, { fromSubjectId: 'R', toSubjectId: 'A', toStageId: 'R' });
+  assert.deepEqual(applySubjectLogMove([{ id: 'l', subjectId: 'R', subjectStageId: 'R' }], asStage.logMove), [{ id: 'l', subjectId: 'A', subjectStageId: 'R' }]);
+
+  // 후행과목 → 일반 과목: 밑에 딸린 복습과목(FR)은 같이 간다
+  const stageSolo = planSubjectMove(subjects, { kind: 'stage', ownerId: 'A', stageId: 'F' }, { kind: 'standalone' }, {}, '2026-11-19');
+  assert.deepEqual(find(stageSolo, 'A').followUpSubjects, []);
+  assert.deepEqual([stageSolo.addedSubject.id, stageSolo.addedSubject.reviewSubjectIds], ['F', ['FR']]);
+  // 후행과목 → 다른 과목의 복습과목: FR은 후행과목 밑에서 벗어나 새 상위과목(B)의 복습과목이 된다
+  const stageReview = planSubjectMove(subjects, { kind: 'stage', ownerId: 'A', stageId: 'F' }, { kind: 'review', ownerId: 'B' }, {}, '2026-11-19');
+  assert.deepEqual(find(stageReview, 'B').reviewSubjectIds, ['F', 'FR']);
+  assert.deepEqual(stageReview.addedSubject.reviewSubjectIds, []);
+  // 후행과목 → 다른 과목의 후행과목: 유형 그대로 옮기고 FR도 단계와 함께 간다
+  const stageStage = planSubjectMove(subjects, { kind: 'stage', ownerId: 'A', stageId: 'F' }, { kind: 'followUp', ownerId: 'B' }, {}, '2026-11-19');
+  assert.deepEqual(find(stageStage, 'B').followUpSubjects.map(stage => [stage.id, stage.reviewSubjectIds]), [['F', ['FR']]]);
+  assert.equal(stageStage.addedSubject, null);
+
+  // 고리가 생기는 곳으로는 옮기지 않는다
+  // 단계(F)는 과목이 아니라 A 안에 있으므로 과목 목록에는 A · 그 밑 복습과목들만 나온다
+  assert.deepEqual([...subjectsUnderSubject(subjects, 'A')].sort(), ['A', 'FR', 'R']);
+  assert.equal(planSubjectMove(subjects, { kind: 'subject', id: 'A' }, { kind: 'review', ownerId: 'R' }, {}, '2026-11-19'), null);
+  assert.equal(planSubjectMove(subjects, { kind: 'stage', ownerId: 'A', stageId: 'F' }, { kind: 'followUp', ownerId: 'A' }, {}, '2026-11-19'), null);
+});

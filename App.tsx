@@ -15,6 +15,8 @@ import { resizeSessionTimes } from './utils/measurement';
 import { getLogProgressPages } from './utils/measurement';
 import { fsrsIntervalMs } from './utils/fsrs';
 import { gradePendingReviews, gradeSubjectCard } from './utils/subjectFeedback';
+import { applySubjectLogMove } from './utils/subjectMove';
+import type { SubjectMovePlan } from './utils/subjectMove';
 import { chapterFeedbackOf, gradeSelectedPending, pendingChapterGroups } from './utils/chapterReview';
 import { markAutoIntakeGrade } from './utils/reviewIntake';
 import type { ReviewIntake } from './utils/reviewIntake';
@@ -456,6 +458,16 @@ const App: React.FC = () => {
         })));
       }
     );
+  };
+
+  // 19일 "복습과목 · 후행과목의 위치 변경 및 유형 변환": 바뀐 과목 저장 · 후행과목이 된 과목 삭제 · 새로 선 과목 추가 · 기록 옮기기를 한 번에
+  const handleMoveSubject = (plan: SubjectMovePlan) => {
+    setSubjects(prev => {
+      const changed = new Map(plan.changed.map(subject => [subject.id, subject]));
+      const next = prev.map(subject => changed.get(subject.id) ?? subject).filter(subject => subject.id !== plan.removedSubjectId);
+      return plan.addedSubject && !next.some(subject => subject.id === plan.addedSubject!.id) ? [...next, plan.addedSubject] : next;
+    });
+    if (plan.logMove) setLogs(prev => applySubjectLogMove(prev, plan.logMove!));
   };
 
   const handleUpdateTags = (tags: TagDefinition[]) => {
@@ -1070,6 +1082,7 @@ const App: React.FC = () => {
                 onUpdateSubject={handleUpdateSubject}
                 onUpdateSubjects={handleUpdateSubjects}
                 onDeleteSubject={handleDeleteSubject}
+                onMoveSubject={handleMoveSubject}
                 onUpdateTags={handleUpdateTags}
                 onAddSubject={handleAddSubject}
                 onDeleteFolder={handleDeleteFolder}

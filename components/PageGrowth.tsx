@@ -24,6 +24,105 @@ export const ReviewGrowthSettings: React.FC<{ value: 'review' | 'unit'; onChange
   </div>
 );
 
+/**
+ * 19일 "복습과목을 수정 버튼을 누르고 측정 방식 밑에서 위치변경 및 유형 변환이 가능하게":
+ * 끝 날짜 · 시작 날짜(비우면 오늘)를 쓰고, 일반 과목이 되거나 · 지금 과목의 후행과목이 되거나 · 다른 과목 밑으로 옮긴다.
+ * 옮길 때는 지금 유형(복습과목)을 그대로 가져가는 것이 기본이고, 옮긴 자리에서 그 과목의 후행과목이 될 수도 있다.
+ */
+export const SubjectPlaceSettings: React.FC<{
+  subjectName: string;
+  ownerName: string | null;
+  targetDate: string;
+  startDate: string;
+  /** 옮길 수 있는 곳: 과목과 그 후행과목 단계들 */
+  places: Array<{ ownerId: string; ownerName: string; stages: Array<{ id: string; name: string }> }>;
+  /** 19일 "시작 날짜를 다른 과목의 끝시간을 가져올 수 있음": 끝 날짜가 있는 과목들(늦게 끝나는 것부터) */
+  endDates: Array<{ id: string; name: string; date: string }>;
+  /** 그날 시작하면 전체 하루 평균 공부 시간이 얼마가 되는지(이 과목 시간까지 넣어서, 분) */
+  dailyAverage: (startDate: string, targetDate: string, minutesPerPage: number) => number | null;
+  minutesPerPage: number;
+  onApply: (choice: { mode: 'standalone' | 'followUp' | 'review'; ownerId?: string; stageId?: string; startDate: string; targetDate: string; minutesPerPage: number }) => void;
+}> = ({ subjectName, ownerName, targetDate, startDate, places, endDates, dailyAverage, minutesPerPage, onApply }) => {
+  const [mode, setMode] = useState<'standalone' | 'followUp' | 'review'>('review');
+  const [where, setWhere] = useState(places[0] ? `${places[0].ownerId}|${places[0].ownerId}` : '');
+  const [start, setStart] = useState(startDate);
+  const [end, setEnd] = useState(targetDate);
+  const [perPage, setPerPage] = useState(minutesPerPage > 0 ? String(minutesPerPage) : '');
+  const perPageValue = Number(perPage) || 0;
+  // 끝나는 날짜가 늦은 것부터. 그날 시작하면 전체 하루 평균이 얼마가 되는지 함께 보인다
+  const startOptions = [...endDates].sort((a, b) => b.date.localeCompare(a.date)).map(item => ({
+    ...item, minutes: end && perPageValue > 0 ? dailyAverage(item.date, end, perPageValue) : null
+  }));
+  const hours = (minutes: number | null) => (minutes === null ? '' : minutes >= 60
+    ? ` · 하루 평균 ${Math.floor(minutes / 60)}시간${Math.round(minutes % 60) ? ` ${Math.round(minutes % 60)}분` : ''}`
+    : ` · 하루 평균 ${Math.round(minutes)}분`);
+  const nowAverage = end && perPageValue > 0 ? dailyAverage(start, end, perPageValue) : null;
+  const [ownerId, stageId] = where.split('|');
+  const field = 'h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-[15px] font-bold outline-none focus:ring-4 focus:ring-indigo-500/10';
+  return (
+    <div data-testid="subject-place-settings" className="mt-3 border-t border-amber-200 pt-3">
+      <p className="mb-2 text-sm font-black text-slate-700">위치 변경 및 유형 변환</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="ml-1 text-[12px] font-bold text-slate-500">한 페이지당 예상 시간(분)</span>
+          <input type="number" min="0" step="0.5" value={perPage} data-testid="place-minutes" onChange={event => setPerPage(event.target.value)} className={field} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="ml-1 text-[12px] font-bold text-slate-500">끝 날짜</span>
+          <input type="date" value={end} data-testid="place-end" onChange={event => setEnd(event.target.value)} className={field} />
+        </label>
+      </div>
+      <label className="mt-2 flex flex-col gap-1">
+        <span className="ml-1 text-[12px] font-bold text-slate-500">시작 날짜(비우면 오늘){nowAverage === null ? '' : hours(nowAverage)}</span>
+        <input type="date" value={start} data-testid="place-start" onChange={event => setStart(event.target.value)} className={field} />
+        {startOptions.length > 0 && (
+          <select value="" data-testid="place-start-from" aria-label="다른 과목의 끝 날짜 가져오기"
+            onChange={event => { if (event.target.value) setStart(event.target.value); }}
+            className={`${field} mt-1 text-[13px]`}>
+            <option value="">다른 과목의 끝 날짜 가져오기</option>
+            {startOptions.map(item => <option key={item.id} value={item.date}>{item.name} 끝 {item.date}{hours(item.minutes)}</option>)}
+          </select>
+        )}
+      </label>
+      <div className="mt-2 grid gap-2" role="group" aria-label="유형 변환">
+        {([
+          { value: 'standalone', label: '일반 과목으로', sub: '어디에도 붙지 않는 과목이 된다' },
+          { value: 'followUp', label: `${ownerName ?? '지금 과목'}의 후행과목으로`, sub: '그 과목의 다음 단계가 된다(밑에 딸린 복습과목도 같이 간다)', hide: !ownerName },
+          { value: 'review', label: '다른 과목으로 옮기기', sub: '어디에 어떤 유형으로 붙일지 고른다' }
+        ] as const).filter(option => !('hide' in option && option.hide)).map(option => (
+          <button key={option.value} type="button" aria-pressed={mode === option.value} data-place-mode={option.value}
+            onClick={event => { event.stopPropagation(); setMode(option.value); }}
+            className={`flex min-h-[52px] flex-col items-start justify-center rounded-xl border-2 px-4 py-2 text-left transition-colors ${mode === option.value
+              ? 'border-amber-700 bg-amber-700 text-white' : 'border-slate-200 bg-white text-slate-800 hover:border-amber-400'}`}>
+            <span className="text-[15px] font-black">{option.label}</span>
+            <span className={`text-xs font-semibold ${mode === option.value ? 'text-amber-50' : 'text-slate-600'}`}>{option.sub}</span>
+          </button>
+        ))}
+      </div>
+      {mode === 'review' && (
+        <div className="mt-2 flex flex-col gap-2">
+          <select value={where} data-testid="place-target" onChange={event => setWhere(event.target.value)} className={field}>
+            {places.map(place => [
+              <option key={place.ownerId} value={`${place.ownerId}|${place.ownerId}`}>{place.ownerName}의 복습과목</option>,
+              ...place.stages.map(stage => <option key={stage.id} value={`${place.ownerId}|${stage.id}`}>{place.ownerName} · {stage.name}의 복습과목</option>),
+              <option key={`${place.ownerId}-fu`} value={`${place.ownerId}|후행`}>{place.ownerName}의 후행과목</option>
+            ])}
+          </select>
+          {!places.length && <p className="text-xs font-bold text-slate-500">옮길 수 있는 과목이 없어요</p>}
+        </div>
+      )}
+      <button type="button" data-testid="place-apply" disabled={mode === 'review' && !where}
+        onClick={event => {
+          event.stopPropagation();
+          onApply(mode === 'review'
+            ? { mode: stageId === '후행' ? 'followUp' : 'review', ownerId, ...(stageId === '후행' ? {} : { stageId }), startDate: start, targetDate: end, minutesPerPage: perPageValue }
+            : { mode, startDate: start, targetDate: end, minutesPerPage: perPageValue });
+        }}
+        className="mt-2 h-12 w-full rounded-xl bg-indigo-600 text-[15px] font-black text-white disabled:opacity-40">{subjectName} 옮기기</button>
+    </div>
+  );
+};
+
 export interface ReviewSpeedPoint { pagesPerReference: number; baselinePagesPerReference?: number | null }
 
 /** 증가율 칸 밑의 속도 그래프에 쓰는 점: 회차 이름과 값(기준 시간에 푸는 장수), 최근 8회까지 */
