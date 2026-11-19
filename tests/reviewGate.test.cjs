@@ -12603,6 +12603,31 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   assert.deepEqual(defs.lines.map(line => line.lineIndex), [1]);
 });
 
+test('19일: `=`로 이어 쓴 틀 쪽은 서로 대응한다(여러 칸으로 된 쪽은 상대 차례에도 오고, `==`는 모든 차례와 짝짓는다). 중첩 `{ }`는 중첩 횟수가 같은 것끼리 짝짓는다', () => {
+  const { expandBraceTemplates, isTemplateLine } = loadSource('utils/noteTemplate.ts');
+  const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
+  const lines = line => expandBraceTemplates(line).split('\n');
+  // 사용자 예: {a,b=c};{q-w-e} 는 a;q b;w c;e a,b;e
+  assert.deepEqual(lines('{a,b=c};{q-w-e}'), ['a;q', 'b;w', 'c;e', 'a,b;e']);
+  // 사용자 예: {(a,b)==c};{q-w-e} 는 (a,b);q (a,b);w (a,b);e c;q c;w c;e
+  assert.deepEqual(lines('{(a,b)==c};{q-w-e}'), ['(a,b);q', '(a,b);w', '(a,b);e', 'c;q', 'c;w', 'c;e']);
+  // 사용자 예: {s-a};d;f 면 s;d;f a;d;f
+  assert.deepEqual(lines('{s-a};d;f'), ['s;d;f', 'a;d;f']);
+  // 사용자 예: {{a-b}-{n-f}};{h-i} 는 {a-n} {b-f}가 되며 한번 더 작동하여 a;h n;i b;h f;i
+  assert.deepEqual(lines('{{a-b}-{n-f}};{h-i}'), ['a;h', 'n;i', 'b;h', 'f;i']);
+  assert.ok(isTemplateLine('{{a-b}-{n-f}};{h-i}'));
+  // 양쪽이 다 여러 칸이면 양쪽 다 상대 차례에도 온다. `=` 하나로 한 칸씩 쓴 것은 전처럼 차례끼리만 짝짓는다
+  assert.deepEqual(lines('{a,b=c,d};{q-w-e-r}'), ['a;q', 'b;w', 'c;e', 'd;r', 'a,b;e', 'c,d;q']);
+  assert.deepEqual(lines('{a=b};{q-w}'), ['a;q', 'b;w']);
+  // 중첩 안에 틀이 아닌 값이 섞이면 그 값은 차례마다 그대로 쓴다. 빈 자리(`--`)와 이름표는 전과 같다
+  assert.deepEqual(lines('{{a-b}-x};{h-i}'), ['a;h', 'x;i', 'b;h', 'x;i']);
+  assert.deepEqual(lines('{A-B--N}야;{D-S-f-h} 가져가'), ['A야;D 가져가', 'B야;S 가져가', 'B야;f 가져가', 'N야;h 가져가']);
+  assert.deepEqual(lines('a:{원인} b'), ['a:{원인} b']);
+  // { } 안 각 내용은 서로 관련이 없다: 틀의 `-` `=` `,`로는 문제를 만들지 않는다
+  assert.ok(!buildReviewQuestions('{a,b=c};{q-w-e}').questions.some(q => q.prompt === 'a' && q.answer === 'b'));
+  assert.ok(!buildReviewQuestions('{{a-b}-{n-f}};{h-i}').questions.some(q => /\{|\}/.test(q.prompt + q.answer)));
+});
+
 test('17일 fix-144 · 18일 fix-145: = inside a group embedded in text is 또는 (no 대응 questions), quotes no longer hide a group, a closing quote may be followed by Hangul, and , then = keeps asking the place first', () => {
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const shape = memo => buildReviewQuestions(memo).questions.map(q => `${q.kind}|${q.prompt}>${q.answer}`);
