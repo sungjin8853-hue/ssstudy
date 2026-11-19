@@ -1341,7 +1341,7 @@ export const braceSuggestions = (index: NoteSetIndex, text: string, caret: numbe
   for (let at = 0; at < body.length; at += 1) {
     if (body[at] === '(') depth += 1;
     else if (body[at] === ')') depth = Math.max(0, depth - 1);
-    else if (!depth && /[-=,]/.test(body[at])) separators.push(at);
+    else if (!depth && /[-=]/.test(body[at])) separators.push(at);
   }
   if (depth > 0) return [];
   const tokenOffset = separators.length ? separators[separators.length - 1] + 1 : 0;
@@ -1349,10 +1349,10 @@ export const braceSuggestions = (index: NoteSetIndex, text: string, caret: numbe
   const lead = rawToken.length - rawToken.trimStart().length;
   const from = caret - rawToken.length + lead;
   let to = caret;
-  while (to < lineEnd && !/[-=,}]/.test(text[to])) to += 1;
+  while (to < lineEnd && !/[-=}]/.test(text[to])) to += 1;
   while (to > caret && /\s/.test(text[to - 1])) to -= 1;
   const typed = normSetName(rawToken);
-  const written = new Set(body.split(/[-=,]/).map(normSetName).filter(Boolean));
+  const written = new Set(body.split(/[-=]/).map(normSetName).filter(Boolean));
   written.delete(typed);
   const membersOf = (name: string) => (index.sets.has(normSetName(name)) || index.sets.has(normSetName(`[${name}]`))
     ? setContents(index, name).filter(row => row.depth === 0).map(row => row.name) : []);
@@ -1361,7 +1361,7 @@ export const braceSuggestions = (index: NoteSetIndex, text: string, caret: numbe
   if (named && named[1].trim()) {
     pool = membersOf(named[1].trim());
   } else if (separators.length) {
-    const first = normSetName(body.split(/[-=,]/)[0] ?? '');
+    const first = normSetName(body.split(/[-=]/)[0] ?? '');
     const owners = [...index.sets].filter(set => (index.children.get(set) ?? []).includes(first));
     pool = owners.flatMap(owner => (index.children.get(owner) ?? []).map(key => index.display.get(key) ?? key));
   } else {
