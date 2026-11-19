@@ -854,6 +854,16 @@ const App: React.FC = () => {
     setLogs(prev => prev.map(log => (!ids.has(log.id) ? log : action === 'remove' ? removeLogFromReview(log, hasReviewSubjects) : addLogToReview(log, nowMs))));
   };
 
+  // 19일 "학습 기록 보기에서 첫 학습에서 한 복습 피드백을 수정할 수 있게": 그 기록의 난도를 다시 고른다.
+  // 평가(feedbackGrade)와 그 평가가 정한 기억(reviewFsrs)을 다시 계산한다 — 자동 복습으로 고른 난도도 같이 바꾼다
+  const handleChangeLogFeedback = (logId: string, grade: SubjectGrade) => {
+    const nowMs = Date.now();
+    setLogs(prev => prev.map(log => (log.id !== logId ? log : {
+      ...log, feedbackGrade: grade, reviewFsrs: gradeSubjectCard(log, grade, nowMs),
+      ...(log.autoReviewChosenGrade ? { autoReviewChosenGrade: grade } : {}),
+    })));
+  };
+
   const handleExcludeFromReview = (logIds: string[]) => {
     const ids = new Set(logIds);
     setLogs(prev => prev.map(log => (ids.has(log.id) ? excludeLogFromReview(log) : log)));
@@ -1028,6 +1038,7 @@ const App: React.FC = () => {
                         onUpdateSubjects={handleUpdateSubjects}
                         onExcludeFromReview={handleExcludeFromReview}
                         onChangeLogsReview={handleChangeLogsReview}
+                        onChangeLogFeedback={handleChangeLogFeedback}
                       />
                     )}
                     onLogSession={handleLogSession}

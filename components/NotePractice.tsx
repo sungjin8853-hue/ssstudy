@@ -64,6 +64,15 @@ const PracticeRun: React.FC<{
     shownAt.current = Date.now();
   };
   const restart = () => { setPractice(startReviewPractice(catalog, open, Math.floor(Math.random() * 2 ** 31))); setRevealed(false); shownAt.current = Date.now(); };
+  // 19일 "정리노트안 눌러서 하는 문제풀기를 플래시 카드처럼": 답을 다시 가릴 수 있고, 채점하지 않고 앞뒤로 넘길 수 있다.
+  // 넘기기는 남은 문제를 돌리는 것이라(맨 뒤로 · 맨 앞으로) 풀던 차례는 그대로 남는다
+  const move = (step: 1 | -1) => {
+    setPractice(previous => (previous.queue.length < 2 ? previous : { ...previous, queue: step === 1
+      ? [...previous.queue.slice(1), previous.queue[0]]
+      : [previous.queue[previous.queue.length - 1], ...previous.queue.slice(0, -1)] }));
+    setRevealed(false);
+    shownAt.current = Date.now();
+  };
 
   return (
     <Overlay><div role="dialog" aria-modal="true" aria-label="정리노트 문제 풀기" data-testid="note-practice"
@@ -105,6 +114,13 @@ const PracticeRun: React.FC<{
             <div className="flex flex-1 items-center justify-center whitespace-pre-wrap text-center">
               <ReviewQuestionContent question={current.question} criterion={criterion} revealed={revealed} memo={current.log.reviewMemo ?? ''} setMemos={setMemos} />
             </div>
+            <div data-testid="note-practice-cards" className="flex shrink-0 items-center justify-between gap-2">
+              <button type="button" data-testid="note-practice-prev" onClick={() => move(-1)} disabled={practice.queue.length < 2}
+                className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">◀ 이전</button>
+              <span className="text-center text-sm font-black text-slate-700">채점하지 않고 넘겨요</span>
+              <button type="button" data-testid="note-practice-next" onClick={() => move(1)} disabled={practice.queue.length < 2}
+                className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">다음 ▶</button>
+            </div>
             {!revealed ? (
               <button type="button" onClick={() => setRevealed(true)}
                 className="h-[76px] shrink-0 rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
@@ -116,6 +132,8 @@ const PracticeRun: React.FC<{
                       className={`flex h-20 items-center justify-center rounded-2xl border-2 px-4 text-[21px] font-black ${item.tone}`}>{item.label}</button>
                   ))}
                 </div>
+                <button type="button" data-testid="note-practice-hide" onClick={() => setRevealed(false)}
+                  className="h-11 shrink-0 rounded-xl border-2 border-slate-300 bg-white text-sm font-black text-slate-700 hover:bg-slate-50">정답 다시 가리기</button>
                 <p className="text-center text-sm font-semibold text-slate-600">풀이 과정이나 답이 하나라도 틀리면 오답이에요 · 기록만 저장되고 복습 일정은 그대로예요</p>
               </>
             )}

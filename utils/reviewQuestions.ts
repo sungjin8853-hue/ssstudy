@@ -328,6 +328,27 @@ const withSpanAll = (expression: Expression, span: AnswerSpan): Expression => (e
   : expression.type === 'relation' ? { ...expression, fields: expression.fields.map(field => withSpanAll(field, span)) }
     : { ...expression, items: expression.items.map(item => withSpanAll(item, span)) });
 
+/** 칸마다 `[ ]`만 쓴 줄인가(`[a]:[b]:[c]`): 아래 줄들의 칸 이름을 정하는 줄이라 그 자체로는 문제를 내지 않는다 */
+const criterionOnly = (expression: Expression, source: string): boolean => {
+  if (expression.type !== 'relation') return false;
+  const places = spans(expression);
+  if (places.length < 2) return false;
+  // 칸의 글자 범위는 `[ ]` 안쪽이라 양 끝의 괄호를 도로 넣는다
+  let from = Math.min(...places.map(place => place.start));
+  let to = Math.max(...places.map(place => place.end));
+  if (source[from - 1] === '[') from -= 1;
+  if (source[to] === ']') to += 1;
+  const body = source.slice(from, to).trim();
+  if (!body.startsWith('[')) return false;
+  const cuts = splitAt(body, 0, body.length, relationMarks());
+  if (!cuts.length) return false;
+  const pieces: string[] = [];
+  let at = 0;
+  cuts.forEach(cut => { pieces.push(body.slice(at, cut)); at = cut + 1; });
+  pieces.push(body.slice(at));
+  return pieces.every(piece => /^\s*\[[^\[\]]+\]\s*$/.test(piece));
+};
+
 const head = (expression: Expression): Expression => {
   // 18일: 칸을 건너뛴 묶음(`(;A)`)의 머리는 빈 칸이 아니라 처음 쓴 칸이다(전에는 답이 "　AND B"처럼 빈 칸을 달고 나왔다)
   if (expression.type === 'relation') return head(expression.fields.find(field => nonempty(field)) ?? expression.fields[0]);
@@ -1118,7 +1139,10 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       const headsRelation = parsed.type === 'relation' || trailingRelation().test(titleSource(parent));
       // 5일: 끝이 연결어로 열린 제목(`> A:` · `> A;`) 아래 줄은 그 연결어 뒤에 놓인 것이라 "‘A’ 다음 자리의"로 묻는다(`A:(B:C)`와 같음)
       const open = Boolean(title) && trailingRelation().test(titleSource(parent));
-      result.unshift({ text: open ? `${title} 이후` : title, ...(open ? { key: keyTitle } : title !== keyTitle ? { key: keyTitle } : {}), place: 'toggle' as const, spans: spans(parsed), columns: parsed.type === 'relation'
+      // 19일: 관계 제목(`> A;B` · `> 절대시제 : 발화시…`)은 머리 칸만 조건으로 보인다 — 제목 전체를 쓰면 문제 글이 한 줄에 안 들어간다.
+      // 문제 키는 예전 글 그대로라 복습 기록이 이어진다
+      const shown = parsed.type === 'relation' ? expressionLabel(head(parsed)).trim() || title : title;
+      result.unshift({ text: open ? `${shown} 이후` : shown, ...(open || shown !== keyTitle ? { key: keyTitle } : {}), place: 'toggle' as const, spans: spans(parsed), columns: parsed.type === 'relation'
         ? parsed.fields.flatMap((field, index) => nonempty(field) ? [parsed.classifications[index]] : []) : headsRelation ? [offsetByNode.get(parent.id) ?? 0] : [] });
       parentId = parent.parentId;
     }
@@ -1660,7 +1684,11 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
   nodes.forEach(node => {
     const context = ancestorConditions(node);
     const nodeImplicit = implicitSetsOf(node);
-    (expressions.get(node.id) || []).forEach(whole => splitMarkedCells(whole).forEach((original, part) => {
+    (expressions.get(node.id) || []).forEach(whole => {
+      // 19일: 칸마다 `[ ]`만 쓴 줄(`[문법]:[활용예시]:[문법 조건 및 결과]`)은 아래 줄들의 칸 이름을 정하는 줄이라 문제를 내지 않는다.
+      // `[ ]`는 값을 정의하는 동작이라 이름표끼리 이어 쓴 것은 외울 내용(순서 · 대응)이 아니다. 기준으로는 전처럼 쓰인다
+      if (criterionOnly(whole, titleSource(node))) return;
+      splitMarkedCells(whole).forEach((original, part) => {
       const implicit = linkedSetsOf(original, nodeImplicit);
       const { expression: scopedExpression, scope } = scopeOf(original, implicit);
       const expression = labelLoneSets(scopedExpression, implicit);
@@ -1672,7 +1700,8 @@ export function buildReviewQuestions(original: string): { questions: NoteQuestio
       togetherLine(expression, lineContext, offsetByNode.get(node.id) ?? 0);
       // `( )` 안쪽은 원래 줄에서 한 번만 읽는다
       if (part === 0) visitGroups(whole, node, scope ? [scope] : [], whole.type === 'relation' ? implicit : [readCell(whole)?.sets ?? []]);
-    }));
+      });
+    });
   });
   // 8일: 논리어 · 연결어가 없는 노트로 문제를 만들지 않는다. 전에는 문제가 하나도 없으면 아무 값도 보여 주지 않고
   // 노트 전체를 떠올리게 하는 '정리노트' 회상 문제(kind 'recall')를 하나 넣었는데 없앴다("전체 상기 문제 … 있으면 없애라")

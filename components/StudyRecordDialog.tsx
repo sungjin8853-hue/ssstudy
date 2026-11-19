@@ -5,6 +5,8 @@ import { getSubjectStageReviewSubjectIds } from '../utils/schedule';
 import { getPageLabel, pagePositionLabel } from '../utils/pageLabel';
 import { formatDurationShort } from '../utils/weekPlan';
 import { parseStudyDate } from '../utils/schedule';
+import { SUBJECT_GRADE_LABELS, SUBJECT_GRADES } from '../utils/subjectFeedback';
+import type { SubjectGrade } from '../utils/subjectFeedback';
 
 const WEEKDAY = ['일', '월', '화', '수', '목', '금', '토'];
 const formatDate = (dateKey: string) => {
@@ -56,8 +58,10 @@ export const StudyRecordDialog: React.FC<{
   logs: StudyLog[];
   /** add: 기본 복습 넣기, remove: 기본 복습 빼기(hasReviewSubjects: 그 기록에 이어지는 복습과목이 있는가) */
   onChangeReview: (logIds: string[], action: 'add' | 'remove', hasReviewSubjects: boolean) => void;
+  /** 19일 "첫 학습에서 한 복습 피드백을 수정할 수 있게": 그 기록에 매긴 난도를 다시 고른다(기억 간격도 다시 계산한다) */
+  onChangeFeedback?: (logId: string, grade: SubjectGrade) => void;
   onClose: () => void;
-}> = ({ subject, subjects, logs, onChangeReview, onClose }) => {
+}> = ({ subject, subjects, logs, onChangeReview, onChangeFeedback, onClose }) => {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60000);
@@ -122,6 +126,23 @@ export const StudyRecordDialog: React.FC<{
                             <span className="text-[12px] font-bold text-slate-600">기본 복습이 들어가 있어요{hasReviewSubjects ? ' · 빼도 복습과목은 그대로' : ''}</span>
                             <button type="button" data-testid="record-remove-review" onClick={() => onChangeReview([row.log.id], 'remove', hasReviewSubjects)}
                               className="h-9 shrink-0 rounded-xl border-2 border-slate-300 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-100">복습 빼기</button>
+                          </div>
+                        )}
+                        {onChangeFeedback && (row.log.feedbackGrade || row.log.autoReviewChosenGrade) && !row.log.reviewSubjectId && (
+                          <div data-testid="record-feedback" className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/70 px-3 py-1.5">
+                            <span className="text-[12px] font-bold text-slate-600">첫 학습 복습 피드백</span>
+                            <div className="flex gap-1">
+                              {SUBJECT_GRADES.map(grade => {
+                                const chosen = (row.log.feedbackGrade ?? row.log.autoReviewChosenGrade) === grade;
+                                return (
+                                  <button key={grade} type="button" data-record-feedback={grade} aria-pressed={chosen}
+                                    onClick={() => onChangeFeedback(row.log.id, grade)}
+                                    className={`h-8 rounded-lg px-2.5 text-[13px] font-black ${chosen ? 'bg-slate-900 text-white' : 'border-2 border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}>
+                                    {SUBJECT_GRADE_LABELS[grade]}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                         <div className="flex flex-col gap-0.5 px-3 py-2">

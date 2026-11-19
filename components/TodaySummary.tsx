@@ -77,6 +77,8 @@ interface Props {
   onExcludeFromReview?: (logIds: string[]) => void;
   /** 12일 · 14일: 학습 기록 보기의 "복습 넣기" · "복습 빼기"(기본 복습만) */
   onChangeLogsReview?: (logIds: string[], action: 'add' | 'remove', hasReviewSubjects: boolean) => void;
+  /** 19일: 학습 기록 보기에서 첫 학습에 매긴 복습 피드백(난도)을 고친다 */
+  onChangeLogFeedback?: (logId: string, grade: SubjectGrade) => void;
   onDeleteLogs: (logIds: string[]) => void;
   /** 주면 학습과목 위쪽에 "임시값" 버튼이 생긴다: 측정 전인 지금 과목과 남은 후행과목의 한 장당 시간(임시값)을 고친다 */
   onUpdateSubjects?: (subjects: Subject[]) => void;
@@ -536,7 +538,7 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
-export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onChangeLogsReview }) => {
+export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onChangeLogsReview, onChangeLogFeedback }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [editingSummary, setEditingSummary] = useState<SubjectSummary | null>(null);
@@ -1319,7 +1321,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
       {showRecord && onChangeLogsReview && detailData && (
         // 복습 칸(기본 복습 · 복습과목)에서 열면 그 복습의 원래 과목 기록을 보인다
         <StudyRecordDialog subject={detailData.owner ?? detailData.subject} subjects={subjects} logs={logs}
-          onChangeReview={onChangeLogsReview} onClose={() => setShowRecord(false)} />
+          onChangeReview={onChangeLogsReview} onChangeFeedback={onChangeLogFeedback} onClose={() => setShowRecord(false)} />
       )}
       {showNotes && onUpdateReviewMemo && (
         <NoteSheet logs={logs} subjects={subjects} subjectId={noteSubjectId} subjectName={noteSubjectName}

@@ -1381,7 +1381,8 @@ test('all sequence stages and partial logical facts keep their containing classi
 test('lines under a toggle title that ends with a colon sit after the title, so each ancestor shifts the classification columns', () => {
   const memo = ':::toggle 상위:설명:\n:::toggle 중간:\n값:뜻\n:::end\n:::end';
   const question = questionsFor(memo).find(q => q.kind === 'direct' && q.prompt === '값');
-  assert.deepEqual(question.conditions, ['상위:설명 이후', '중간 이후']);
+  // 19일: 관계 제목은 머리 칸만 조건으로 보인다(문제 키는 예전 글 그대로)
+  assert.deepEqual(question.conditions, ['상위 이후', '중간 이후']);
   // 상위:설명 이 0·1번째 칸, 중간이 2번째, 값·뜻이 3·4번째: 세션 기준의 해당 `:`번째 이름을 가져온다
   assert.deepEqual(questionBuilder.getReviewQuestionClassification('대상:정의:예시:쓰임:근거', question), {
     prompt: ['쓰임'], answer: ['근거'], conditions: [['대상', '정의'], ['예시']]
@@ -8320,7 +8321,7 @@ test('( ) takes the position it stands in: inner values are in the set of that c
   assert.deepEqual(lone.map(q => [q.prompt, q.answer, q.conditions]), [['A', 'B', ['E', '[D] 안녕 이후']], ['B', 'A', ['E', '[D] 안녕 이후']]], '15일: 이어진 앞 칸의 다음 자리');
   // 위쪽 토글 제목이 이어 주는 칸 집합: 괄호가 n번째 칸이면 안쪽 `:` 뒤 값은 n+1번째 칸의 집합이다
   const two = questionsFor(':::toggle [도형] 이름 : [개념] 정의\n삼각형 : (세 변:세 각) 합\n:::end');
-  assert.deepEqual(two.filter(q => q.kind === 'direct' && q.prompt === '세 변').map(q => q.conditions), [['[도형] 이름 : [개념] 정의', '개념.정의', '삼각형 이후']]);
+  assert.deepEqual(two.filter(q => q.kind === 'direct' && q.prompt === '세 변').map(q => q.conditions), [['[도형] 이름', '개념.정의', '삼각형 이후']]);
   const three = questionsFor(':::toggle [도형] 이름 : [개념] 정의 : [예] 보기\n삼각형 : (세 변:세 각) 합\n:::end');
   assert.ok(three.some(q => q.convert && q.prompt === '세 변' && q.answer === '세 각' && stepsOf(q) === '개념.정의>예.보기'));
   const first = questionsFor(':::toggle [도형] 이름 : [개념] 정의\n(세 변:세 각) 합 : 삼각형\n:::end');
@@ -11550,13 +11551,13 @@ test('4일: a toggle title with several # (> A:#:V:#) fills each line part into 
   same(':::toggle A: #\nx\n:::end', 'A: x');
   // 형식이 아닌 하위 토글(> B:C) 밑 X:Y: X는 B 자리(1), Y는 C 자리(3)
   const under = buildReviewQuestions(':::toggle A:#:V:#\n:::toggle B:C\nX:Y\n:::end\n:::end').questions.find(q => q.kind === 'direct' && q.prompt === 'X');
-  assert.deepEqual([under.answer, under.columns.prompt, under.columns.answer, under.conditions], ['Y', [1], [3], ['B:C']]);
+  assert.deepEqual([under.answer, under.columns.prompt, under.columns.answer, under.conditions], ['Y', [1], [3], ['B']]);
   // [ ]로 형식의 고정 칸 자리에 놓을 수 있다(연결): [A] X:D:[V] Y:B → X 0, D 1, Y V(2), B 3
   const { placeUnderFrame, fillFrame, unfillFrame, frameSlotsOf, expandFrameLines } = loadSource('utils/noteFrame.ts');
   assert.deepEqual(placeUnderFrame('A:#:V:#', '[A] X:D:[V] Y:B'), { column: 0, text: '[A] X:D:[V] Y:B' });
   assert.deepEqual(placeUnderFrame('A:#:V:#', 'X:Y'), { column: 1, text: 'X::Y' });
   assert.deepEqual(placeUnderFrame('A:#:V:#', 'X:[V] Y:Z'), { column: 1, text: 'X:[V] Y:Z' });
-  const placed = buildReviewQuestions(':::toggle A:#:V:#\n:::toggle B:C\n[A] X:D:[V] Y:B\n:::end\n:::end').questions.filter(q => q.kind === 'direct' && q.conditions.includes('B:C'));
+  const placed = buildReviewQuestions(':::toggle A:#:V:#\n:::toggle B:C\n[A] X:D:[V] Y:B\n:::end\n:::end').questions.filter(q => q.kind === 'direct' && q.conditions.includes('B'));
   assert.deepEqual(placed.map(q => `${q.prompt}>${q.answer}`).sort(), ['D>Y', 'X>D', 'Y>B']);
   // 형식 판단과 채우기
   assert.deepEqual(frameSlotsOf('A:#:V:#'), [2, 6]);
