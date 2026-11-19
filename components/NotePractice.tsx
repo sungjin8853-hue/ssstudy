@@ -16,11 +16,10 @@ import { ReviewQuestionContent } from './ReviewQuestionContent';
  * 풀이 방식은 복습과 같다(쉬운 것부터 → 맞히면 어려운 것, 틀리면 다시). 푼 결과는 기록으로만 쌓이고 복습 일정은 바뀌지 않는다.
  */
 
+// 19일 "복습 재시험처럼 둘로 줄이고": 오답과 정답 둘뿐이다(한 바퀴 돌면 오답만 다음 회차에 남고, 순서도 다시 섞인다)
 const GRADES: Array<{ grade: ReviewGrade; label: string; tone: string }> = [
   { grade: 'again', label: '오답', tone: 'border-rose-300 bg-rose-100 text-rose-900' },
-  { grade: 'hard', label: '어렵게 맞음', tone: 'border-amber-400 bg-amber-100 text-amber-950' },
-  { grade: 'good', label: '맞음', tone: 'border-green-400 bg-green-100 text-green-900' },
-  { grade: 'easy', label: '쉽게 맞음', tone: 'border-sky-400 bg-sky-100 text-sky-950' }
+  { grade: 'good', label: '정답', tone: 'border-green-400 bg-green-100 text-green-900' }
 ];
 
 /** 정리노트 서랍(옆으로 밀려 나오는 칸) 안에 그리면 서랍 크기에 갇히므로, 화면 전체를 쓰도록 문서 맨 위에 그린다. */
@@ -126,7 +125,7 @@ const PracticeRun: React.FC<{
                 className="h-[76px] shrink-0 rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
             ) : (
               <>
-                <div className="grid shrink-0 grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="grid shrink-0 grid-cols-2 gap-3">
                   {GRADES.map(item => (
                     <button key={item.grade} type="button" data-grade={item.grade} onClick={() => grade(item.grade)}
                       className={`flex h-20 items-center justify-center rounded-2xl border-2 px-4 text-[21px] font-black ${item.tone}`}>{item.label}</button>

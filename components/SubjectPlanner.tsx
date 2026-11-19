@@ -20,7 +20,7 @@ interface Props {
 
 export const createNewStudyPlan = (name: string, startPage: number, endPage: number, targetDate: string,
   isRequired: boolean, scheduledWeekdays: number[], growthPageUnit = DEFAULT_GROWTH_PAGE_UNIT,
-  pageLabel = DEFAULT_PAGE_LABEL, chapters: SubjectChapter[] = []): Subject => {
+  pageLabel = DEFAULT_PAGE_LABEL, chapters: SubjectChapter[] = [], startDate = ''): Subject => {
   // 단원을 미리 정했으면 시작·끝 페이지는 첫 단원 시작과 마지막 단원 끝이다
   if (chapters.length > 0) {
     startPage = chapters[0].startPage;
@@ -30,7 +30,8 @@ export const createNewStudyPlan = (name: string, startPage: number, endPage: num
   const now = new Date();
   return {
     id: Math.random().toString(36).substr(2, 9), name,
-    createdAt: now.toISOString(), planResetDate: getLocalDateKey(now),
+    // 19일 "각 학습 과목마다 시작 날짜를 넣을 수 있게": 넣으면 그날부터 계획을 센다(안 넣으면 만든 날)
+    createdAt: now.toISOString(), planResetDate: startDate || getLocalDateKey(now),
     startPage: normalizedStartPage,
     totalPages: Math.max(normalizedStartPage, Math.round(Number(endPage) || normalizedStartPage)),
     completedPages: normalizedStartPage - 1, targetDate, isRequired, scheduledWeekdays,
@@ -46,6 +47,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [startPage, setStartPage] = useState(1);
   const [pages, setPages] = useState(100);
   const [date, setDate] = useState('');
+  const [startDate, setStartDate] = useState('');
   const [isRequired, setIsRequired] = useState(false);
   const [alwaysBasicReview, setAlwaysBasicReview] = useState(false);
   const [growthPageUnit, setGrowthPageUnit] = useState(DEFAULT_GROWTH_PAGE_UNIT);
@@ -74,7 +76,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const handleAdd = () => {
     if (!name || !date || chapterParse.error) return;
     const nextSubject = createNewStudyPlan(name, startPage, pages, date, isRequired, scheduledWeekdays,
-      0, pageLabel, chapterParse.chapters);
+      0, pageLabel, chapterParse.chapters, startDate);
 
     const initial = Number(initialMinutes);
     onAddSubject({
@@ -91,6 +93,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
     setStartPage(1);
     setPages(100);
     setDate('');
+    setStartDate('');
     setIsRequired(false);
     setAlwaysBasicReview(false);
     setGrowthPageUnit(DEFAULT_GROWTH_PAGE_UNIT);
@@ -137,7 +140,12 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
                 className={fieldClass}
               />
             </div>
-            <div className="col-span-2 space-y-1">
+            <div className="space-y-1">
+              <label htmlFor="new-plan-start-date" className={labelClass}>시작 날짜</label>
+              <input id="new-plan-start-date" type="date" value={startDate} max={date || undefined}
+                onChange={e => setStartDate(e.target.value)} className={fieldClass} />
+            </div>
+            <div className="space-y-1">
               <label htmlFor="new-plan-date" className={labelClass}>목표 완료 날짜</label>
               <input id="new-plan-date" type="date" value={date}
                 onChange={e => setDate(e.target.value)} className={fieldClass} />

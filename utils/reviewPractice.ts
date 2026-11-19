@@ -57,6 +57,9 @@ const shuffleKey = (seed: number, id: string) => {
   value ^= value >>> 15; value = Math.imul(value, 2246822507) >>> 0; value ^= value >>> 13;
   return value >>> 0;
 };
+/** 회차가 바뀔 때마다 섞는 순서를 바꾼다(같은 씨앗이면 늘 같은 차례라 오답 회차도 순서가 그대로였다) */
+const nextSeed = (seed: number) => (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+
 /** seed가 있으면 같은 중요도 묶음 안에서는 섞은 순서, 없으면 중요도 → 난도 → 처음 순서 */
 const orderFor = (state: { seed?: number }) => (a: { q: PracticeQuestion; index: number }, b: { q: PracticeQuestion; index: number }) => (
   state.seed === undefined ? compareOrder(a, b)
@@ -94,9 +97,10 @@ const settle = (input: ReviewPractice, catalog: PracticeQuestion[]): ReviewPract
         roundSize: queue.length + state.answered.length, roundAnswered: state.answered.length };
     }
     if (state.roundWrong.length) {
-      state = { ...state, retryPool: state.roundWrong, roundWrong: [], answered: [], round: state.round + 1 };
+      // 19일 "한바뀌 돌고 오면 오답만 남아 있게 하고 순서도 섞이고": 다음 회차는 오답만, 씨앗을 바꿔 다시 섞는다
+      state = { ...state, retryPool: state.roundWrong, roundWrong: [], answered: [], round: state.round + 1, ...(state.seed === undefined ? {} : { seed: nextSeed(state.seed) }) };
     } else if (state.retryPool || state.answered.length) {
-      state = { ...state, retryPool: null, answered: [], round: 1 };
+      state = { ...state, retryPool: null, answered: [], round: 1, ...(state.seed === undefined ? {} : { seed: nextSeed(state.seed) }) };
     } else break;
   }
   return { ...state, queue: [], roundSize: state.answered.length, roundAnswered: state.answered.length };

@@ -15,6 +15,7 @@ import {
   getLocalDateKey,
   getLogStudyDate,
   getStageChapters,
+  getSubjectPlanStartDateKey,
   isSubjectRequiredNow,
   getSubjectStages,
   getSubjectRemainingPageCount,
@@ -538,6 +539,37 @@ export const PomodoroSummary: React.FC<{
   </div>;
 };
 
+/**
+ * 19일 "각 학습 과목마다 시작 날짜를 넣을 수 있게 … 학습 실행에서 이를 바꿀 수도 있게":
+ * 그 과목의 계획을 세는 첫날. 바꾸면 그날부터 오늘까지로 이월 · 누적을 다시 센다.
+ */
+const PlanStartDialog: React.FC<{ subject: Subject; value: string; onSave: (date: string) => void; onClose: () => void }> = ({ subject, value, onSave, onClose }) => {
+  const [date, setDate] = useState(value);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div role="dialog" aria-modal="true" aria-label="시작 날짜" data-testid="plan-start-dialog"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-3"
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="flex w-full max-w-sm flex-col gap-3 rounded-t-3xl bg-white px-5 py-5 shadow-2xl sm:rounded-3xl">
+        <h3 className="text-lg font-black text-slate-900">{subject.name} · 시작 날짜</h3>
+        <p className="text-[13px] font-bold text-slate-500">이 날부터 계획을 셉니다. 목표 완료 날짜({subject.targetDate})까지 남은 날로 하루 권장량이 다시 계산돼요.</p>
+        <input type="date" value={date} max={subject.targetDate || undefined} data-testid="plan-start-input"
+          onChange={event => setDate(event.target.value)}
+          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-base font-bold outline-none focus:ring-4 focus:ring-indigo-500/10" />
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className="h-12 flex-1 rounded-xl border-2 border-slate-300 bg-white text-[15px] font-black text-slate-700 hover:bg-slate-50">취소</button>
+          <button type="button" data-testid="plan-start-save" disabled={!date} onClick={() => onSave(date)}
+            className="h-12 flex-1 rounded-xl bg-indigo-600 text-[15px] font-black text-white disabled:opacity-40">저장</button>
+        </div>
+      </section>
+    </div>
+  );
+};
+
 export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId, onDetailSubjectChange, taskSelector, onOpenSettings, completedStudySubjectIds = EMPTY_SUBJECT_IDS, pomodoroPlan, idle, onUpdateReviewMemo, onRestoreReviewQuestion, onSkipEditIntake, onRegisterReview, onChooseAutoReviewGrade, activeWeekday, activeStudyDate, onAddLog, onReplaceLogs, onDeleteLogs, onUpdateSubjects, onExcludeFromReview, onChangeLogsReview, onChangeLogFeedback }) => {
   const [pomodoroMinutes] = usePomodoroMinutes();
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
@@ -799,6 +831,9 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 임시값 창(1일 요청): 측정 전인 지금 단계와 남은 후행과목
   const [editingTemp, setEditingTemp] = useState(false);
   useEffect(() => { setEditingTemp(false); }, [detailData?.subject.id]);
+  // 19일 "각 학습 과목마다 시작 날짜를 … 학습 실행에서 이를 바꿀 수도 있게": 그 과목의 계획을 세는 첫날
+  const [editingStart, setEditingStart] = useState(false);
+  useEffect(() => { setEditingStart(false); }, [detailData?.subject.id]);
   const tempRows = useMemo(() => (detailData && !detailIsReview ? getTempStageRows(subjects, logs, detailData.subject) : []), [detailData, detailIsReview, subjects, logs]);
   const pageLabel = getPageLabel(detailData?.subject);
   const pagePos = pagePositionLabel(pageLabel);
@@ -884,6 +919,7 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 제목 뒤에 이어 붙이는 과목: 이 과목 → 후행과목, 각 과목에 붙은 복습과목은 대괄호. 예: A-B[C]-D. 이을 것이 없으면 이름만 보인다.
   const chainSegments = detailData && !detailIsReview ? getSubjectChain(detailData.subject, subjects) : [];
   const titleChain = hasSubjectChain(chainSegments) ? chainSegments : null;
+  const planStartKey = detailData ? getSubjectPlanStartDateKey(detailData.subject, logs, activeStudyDate || getLocalDateKey(new Date())) : '';
   const headerButton = 'flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-indigo-400 bg-indigo-100 px-3.5 text-sm font-black text-indigo-900 transition-colors hover:bg-indigo-200 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-400';
 
   // "추가" 창(29일 요청): 과목을 골라 시간(비우면 기존 전체 효율) · 푼 페이지 · 끝 페이지 · 복습 유무를 넣고,
@@ -1201,6 +1237,14 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               <span data-testid="auto-review-badge" className={`rounded-full px-2 text-xs font-black leading-5 ${autoReview ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>{autoReview ? '켬' : '끔'}</span>
             </button>
           )}
+          {!detailIsReview && onUpdateSubjects && detailData && (
+            <button type="button" data-testid="plan-start-date" onClick={() => setEditingStart(true)} aria-label="시작 날짜 바꾸기" className={headerButton}>
+              <span aria-hidden="true">📅</span>시작 날짜
+              <span className="rounded-full bg-slate-200 px-2 text-xs font-black leading-5 text-slate-700">
+                {planStartKey.slice(5).replace('-', '/')}
+              </span>
+            </button>
+          )}
           {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
             <button type="button" data-testid="stage-temp" onClick={() => setEditingTemp(true)} aria-label="한 장당 시간 임시값" className={headerButton}>
               <span aria-hidden="true">⏱</span>임시값
@@ -1223,6 +1267,11 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
         </div>
       </div>
 
+      {editingStart && onUpdateSubjects && detailData && !detailIsReview && (
+        <PlanStartDialog subject={detailData.subject} value={planStartKey}
+          onSave={date => { onUpdateSubjects([{ ...detailData.subject, planResetDate: date }]); setEditingStart(false); }}
+          onClose={() => setEditingStart(false)} />
+      )}
       {editingTemp && onUpdateSubjects && detailData && !detailIsReview && (
         <StageTempDialog subject={detailData.subject} subjects={subjects} logs={logs} pageLabel={pageLabel}
           onUpdateSubjects={onUpdateSubjects} onClose={() => setEditingTemp(false)} />
