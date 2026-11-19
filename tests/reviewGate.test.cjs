@@ -12567,12 +12567,12 @@ test('17일 fix-141: { } templates — a line with a value list in braces is wri
   assert.equal(expandBraceTemplates('{(A;B)-(C<D)}야 ; {(가:나)-다} 안녕'), '(A;B)야 ; (가:나) 안녕\n(C<D)야 ; 다 안녕');
   assert.equal(expandBraceTemplates('Z : {(가:나)-다} 안녕'), 'Z : (가:나) 안녕\nZ : 다 안녕');
   // 19일 fix-153: `{ }` 안에서 `,`는 칸을 나누지 않는다(글자 그대로). `=` 쪽이 다 한 칸이면 서로 같은 것이라 상대의 모든 차례와 짝짓는다
-  assert.equal(expandBraceTemplates('{(A:B)=C} : {(1;2)-3}'), '(A:B) : (1;2)\n(A:B) : 3\nC : (1;2)\nC : 3');
+  assert.equal(expandBraceTemplates('{(A:B)=C} : {(1;2)-3}'), '(A:B) : (1;2)\nC : (1;2)\n(A:B) : 3\nC : 3');
   assert.equal(expandBraceTemplates('a:{원인:조건/설명,[분류]=관점-세부} b,c:d'), 'a:{원인:조건/설명,[분류]=관점-세부} b,c:d', 'labels stay');
   // ( )가 있으면 가장 바깥 논리로만 나눈다(괄호 안은 한 값)
-  assert.equal(expandBraceTemplates('{(A-B)-C}야 ; {(가,나)=다} 안녕'), '(A-B)야 ; (가,나) 안녕\nC야 ; (가,나) 안녕\n(A-B)야 ; 다 안녕\nC야 ; 다 안녕');
+  assert.equal(expandBraceTemplates('{(A-B)-C}야 ; {(가,나)=다} 안녕'), '(A-B)야 ; (가,나) 안녕\n(A-B)야 ; 다 안녕\nC야 ; (가,나) 안녕\nC야 ; 다 안녕');
   // `=`도 값 목록(쪽이 둘 다 한 칸이라 서로의 차례에 온다). `,`는 19일 fix-153으로 칸을 나누지 않는다
-  assert.equal(expandBraceTemplates('{A=B} : {1-2}'), 'A : 1\nA : 2\nB : 1\nB : 2');
+  assert.equal(expandBraceTemplates('{A=B} : {1-2}'), 'A : 1\nB : 1\nA : 2\nB : 2');
   assert.equal(expandBraceTemplates('{A=B} : {1,2}'), 'A : {1,2}\nB : {1,2}');
   // 노트의 집합(셀 밑 항목)을 가져온다, 없으면 그 글 그대로
   assert.deepEqual(qs(':::toggle [과일]\n사과\n배\n:::end\n{과일} : {[색] 빨강-노랑}'), ['사과>빨강', '배>노랑']);
@@ -12609,10 +12609,10 @@ test('19일: `=`로 이어 쓴 틀 쪽은 서로 같은 것이라 한 칸짜리 
   const { expandBraceTemplates, isTemplateLine } = loadSource('utils/noteTemplate.ts');
   const { buildReviewQuestions } = loadSource('utils/reviewQuestions.ts');
   const lines = line => expandBraceTemplates(line).split('\n');
-  // 19일 "{}안에서 ,를 쓰는 건 없애자": `,`는 칸을 나누지 않아 `a,b`가 한 칸이고, 두 쪽이 다 한 칸이라 상대의 모든 차례와 짝짓는다
-  assert.deepEqual(lines('{a,b=c};{q-w-e}'), ['a,b;q', 'a,b;w', 'a,b;e', 'c;q', 'c;w', 'c;e']);
-  // 한 쪽이 여러 칸이면(`{a-b=c}`) 그 칸들은 서로 관련 없는 값이라 한 값으로 묶어 쓸 수 없다 — 차례끼리만 짝짓는다
-  assert.deepEqual(lines('{a-b=c};{q-w-e}'), ['a;q', 'b;w', 'c;e']);
+  // 19일 "{}안에서 ,를 쓰는 건 없애자": `,`는 칸을 나누지 않아 `a,b`가 한 칸이다. 두 칸을 `=`로 이었으니 둘이 쓴 1 · 2번째 차례에 서로 온다
+  assert.deepEqual(lines('{a,b=c};{q-w-e}'), ['a,b;q', 'c;q', 'a,b;w', 'c;w']);
+  // 19일 "=는 a-(b=c)-(b=c)인 거라고": `=`로 이은 칸들은 그 칸들이 쓴 차례 어디에나 온다. `-`로 쓴 칸은 제 차례만 쓴다
+  assert.deepEqual(lines('{a-b=c};{q-w-e}'), ['a;q', 'b;w', 'c;w', 'b;e', 'c;e']);
   // 사용자 예: {(a,b)==c};{q-w-e} 는 (a,b);q (a,b);w (a,b);e c;q c;w c;e
   // `==`는 `(a,b)=(a,b)=c`라 한 칸짜리 쪽이 셋이고, 서로의 차례에 모두 온다
   assert.deepEqual(lines('{(a,b)==c};{q-w-e}').sort(), ['(a,b);e', '(a,b);q', '(a,b);w', 'c;e', 'c;q', 'c;w']);
@@ -12626,18 +12626,17 @@ test('19일: `=`로 이어 쓴 틀 쪽은 서로 같은 것이라 한 칸짜리 
   // 19일 "중첩된 횟수가 같은 것을 짝지어야 한다고, 그 전까지는 분리만하고": 세 겹도 바깥부터 같은 중첩끼리 짝짓고, 나온 틀끼리는 줄로 나뉜다
   assert.deepEqual(lines('{{{a-b}-{n-f}}-{{p-r}-{s-t}}};{h-i}'), ['a;h', 'p;i', 'b;h', 'r;i', 'n;h', 's;i', 'f;h', 't;i']);
   assert.deepEqual(lines('{{a-b}-{n-f}-{p-r}};{h-i-j}'), ['a;h', 'n;i', 'p;j', 'b;h', 'f;i', 'r;j']);
-  // 한 칸짜리 쪽이 없으면(양쪽이 다 여러 칸) 차례끼리만 짝짓는다 — 여러 칸으로 된 쪽은 한 칸 자리에 들어갈 수 없다
-  assert.deepEqual(lines('{a-b=c-d};{q-w-e-r}'), ['a;q', 'b;w', 'c;e', 'd;r']);
-  // 양쪽이 한 칸이면 서로의 차례에 온다(상대 차례가 더 많아도 모두)
+  assert.deepEqual(lines('{a-b=c-d};{q-w-e-r}'), ['a;q', 'b;w', 'c;w', 'b;e', 'c;e', 'd;r']);
   assert.deepEqual(lines('{a=b};{q-w}').sort(), ['a;q', 'a;w', 'b;q', 'b;w']);
-  assert.deepEqual(lines('{a=b};{q-w-e}').sort(), ['a;e', 'a;q', 'a;w', 'b;e', 'b;q', 'b;w']);
+  // 틀 칸이 둘이면 짧은 쪽까지만 만든다(`{a=b}`는 두 차례뿐이라 `e`는 쓰지 않는다)
+  assert.deepEqual(lines('{a=b};{q-w-e}').sort(), ['a;q', 'a;w', 'b;q', 'b;w']);
   // 중첩 안에 틀이 아닌 값이 섞이면 그 값은 차례마다 그대로 쓴다. 빈 자리(`--`)와 이름표는 전과 같다
   assert.deepEqual(lines('{{a-b}-x};{h-i}'), ['a;h', 'x;i', 'b;h', 'x;i']);
   assert.deepEqual(lines('{A-B--N}야;{D-S-f-h} 가져가'), ['A야;D 가져가', 'B야;S 가져가', 'B야;f 가져가', 'N야;h 가져가']);
   assert.deepEqual(lines('a:{원인} b'), ['a:{원인} b']);
   // { } 안 각 내용은 서로 관련이 없다: 틀의 `-` `=` `,`로는 문제를 만들지 않는다
   assert.ok(!buildReviewQuestions('{a-b=c};{q-w-e}').questions.some(q => q.prompt === 'a' && q.answer === 'b'));
-  assert.ok(!buildReviewQuestions('{a-b=c};{q-w-e}').questions.some(q => /-/.test(q.prompt + q.answer)));
+  assert.ok(!buildReviewQuestions('{a-b=c};{q-w-e}').questions.some(q => /[-={}]/.test(q.prompt + q.answer)));
   assert.ok(!buildReviewQuestions('{{a-b}-{n-f}};{h-i}').questions.some(q => /\{|\}/.test(q.prompt + q.answer)));
 });
 

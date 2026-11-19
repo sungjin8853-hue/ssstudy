@@ -175,18 +175,16 @@ const outsideGroups = (text: string): string => {
   return out;
 };
 
-type Part = { kind: 'list'; items: string[]; name?: string; cross?: boolean } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
+type Part = { kind: 'list'; items: string[]; options: string[][]; name?: string } | { kind: 'ref'; name: string; label?: boolean } | { kind: 'keep' };
 
 /**
- * 19일 "=는 모든 차례와 짝짓는 거야 ==처럼 두번 쓴거는 뒤에 같은거라는 거, 왼쪽의 것이 오른쪽의 것과 같다":
- * `=`로 이어 쓴 쪽들은 서로 같은 것이라, 한 칸짜리 쪽이 있는 차례에는 다른 쪽들도 (그 쪽 전체로) 올 수 있다.
- *  - `{a=b};{q-w-e}` → 두 쪽이 다 한 칸이라 `a;q` `a;w` `a;e` `b;q` `b;w` `b;e`.
- *    한 쪽이 여러 칸이면(`{a-b=c}`) 그 칸들은 서로 관련 없는 값이라 한 값으로 묶어 쓸 수 없어 차례끼리만 짝짓는다(`a;q` `b;w` `c;e`).
- *  - `{(a,b)==c}`는 `(a,b)=(a,b)=c`다(`==`의 빈 자리는 바로 앞 쪽을 다시 쓴 것). 세 쪽이 다 한 칸이라 서로의 차례에 모두 와서
- *    `(a,b);q` `(a,b);w` `(a,b);e` `c;q` `c;w` `c;e`가 된다. `a===v`면 `a=a=a=v`다.
+ * 19일 "=는 `a-(b=c)-(b=c)`인 거라고": `=`로 이어 쓴 칸들은 서로 같은 것이라, 그 칸들이 쓴 차례 어디에나 올 수 있다.
+ *  - `{a-b=c};{q-w-e}` → `a;q`(a는 제 차례만) · `b;w` `c;w` `b;e` `c;e`(b와 c는 둘이 쓴 2 · 3번째 차례 어디에나).
+ *  - `{a=b};{q-w}` → `a;q` `b;q` `a;w` `b;w`. `{(a,b)==c}`는 `(a,b)=(a,b)=c`라 세 차례 모두에 `(a,b)`와 `c`가 온다.
+ *    `a===v`면 `a=a=a=v`다(`==`의 빈 자리는 바로 앞 칸을 다시 쓴 것).
  *  - `( )` 안은 `{ }`의 틀 논리가 닿지 않는 그 안의 실제 논리다(`(a,b)`는 한 칸이고, 그 안의 `,`는 "그리고").
  */
-const readSides = (inner: string): { items: string[]; cross?: boolean } => {
+const readSides = (inner: string): { items: string[]; options: string[][] } => {
   const { items: written, marks } = splitParts(inner);
   const items: string[] = [];
   const origin: number[] = [];
@@ -196,21 +194,18 @@ const readSides = (inner: string): { items: string[]; cross?: boolean } => {
   });
   // 맨 끝의 빈 자리(`{A-B-}`처럼 쓰는 중)는 값으로 치지 않는다
   if (written.length && !written[written.length - 1].trim() && items.length) { items.pop(); origin.pop(); }
-  if (items.length < 2) return { items };
-  const sides: { text: string; from: number; count: number }[] = [];
+  const groups: number[][] = [];
   items.forEach((item, at) => {
     const mark = origin[at] > 0 ? marks[origin[at] - 1] : null;
-    if (!sides.length || mark === '=') sides.push({ text: item, from: at, count: 1 });
-    else {
-      const side = sides[sides.length - 1];
-      side.text += `${mark}${item}`;
-      side.count += 1;
-    }
+    if (groups.length && mark === '=') groups[groups.length - 1].push(at);
+    else groups.push([at]);
   });
-  if (sides.length < 2) return { items };
-  // 쪽이 다 한 칸이면(`{a=b}` · `{(a,b)==c}`) 서로 같은 것이라 상대 틀의 모든 차례와 짝짓는다.
-  // 한 쪽이 여러 칸이면(`{a-b=c}`) 그 칸들은 서로 관련 없는 값이라 한 값으로 묶어 쓸 수 없다 — 차례끼리만 짝짓는다
-  return sides.every(side => side.count === 1) ? { items, cross: true } : { items };
+  const options = items.map(() => [] as string[]);
+  groups.forEach(group => {
+    const texts = [...new Set(group.map(at => items[at]))];
+    group.forEach(at => { options[at] = texts; });
+  });
+  return { items, options };
 };
 
 /**
@@ -228,8 +223,8 @@ const readBrace = (inner: string, label = false, templateLine = false): Part => 
   }
   const named = /^\s*\[([^\]]+)\]\s*(.*)$/.exec(inner);
   if (named && named[2].trim()) return { kind: 'list', ...readSides(named[2]), name: named[1].trim() };
-  const { items, cross } = readSides(inner);
-  if (items.length > 1) return { kind: 'list', items, cross };
+  const { items, options } = readSides(inner);
+  if (items.length > 1) return { kind: 'list', items, options };
   const name = (named ? named[1] : inner).trim();
   return name ? { kind: 'ref', name } : { kind: 'keep' };
 };
@@ -263,38 +258,36 @@ export const expandBraceTemplates = (memo: string, resolve?: (name: string) => s
     const parts = braces.map(brace => readBrace(brace.inner, brace.label, true));
     const defined = new Map<string, string[]>();
     parts.forEach(part => { if (part.kind === 'list' && part.name) defined.set(norm(part.name), part.items); });
-    const lists: (string[] | null)[] = parts.map(part => {
-      if (part.kind === 'list') return part.items;
+    // 차례마다 그 자리에 올 수 있는 값들(`=`로 이어 쓴 칸들은 서로 같은 것이라 그 칸들이 쓴 차례 어디에나 온다)
+    const lists: (string[][] | null)[] = parts.map(part => {
+      if (part.kind === 'list') return part.options;
       if (part.kind === 'ref') {
         const own = defined.get(norm(part.name));
-        if (own) return own;
+        if (own) return own.map(item => [item]);
         if (part.label) return null;
         const members = resolve?.(part.name) ?? [];
-        return members.length ? members : null;
+        return members.length ? members.map(member => [member]) : null;
       }
       return null;
     });
-    // 쪽이 다 한 칸인 `=` 틀 칸은 차례를 맞추지 않고 상대 틀의 모든 차례와 짝짓는다(차례 수도 그 칸에서 세지 않는다)
-    const crossed = parts.map(part => (part.kind === 'list' && part.cross ? part.items : null));
-    const lengths = lists.filter((list, index): list is string[] => list !== null && !crossed[index]).map(list => list.length);
-    const count = lengths.length ? Math.min(...lengths) : Math.min(...crossed.filter((items): items is string[] => items !== null).map(items => items.length));
+    const lengths = lists.filter((list): list is string[][] => list !== null).map(list => list.length);
+    const count = Math.min(...lengths);
     if (!(count > 0)) return [line];
     const definitions = defineSets ? parts.flatMap(part => (part.kind === 'list' && part.name ? part.items.map(item => `[${part.name}] ${item}`) : [])) : [];
     const write = (at: number, picks: Map<number, string>) => {
       let out = '';
       let from = 0;
       braces.forEach((brace, index) => {
-        const list = lists[index];
-        const chosen = picks.has(index) ? picks.get(index) : list && !crossed[index] ? list[at] : undefined;
-        out += line.slice(from, brace.start) + (chosen ?? line.slice(brace.start, brace.end));
+        out += line.slice(from, brace.start) + (picks.get(index) ?? line.slice(brace.start, brace.end));
         from = brace.end;
       });
       return out + line.slice(from);
     };
-    const picks = crossed.reduce<Map<number, string>[]>((rows, items, index) => (items
-      ? rows.flatMap(row => items.map(item => new Map([...row, [index, item]] as [number, string][])))
-      : rows), [new Map<number, string>()]);
-    const rows = picks.flatMap(pick => Array.from({ length: count }, (_, at) => write(at, pick)));
+    const rows = Array.from({ length: count }, (_, at) => at).flatMap(at => lists
+      .reduce<Map<number, string>[]>((picked, list, index) => (list
+        ? picked.flatMap(row => list[at].map(text => new Map([...row, [index, text]] as [number, string][])))
+        : picked), [new Map<number, string>()])
+      .map(picks => write(at, picks)));
     return [...new Set([...definitions, ...rows])];
   }).join('\n');
 };
