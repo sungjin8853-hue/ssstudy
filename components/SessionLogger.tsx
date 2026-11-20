@@ -1355,11 +1355,17 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     : activeSubjectStage
     ? Math.min(activeSubjectStage.endPage, progressBasePages + timeTargetPages)
     : progressBasePages + timeTargetPages;
-  const goalEndPage = (stageChapters.length > 0 && pomodoroPageTarget
-    ? endPageForSolved(stageChapters, progressBasePages, pomodoroPageTarget)
-    : getMeasurementGoalEndPage(progressBasePages, pomodoroPageTarget)) || progressBasePages;
+  // 20일 "측정중 학습 진척도 표시좀 일관성있게, 현재 풀어야할 페이지를 기준으로 맞추어줘":
+  // 진척도의 끝은 이번 뽀모도로가 아니라 지금 풀어야 할 몫(오늘 할 일 칸의 "오늘 권장"과 같은 값)의 끝이다.
+  // 그 값이 없을 때만(복습 · 오늘 몫이 없는 과목) 전처럼 뽀모도로 몫으로 센다
+  const todayTargetPages = activeReviewRun ? 0
+    : todayStudyOrder.find(item => item.subject.id === selectedSubject?.id)?.remainingDayPages || 0;
+  const progressPageTarget = todayTargetPages > 0 ? todayTargetPages : pomodoroPageTarget;
+  const goalEndPage = (stageChapters.length > 0 && progressPageTarget
+    ? endPageForSolved(stageChapters, progressBasePages, progressPageTarget)
+    : getMeasurementGoalEndPage(progressBasePages, progressPageTarget)) || progressBasePages;
   const progressTargetPages = activeSubjectStage ? Math.min(activeSubjectStage.endPage, goalEndPage) : goalEndPage;
-  // 단원이 있으면 진행 칸을 단원 기준으로 나눈다: 지금 하는 곳(현재 페이지 / 단원 끝)과, 이번 뽀모도로가 단원 끝을 넘을 때만 다음 단원(시작 / 이번 뽀모도로 끝 페이지)
+  // 단원이 있으면 진행 칸을 단원 기준으로 나눈다: 지금 하는 곳(현재 페이지 / 단원 끝)과, 지금 풀어야 할 몫이 단원 끝을 넘을 때만 다음 단원(시작 / 그 몫의 끝 페이지)
   const progressSplit = stageChapters.length > 0 && !activeReviewRun && averageTimePerPage > 0
     ? splitByChapter(stageChapters, progressCurrentPages, progressTargetPages) : null;
   const expectedReadAmount = Math.min(remainingSubjectPages, Math.max(1, timeTargetPages));

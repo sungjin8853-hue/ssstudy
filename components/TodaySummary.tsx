@@ -556,7 +556,7 @@ const PlanStartDialog: React.FC<{ subject: Subject; value: string; onSave: (date
       onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="flex w-full max-w-sm flex-col gap-3 rounded-t-3xl bg-white px-5 py-5 shadow-2xl sm:rounded-3xl">
         <h3 className="text-lg font-black text-slate-900">{subject.name} · 시작 날짜</h3>
-        <p className="text-[13px] font-bold text-slate-500">이 날부터 계획을 셉니다. 목표 완료 날짜({subject.targetDate})까지 남은 날로 하루 권장량이 다시 계산돼요.</p>
+        <p className="text-[13px] font-bold text-slate-500">이 날부터 계획을 셉니다. 이 날부터 오늘까지 밀린 몫이 오늘 할 일에 들어와요(목표 {subject.targetDate}).</p>
         <input type="date" value={date} max={subject.targetDate || undefined} data-testid="plan-start-input"
           onChange={event => setDate(event.target.value)}
           className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-base font-bold outline-none focus:ring-4 focus:ring-indigo-500/10" />
@@ -1269,6 +1269,8 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
 
       {editingStart && onUpdateSubjects && detailData && !detailIsReview && (
         <PlanStartDialog subject={detailData.subject} value={planStartKey}
+          // 요일별 양은 그대로 둔다: 여기서 다시 나누면 계획이 바뀐 것으로 보여 시작 날짜가 오늘로 되돌아간다(withPlanRestart).
+          // 시작 날짜는 이월 · 누적을 세는 첫날이라 날짜만 바꿔도 오늘 몫이 달라진다
           onSave={date => { onUpdateSubjects([{ ...detailData.subject, planResetDate: date }]); setEditingStart(false); }}
           onClose={() => setEditingStart(false)} />
       )}

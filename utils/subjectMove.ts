@@ -152,6 +152,8 @@ export const planSubjectMove = (
     });
     const dated: Subject = { ...moving, planResetDate: startDate, ...(dates.targetDate ? { targetDate: dates.targetDate } : {}) };
     if (target.kind === 'followUp') {
+      // 20일 버그: 제 후행과목을 가진 과목을 한 단계로 바꾸면 그 단계들이 사라진다 — 먼저 그 단계들을 옮기게 막는다
+      if ((moving.followUpSubjects || []).length) return null;
       const owner = ownerOf(target.ownerId);
       if (!owner) return null;
       put({ ...owner, followUpSubjects: [...(owner.followUpSubjects || []), asFollowUp(dated)] });

@@ -871,7 +871,9 @@ const App: React.FC = () => {
   const handleChangeLogFeedback = (logId: string, grade: SubjectGrade) => {
     const nowMs = Date.now();
     setLogs(prev => prev.map(log => (log.id !== logId ? log : {
-      ...log, feedbackGrade: grade, reviewFsrs: gradeSubjectCard(log, grade, nowMs),
+      // 20일 버그: 이미 매긴 기록을 고칠 때 지금 기억 위에 또 평가하면 누를 때마다 간격이 늘어났다.
+      // 첫 학습의 평가는 그 기억의 첫 평가라 빈 기억에서 다시 매긴다 — 여러 번 눌러도 마지막으로 고른 것과 같다
+      ...log, feedbackGrade: grade, reviewFsrs: gradeSubjectCard({ ...log, reviewFsrs: undefined }, grade, nowMs),
       ...(log.autoReviewChosenGrade ? { autoReviewChosenGrade: grade } : {}),
     })));
   };

@@ -12728,3 +12728,29 @@ test('19일: 복습과목 · 후행과목의 위치 변경과 유형 변환 — 
   assert.equal(planSubjectMove(subjects, { kind: 'subject', id: 'A' }, { kind: 'review', ownerId: 'R' }, {}, '2026-11-19'), null);
   assert.equal(planSubjectMove(subjects, { kind: 'stage', ownerId: 'A', stageId: 'F' }, { kind: 'followUp', ownerId: 'A' }, {}, '2026-11-19'), null);
 });
+
+test('20일 버그 점검: 첫 학습 피드백을 여러 번 고쳐도 간격이 쌓이지 않고, 제 후행과목을 가진 과목은 한 단계로 바꾸지 않는다', () => {
+  const { gradeSubjectCard } = loadSource('utils/subjectFeedback.ts');
+  const { planSubjectMove } = loadSource('utils/subjectMove.ts');
+  const now = Date.parse('2026-11-20T10:00:00Z');
+  const log = { id: 'l', subjectId: 'A', pagesRead: 5, timeSpentMinutes: 30, timestamp: new Date(now).toISOString() };
+  // 빈 기억에서 매기면 몇 번을 고쳐도 마지막에 고른 것과 같다
+  const once = gradeSubjectCard({ ...log, reviewFsrs: undefined }, 'good', now);
+  const graded = { ...log, reviewFsrs: gradeSubjectCard({ ...log, reviewFsrs: undefined }, 'hard', now) };
+  const again = gradeSubjectCard({ ...graded, reviewFsrs: undefined }, 'good', now);
+  assert.deepEqual(again, once);
+  // 지금 기억 위에 또 매기면 달라진다(그래서 고칠 때는 빈 기억에서 매긴다)
+  assert.notDeepEqual(gradeSubjectCard(graded, 'good', now), once);
+
+  const base = (id, extra = {}) => ({ id, name: id, totalPages: 100, completedPages: 10, targetDate: '2026-12-31', startPage: 1, ...extra });
+  const subjects = [
+    base('A', { reviewSubjectIds: ['R'] }),
+    base('R', { followUpSubjects: [{ id: 'R2', name: 'R 2회독', startPage: 1, endPage: 100, completedPage: 0, reviewSubjectIds: [] }] }),
+    base('B')
+  ];
+  // R은 제 후행과목(R2)을 가지고 있어 한 단계로 바꾸면 R2가 사라진다 — 막는다
+  assert.equal(planSubjectMove(subjects, { kind: 'subject', id: 'R' }, { kind: 'followUp', ownerId: 'A' }, {}, '2026-11-20'), null);
+  // 후행과목이 없으면 전처럼 바뀐다
+  const plain = [base('A', { reviewSubjectIds: ['R'] }), base('R'), base('B')];
+  assert.equal(planSubjectMove(plain, { kind: 'subject', id: 'R' }, { kind: 'followUp', ownerId: 'A' }, {}, '2026-11-20').removedSubjectId, 'R');
+});
