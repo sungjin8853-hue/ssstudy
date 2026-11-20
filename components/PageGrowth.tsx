@@ -84,7 +84,8 @@ export const SubjectPlaceSettings: React.FC<{
           </select>
         ) : <p className="mb-2 text-xs font-bold text-slate-500">옮길 과목이 없어요</p>
       )}
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+      {/* 20일 "일반으로 옮길때만 저 끝날짜 시작 날짜가 떠야지": 홀로 선 과목만 제 날짜와 계획을 가진다 */}
+      {mode === 'standalone' && <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
         <label className="flex flex-col gap-0.5">
           <span className="ml-0.5 text-xs font-bold text-slate-500">분/쪽</span>
           <input type="number" min="0" step="0.5" value={perPage} data-testid="place-minutes" onChange={event => setPerPage(event.target.value)} className={field} />
@@ -105,13 +106,14 @@ export const SubjectPlaceSettings: React.FC<{
             {startOptions.map(item => <option key={item.id} value={item.date}>{item.name} {item.date.slice(5).replace('-', '/')}{hours(item.minutes)}</option>)}
           </select>
         </div>
-      </div>
+      </div>}
       <button type="button" data-testid="place-apply" disabled={mode === 'review' && !where}
         onClick={event => {
           event.stopPropagation();
+          const dates = mode === 'standalone' ? { startDate: start, targetDate: end, minutesPerPage: perPageValue } : { startDate: '', targetDate: '', minutesPerPage: 0 };
           onApply(mode === 'review'
-            ? { mode: stageId === '후행' ? 'followUp' : 'review', ownerId, ...(stageId === '후행' ? {} : { stageId }), startDate: start, targetDate: end, minutesPerPage: perPageValue }
-            : { mode, startDate: start, targetDate: end, minutesPerPage: perPageValue });
+            ? { mode: stageId === '후행' ? 'followUp' : 'review', ownerId, ...(stageId === '후행' ? {} : { stageId }), ...dates }
+            : { mode, ...dates });
         }}
         className="mt-2 h-10 rounded-lg bg-indigo-600 px-5 text-[14px] font-black text-white disabled:opacity-40">옮기기</button>
     </div>
