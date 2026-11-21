@@ -26,6 +26,7 @@ import {
   getActiveSubjectStage,
   getAllSubjectReviewIds,
   getSubjectCompletedPageCount,
+  getSubjectPlanStartDateKey,
   getSubjectRemainingPageCount,
   getSubjectStages,
   getStageChapters,
@@ -476,9 +477,20 @@ export const Analytics: React.FC<Props> = ({
     const list = subjects.map(subject => changed.get(subject.id) ?? subject).filter(subject => subject.id !== plan.removedSubjectId);
     const withAdded = plan.addedSubject ? [...list, plan.addedSubject] : list;
     const movedId = mover.kind === 'subject' ? mover.id : mover.stageId;
-    // 그날의 하루 평균이므로 한 주 계획도 그날 기준으로 센다(그때 이미 끝나는 과목은 빠진다)
+    // 그날의 하루 평균이므로 한 주 계획도 그날 기준으로 센다
     const from = startDate ? parseStudyDate(startDate) : new Date();
-    const prepared = withAdded.map(subject => {
+    const fromKey = startDate || today;
+    /**
+     * 21일: 그때 실제로 돌아가는 과목만 센다 — 시작 날짜가 그날보다 뒤인 과목(아직 시작 전)과
+     * 마감이 그날보다 앞인 과목(그때는 끝나 있을 과목)은 빼야 그날의 하루 평균이 맞다.
+     * 옮기는 과목 자신은 고른 날짜로 다시 놓이므로 늘 센다.
+     */
+    const running = withAdded.filter(subject => {
+      if (subject.id === movedId) return true;
+      if (subject.targetDate && subject.targetDate < fromKey) return false;
+      return getSubjectPlanStartDateKey(subject, logs, fromKey) <= fromKey;
+    });
+    const prepared = running.map(subject => {
       if (subject.id !== movedId) return subject;
       const dated = { ...subject, initialAverageTimePerPage: minutesPerPage, planResetDate: startDate || today, targetDate };
       // 고른 시작 · 끝 날짜 사이로 이 과목의 요일별 양을 다시 나눈다(저장돼 있던 예전 계획을 쓰지 않도록)

@@ -98,9 +98,16 @@ export const fsrsReview = (card: FsrsCard | null | undefined, rating: FsrsRating
   };
 };
 
-/** 카드가 다음에 복습될 때까지의 간격(ms). 너무 짧지 않게 1분 아래로는 내리지 않는다. */
+/** 복습 간격을 저장하는 단위: 1시간 */
+export const FSRS_INTERVAL_UNIT_MS = 3600000;
+
+/**
+ * 카드가 다음에 복습될 때까지의 간격(ms).
+ * 21일: 1시간 단위로 끊어 센다 — 가장 가까운 시간으로 맞추고, 1시간 아래로는 내리지 않는다.
+ */
 export const fsrsIntervalMs = (card: FsrsMemory, retention = FSRS_DEFAULT_RETENTION, weights: readonly number[] = FSRS_DEFAULT_WEIGHTS) => (
-  Math.max(60000, Math.round(fsrsIntervalDays(card.stability, retention, weights) * DAY_MS))
+  Math.max(FSRS_INTERVAL_UNIT_MS,
+    Math.round(fsrsIntervalDays(card.stability, retention, weights) * DAY_MS / FSRS_INTERVAL_UNIT_MS) * FSRS_INTERVAL_UNIT_MS)
 );
 
 /** 지금 이 카드를 푼다면 평가마다 다음 복습이 언제가 되는지(버튼에 보여 줄 값) */

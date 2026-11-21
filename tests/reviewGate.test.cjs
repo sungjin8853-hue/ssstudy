@@ -5159,7 +5159,8 @@ test('a hand-set weekday plan survives edits that do not touch study days or the
 test('changing study days or the deadline rebuilds the weekday plan so the pages still add up to what remains, and short deadlines are not hand-editable', () => {
   const { buildWeekPlan, withFreshWeekPlan, formatDuration, formatDurationShort } = loadSource('utils/weekPlan.ts');
   const subject = weekSubjects()[0];
-  const fresh = withFreshWeekPlan({ ...subject, scheduledWeekdays: [1, 3, 5] });
+  // 마감이 지나면 남은 양을 하루에 몰아넣으므로(앱 규칙) 이 시험은 날짜와 무관하게 먼 마감으로 본다
+  const fresh = withFreshWeekPlan({ ...subject, targetDate: '2027-06-30', scheduledWeekdays: [1, 3, 5] });
   const planned = Object.values(fresh.scheduledWeekdayPages || {}).reduce((sum, value) => sum + value, 0);
   assert.ok(planned > 0);
   assert.ok(Object.keys(fresh.scheduledWeekdayPages || {}).every(day => [1, 3, 5].includes(Number(day)) || !fresh.scheduledWeekdayPages[day]));
@@ -7645,6 +7646,35 @@ test('FSRS-6 matches the reference implementation (ts-fsrs 5.4) for first review
   const preview = fsrs.fsrsPreviewIntervals(first(3), 3 * day);
   assert.ok(preview[1] < preview[2] && preview[2] < preview[3] && preview[3] < preview[4], 'harder grades come back sooner');
 });
+
+test('21일: 복습 간격은 1시간 단위로 끊어 저장한다 — 피드백 뒤 나오는 시간도, 버튼에 보여 주는 값도 같은 단위다', () => {
+  const fsrs = loadSource('utils/fsrs.ts');
+  const practice = loadSource('utils/reviewPractice.ts');
+  const hour = 3600000;
+  assert.equal(fsrs.FSRS_INTERVAL_UNIT_MS, hour);
+  const nowMs = Date.UTC(2026, 10, 21, 2, 37, 19);
+  // 피드백 네 가지 모두: 1시간의 배수이며, 시간 단위로 반올림한 값과 같다
+  [1, 2, 3, 4].forEach(rating => {
+    const card = fsrs.fsrsReview(null, rating, nowMs);
+    const stored = fsrs.fsrsIntervalMs(card);
+    assert.equal(stored % hour, 0, `평가 ${rating}은 1시간 단위`);
+    const raw = fsrs.fsrsIntervalDays(card.stability) * fsrs.DAY_MS;
+    assert.equal(stored, Math.max(hour, Math.round(raw / hour) * hour), `평가 ${rating}은 가장 가까운 시간`);
+  });
+  // 버튼에 보여 주는 미리보기도 저장되는 값과 같다
+  const preview = fsrs.fsrsPreviewIntervals(null, nowMs);
+  [1, 2, 3, 4].forEach(rating => assert.equal(preview[rating], fsrs.fsrsIntervalMs(fsrs.fsrsReview(null, rating, nowMs))));
+  // 아주 짧은 간격도 1시간 아래로는 내려가지 않는다
+  assert.equal(fsrs.fsrsIntervalMs({ stability: 0.001, difficulty: 5 }), hour);
+  // 문제마다 저장되는 값(intervalMs)과 다음 복습 때도 1시간 단위다
+  const performance = practice.calculateQuestionPerformance(undefined, 0, 1, { grades: ['good'], nowMs });
+  assert.equal(performance.intervalMs % hour, 0);
+  const next = practice.calculateQuestionPerformance({ ...performance, nextReviewDate: new Date(nowMs).toISOString() }, 0, 1,
+    { grades: ['good'], nowMs: nowMs + performance.intervalMs });
+  assert.equal(next.intervalMs % hour, 0);
+  assert.ok(next.intervalMs > performance.intervalMs);
+});
+
 
 test('Enter between ( and ) after a [set] opens a read-only members window; a trailing "> " turns the line into an open toggle', () => {
   const { buildNoteSetIndex, setContents, setMembersTrigger } = loadSource('utils/noteSets.ts');
