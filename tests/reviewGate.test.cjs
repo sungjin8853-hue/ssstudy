@@ -1770,6 +1770,55 @@ test('difficulty never rises by itself: the learner opens larger recall by choos
   assert.deepEqual(questionsFor('x:y // ' + memo).filter(q => q.prompt === 'a').map(q => q.key), questions.filter(q => q.prompt === 'a').map(q => q.key));
 });
 
+test('21일 플래시카드: 표시한 정오답만 반영하고 다음 회차를 열지 않으며, 연속 오답 횟수를 센다', () => {
+  const catalog = [1, 2, 3, 4].map(i => ({ id: String(i), logId: 'a', level: 1, priority: 1 }));
+  let state = practice.startReviewPractice(catalog);
+  // 테스트에서 1·3은 맞히고 2·4는 틀린다(2회차가 열린다)
+  while (state.queue.length && state.round === 1) {
+    state = practice.gradeReviewPractice(state, catalog, ['2', '4'].includes(state.queue[0]) ? 'again' : 'good');
+  }
+  assert.equal(state.round, 2);
+  assert.deepEqual(Object.entries(state.firstCorrect).filter(([, ok]) => !ok).map(([id]) => id).sort(), ['2', '4']);
+
+  // "테스트 넘기고 플래시카드로": 첫 테스트 오답(2·4)은 오답으로 미리 체크돼 있다
+  const preset = Object.fromEntries(catalog.map(q => q.id).filter(id => state.firstCorrect[id] === false).map(id => [id, 'wrong']));
+  assert.deepEqual(preset, { 2: 'wrong', 4: 'wrong' });
+
+  // 2는 정답으로 고쳐 체크하고, 4는 오답 그대로 두고, 1은 정답으로 체크한다(3은 체크하지 않는다)
+  const after = practice.applyFlashcardMarks(state, catalog, { ...preset, 2: 'right', 1: 'right' });
+  assert.deepEqual(after.queue, [], '플래시카드가 끝나면 다음 회차를 열지 않는다');
+  assert.deepEqual(after.roundWrong, []);
+  assert.deepEqual(after.grades['2'], ['again', 'good'], '테스트 등급 뒤에 플래시카드 표시가 이어 쌓인다');
+  assert.deepEqual(after.grades['4'], ['again', 'again']);
+  assert.deepEqual(after.grades['1'], ['good', 'good']);
+  assert.deepEqual(after.grades['3'], ['good'], '체크하지 않은 문제는 그대로다');
+  assert.equal(after.wrongCounts['4'], 2);
+  assert.equal(after.firstCorrect['1'], true, '첫 시도 결과는 플래시카드가 덮어쓰지 않는다');
+  assert.equal(after.firstCorrect['4'], false);
+  assert.ok(['1', '2', '3', '4'].every(id => after.completed.includes(id)), '플래시카드까지 끝나면 이번 묶음은 끝이다');
+
+  // 연속 오답 횟수: 등급 줄에서 'again'이 잇따른 가장 긴 길이
+  assert.equal(practice.wrongStreakOf(['good', 'good']), 0);
+  assert.equal(practice.wrongStreakOf(['again', 'good', 'again']), 1);
+  assert.equal(practice.wrongStreakOf(['again', 'again', 'good']), 2);
+  assert.equal(practice.wrongStreakOf(['again', 'good', 'again', 'again', 'again']), 3);
+  const performance = practice.calculateQuestionPerformance(undefined, 3, 4, { grades: ['again', 'again', 'again', 'good'], nowMs: Date.UTC(2026, 10, 21, 5) });
+  assert.equal(performance.wrongStreak, 3);
+  // 연속 오답은 FSRS-6에 오답마다 겹쳐 반영된다: 많이 틀릴수록 간격이 짧아진다
+  const once = practice.calculateQuestionPerformance(undefined, 1, 2, { grades: ['again', 'good'], nowMs: Date.UTC(2026, 10, 21, 5) });
+  assert.ok(performance.intervalMs < once.intervalMs);
+  assert.equal(practice.calculateQuestionPerformance(undefined, 0, 1, { grades: ['good'], nowMs: Date.UTC(2026, 10, 21, 5) }).wrongStreak, undefined);
+
+  // 21일: 어느 카드를 가장 먼저 보여 주는가 — 테스트를 넘겨 왔으면 보고 있던 문제, 테스트가 끝나 왔으면 첫 오답. 오답 가기는 첫 · 마지막만
+  const logger = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'SessionLogger.tsx'), 'utf8');
+  assert.ok(logger.includes('const currentId = (from && ids.includes(from) ? from : wrong[0]) ?? ids[0];'), '넘겨 온 문제 → 그 문제부터, 아니면 첫 오답부터');
+  assert.ok(logger.includes('onSkipToFlash={() => startGateFlash(gateCurrentId)}'), '"테스트 넘기고 플래시카드로"는 보고 있던 문제를 넘긴다');
+  assert.ok(logger.includes("[{ key: 'first', label: '첫 오답' }, { key: 'last', label: '마지막 오답' }]"), '오답 가기 단추는 첫 · 마지막 둘뿐이다');
+  const screen = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'ReviewPracticeScreen.tsx'), 'utf8');
+  assert.ok(screen.includes('data-testid="flash-done"') && screen.includes('data-testid="flash-jumps"'), '플래시카드에는 끝내기와 오답 가기가 있다');
+  assert.ok(!screen.includes('data-flash-deck'), '회차별 묶음 고르기는 만들지 않는다');
+});
+
 test('practice completes 1,2,3,4 before retrying only 2,4 and then only 4', () => {
   const catalog = [1, 2, 3, 4].map(i => ({ id: String(i), logId: 'a', level: 1, priority: 1 }));
   let state = practice.startReviewPractice(catalog);

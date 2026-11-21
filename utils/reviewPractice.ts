@@ -161,12 +161,52 @@ export const gradeReviewPractice = (previous: ReviewPractice, catalog: PracticeQ
   }, catalog);
 };
 
+/**
+ * 21일 플래시카드 단계: 카드마다 표시한 정오답을 그대로 반영하고 풀이를 끝낸다.
+ * 테스트와 달리 오답을 다음 회차로 넘기지 않는다(플래시카드가 마지막 단계다). 표시하지 않은 문제는 그대로 둔다.
+ */
+export const applyFlashcardMarks = (
+  previous: ReviewPractice, catalog: PracticeQuestion[], marks: Record<string, 'wrong' | 'right'>
+): ReviewPractice => {
+  const known = new Set(catalog.map(q => q.id));
+  const ids = Object.keys(marks).filter(id => known.has(id));
+  let next = previous;
+  for (const id of ids) {
+    const grade: ReviewGrade = marks[id] === 'right' ? 'good' : 'again';
+    const correct = grade !== 'again';
+    next = {
+      ...next,
+      attempts: { ...next.attempts, [id]: (next.attempts[id] || 0) + 1 },
+      firstCorrect: id in next.firstCorrect ? next.firstCorrect : { ...next.firstCorrect, [id]: correct },
+      wrongCounts: { ...next.wrongCounts, [id]: (next.wrongCounts[id] || 0) + (correct ? 0 : 1) },
+      grades: { ...next.grades, [id]: [...(next.grades[id] || []), grade] }
+    };
+  }
+  // 플래시카드까지 끝나면 이번 풀이는 끝이다: 남은 문제도 모두 푼 것으로 두고 다음 회차를 열지 않는다
+  const completed = Array.from(new Set([...next.completed, ...ids]));
+  return { ...next, completed, queue: [], roundWrong: [], answered: [], retryPool: null,
+    roundSize: completed.length, roundAnswered: completed.length };
+};
+
+/** 등급 줄에서 'again'이 잇따른 가장 긴 길이 — 이번 테스트에서 연속으로 틀린 횟수 */
+export const wrongStreakOf = (grades: readonly ReviewGrade[] = []) => {
+  let best = 0;
+  let run = 0;
+  for (const grade of grades) {
+    run = grade === 'again' ? run + 1 : 0;
+    if (run > best) best = run;
+  }
+  return best;
+};
+
 export interface QuestionPerformance {
   reviewStep: number;
   wrongCount: number;
   attempts: number;
   intervalMs: number;
   masked?: boolean;
+  /** 이번 풀이에서 연속으로 틀린 횟수(가장 긴 연속). FSRS-6에는 오답마다 겹쳐 반영되고, 이 값은 기록으로 남는다 */
+  wrongStreak?: number;
   fsrs?: FsrsCard;
   freedom?: number;
   responseMs?: number[];
@@ -236,6 +276,8 @@ const calculateGradedPerformance = (
     wrongCount: Math.max(0, previous?.wrongCount || 0) + mistakes,
     attempts: (previous?.attempts || 0) + attempts,
     intervalMs, masked: Boolean(previous?.masked || intervalMs >= REVIEW_MASK_INTERVAL_MS),
+    // 21일: 연속 오답 횟수를 센다(간격은 오답마다 FSRS-6의 같은 날 공식이 겹쳐 줄인다)
+    ...(wrongStreakOf(grades) > 0 ? { wrongStreak: wrongStreakOf(grades) } : {}),
     fsrs: card!, freedom, ...(responseMs ? { responseMs } : {})
   };
 };

@@ -78,6 +78,27 @@ interface Props {
     onHide: () => void;
     onMark: (right: boolean) => void;
   };
+  /**
+   * 21일 플래시카드 단계: 테스트를 다 맞혔거나 "테스트 넘기고 플래시카드로"를 눌렀을 때.
+   * 카드처럼 앞뒤로 오가며 정답을 다시 가릴 수 있고, 카드마다 정답 · 오답을 체크한다(첫 테스트 오답은 미리 오답으로 체크돼 있다).
+   * 재시험과 달리 다 체크해도 저절로 넘어가지 않고, 아래 버튼으로 끝낸다.
+   */
+  flash?: {
+    position: number;
+    total: number;
+    marked: number;
+    mark?: 'wrong' | 'right';
+    wrongMarked: number;
+    /** 21일: 오답으로 건너뛰기 — 첫 오답 · 마지막 오답 */
+    jumps: { key: string; label: string; active: boolean; onSelect: () => void }[];
+    onPrev: () => void;
+    onNext: () => void;
+    onHide: () => void;
+    onMark: (right: boolean) => void;
+    onDone: () => void;
+  };
+  /** 테스트를 넘기고 플래시카드로 가는 버튼(테스트 중에만 보인다) */
+  onSkipToFlash?: () => void;
   wrongIntervalLabel: string;
   correctIntervalLabel: string;
   /** 평가마다 다음 복습까지의 간격(FSRS-6). 없으면 wrong/correctIntervalLabel을 쓴다. */
@@ -147,6 +168,28 @@ const RetestControls: React.FC<{ retest: NonNullable<Props['retest']>; revealed:
   </div>
 );
 
+/** 플래시카드 단계 조작: 재시험과 같은 카드 조작에 "플래시카드 끝내기"를 더한다 */
+const FlashControls: React.FC<{ flash: NonNullable<Props['flash']>; revealed: boolean; onReveal: () => void }> = ({ flash, revealed, onReveal }) => (
+  <div data-testid="flash-controls" className="flex shrink-0 flex-col gap-3">
+    {flash.jumps.length > 0 && (
+      <div data-testid="flash-jumps" className="flex flex-wrap items-center gap-2">
+        <span className="text-[13px] font-bold text-slate-600">오답으로 가기</span>
+        {flash.jumps.map(jump => (
+          <button key={jump.key} type="button" data-flash-jump={jump.key} aria-pressed={jump.active} onClick={jump.onSelect}
+            className={`h-10 rounded-xl border-2 px-3.5 text-[13px] font-black ${jump.active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50'}`}>
+            {jump.label}
+          </button>
+        ))}
+      </div>
+    )}
+    <RetestControls retest={flash} revealed={revealed} onReveal={onReveal} />
+    <button type="button" data-testid="flash-done" onClick={flash.onDone}
+      className="h-14 rounded-2xl bg-indigo-600 text-[17px] font-black text-white shadow-[0_4px_0_#3730A3] hover:bg-indigo-700">
+      플래시카드 끝내기{flash.marked > 0 ? ` · 체크 ${flash.marked}/${flash.total}` : ''}
+    </button>
+  </div>
+);
+
 export const ReviewPracticeScreen: React.FC<Props> = props => {
   const rate = props.firstTryTotal > 0 ? Math.round(props.firstTryCorrect / props.firstTryTotal * 100) : 0;
   const rounds = Array.from({ length: Math.max(1, props.round) }, (_, index) => index + 1);
@@ -192,7 +235,12 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
       <main className="flex min-h-0 flex-1 flex-col gap-5 px-6 pb-6 pt-5 md:px-8 lg:flex-row lg:gap-6">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2">
-            {props.hasQuestions && !props.isComplete && (
+            {props.hasQuestions && props.flash && (
+              <span data-testid="flash-chip" className="rounded-full border-2 border-indigo-600 bg-indigo-600 px-4 py-2 text-sm font-black text-white">
+                플래시카드 · {props.flash.total}장{props.flash.wrongMarked > 0 ? ` · 첫 테스트 오답 ${props.flash.wrongMarked}` : ''}
+              </span>
+            )}
+            {props.hasQuestions && !props.isComplete && !props.flash && (
               <ol aria-label="라운드" className="m-0 flex list-none flex-wrap items-center gap-2 p-0">
                 {rounds.map(round => {
                   const active = round === props.round;
@@ -212,14 +260,18 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             </div>}
             <button type="button" onClick={props.onCondenseFirst}
               className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-900 hover:bg-amber-100">앞부분 축약</button>
+            {props.onSkipToFlash && !props.flash && !props.isComplete && props.hasQuestions && (
+              <button type="button" data-testid="skip-to-flash" onClick={props.onSkipToFlash}
+                className="h-11 rounded-xl border-2 border-indigo-300 bg-white px-4 text-sm font-black text-indigo-800 hover:bg-indigo-50">테스트 넘기고 플래시카드로</button>
+            )}
           </div>
 
-          {props.hasCurrentQuestion && !props.isComplete && (
+          {props.hasCurrentQuestion && (!props.isComplete || props.flash) && (
             <section ref={props.cardRef} aria-label="문제" className="flex min-h-[26rem] flex-[1_0_auto] scroll-mt-6 flex-col gap-5 rounded-2xl border border-amber-200 bg-white px-6 py-6 md:px-8">
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="rounded-md bg-amber-100 px-3 py-1 text-[13px] font-black text-amber-900">{props.questionRange}</span>
                 {props.rangeNote && <span data-testid="review-range-note" className="rounded-md border border-amber-300 px-3 py-1 text-[13px] font-bold text-amber-900">{props.rangeNote}</span>}
-                <span className="text-sm font-medium text-slate-700">정리노트 문제</span>
+                <span className="text-sm font-medium text-slate-700">{props.flash ? '플래시카드 · 정답을 떠올린 뒤 정답 · 오답을 체크하세요' : '정리노트 문제'}</span>
               </div>
               <div className="flex flex-1 items-center justify-center whitespace-pre-wrap text-center">{props.question}</div>
               {props.questionTools}
@@ -228,7 +280,9 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
                   머릿속으로 먼저 떠올려 보세요
                 </div>
               )}
-              {props.retest ? (
+              {props.flash ? (
+                <FlashControls flash={props.flash} revealed={props.revealed} onReveal={props.onReveal} />
+              ) : props.retest ? (
                 <RetestControls retest={props.retest} revealed={props.revealed} onReveal={props.onReveal} />
               ) : !props.revealed ? (
                 <button type="button" onClick={props.onReveal}
@@ -257,7 +311,7 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             </section>
           )}
 
-          {props.isComplete && props.hasQuestions && (
+          {props.isComplete && props.hasQuestions && !props.flash && (
             <section aria-labelledby="gate-done-title" className="flex flex-col gap-5 rounded-2xl border border-amber-200 bg-white px-6 py-6 md:px-8">
               <div className="flex items-center gap-4">
                 <span aria-hidden="true" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-800">
@@ -276,7 +330,7 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             </section>
           )}
 
-          {props.isComplete && props.feedback}
+          {props.isComplete && !props.flash && props.feedback}
 
           <button type="button" onClick={props.onFinish} disabled={!props.canFinish}
             className="h-[60px] shrink-0 rounded-2xl bg-indigo-600 px-8 text-[17px] font-black text-white shadow-[0_4px_0_#3730A3] enabled:hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-600 disabled:shadow-none">
