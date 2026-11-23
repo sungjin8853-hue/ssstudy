@@ -1780,10 +1780,42 @@ test('23일: 재시험도 난도 4개로 매기고, 난도 버튼은 없애고, 
   // 자동 복습 넣기: 과목 만들기와 학습 설정 수정에서 켠다
   const planner = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'SubjectPlanner.tsx'), 'utf8');
   const analytics = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'Analytics.tsx'), 'utf8');
-  assert.ok(planner.includes('testId="new-plan-auto-review"') && planner.includes('...(autoReviewRegister ? { autoReviewRegister: true } : {}),'));
+  assert.ok(planner.includes('testId="new-plan-auto-review"') && planner.includes('...(autoReviewRegister ? { autoReviewRegister: true, autoReviewHours } : {}),'));
+  // 23일: 모을 시간도 여기서 고친다(학습 실행에 있던 설정을 옮겼다)
+  const toggle = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'AutoReviewToggle.tsx'), 'utf8');
+  assert.ok(toggle.includes('복습 하나에 모을 공부 시간') && toggle.includes('onHoursChange'));
   assert.ok(analytics.includes('testId="edit-auto-review"') && analytics.includes('autoReviewRegister: editForm.autoReviewRegister || undefined,'));
   assert.ok(analytics.includes('Boolean(updatedSubject.autoReviewRegister) === Boolean(original.autoReviewRegister)'), '켜고 끈 것만으로도 저장된다');
   assert.ok(analytics.includes('autoReviewRegister: Boolean(subject.autoReviewRegister)'), '수정 창을 열면 지금 설정이 들어 있다');
+});
+
+test('23일: 시작 전 과목은 할 일에 없고, 후행과목이 지금 단계면 그 임시값으로 센다', () => {
+  const logger = loadSource('components/SessionLogger.tsx');
+  const temp = loadSource('components/StageTempEditor.tsx');
+  const today = new Date(2026, 10, 23, 9);
+  const subject = {
+    id: 'K', name: '국어', startPage: 1, totalPages: 20, completedPages: 20, targetDate: '2026-12-31',
+    planResetDate: '2026-11-01', createdAt: '2026-11-01T00:00:00.000Z', scheduledWeekdays: [0, 1, 2, 3, 4, 5, 6],
+    scheduledWeekdayPages: { 0: 5, 1: 5, 2: 5, 3: 5, 4: 5, 5: 5, 6: 5 }, initialAverageTimePerPage: 2, reviewSubjectIds: [],
+    followUpSubjects: [{ id: 'F', name: '후행', startPage: 1, endPage: 60, completedPage: 0, initialAverageTimePerPage: 3 }]
+  };
+  const logs = [{ id: 'l1', subjectId: 'K', subjectStageId: 'K', startPage: 1, endPage: 20, pagesRead: 20, timeSpentMinutes: 40,
+    timestamp: '2026-11-02T01:00:00.000Z', studyDate: '2026-11-02' }];
+  const planFor = item => logger.buildStudyOrderForDate([item], logs, today.getDay(), '2026-11-23', today)[0];
+  // 후행과목이 지금 단계다: 본 과목 효율(2분)이 아니라 그 단계의 임시값으로 센다
+  assert.equal(planFor(subject).averageTimePerPage, 3);
+  assert.equal(planFor(temp.withStageTemp(subject, 'F', 6)).averageTimePerPage, 6, '임시값을 바꾸면 바로 반영된다');
+  assert.equal(planFor(temp.withStageTemp(subject, 'F', 1)).averageTimePerPage, 1);
+  // 시작 날짜가 아직 오지 않은 과목은 그날 할 일에 없다
+  const future = { ...subject, id: 'M', completedPages: 0, totalPages: 40, planResetDate: '2026-12-20' };
+  assert.equal(logger.buildStudyOrderForDate([future], [], today.getDay(), '2026-11-23', today).length, 0);
+  assert.equal(logger.buildStudyOrderForDate([{ ...future, planResetDate: '2026-11-23' }], [], today.getDay(), '2026-11-23', today).length, 1, '시작한 날부터는 나온다');
+  // 23일: 시작 날짜 · 임시값 · 학습 기록 보기는 "재설정" 버튼 밑에 모은다
+  const todaySource = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'TodaySummary.tsx'), 'utf8');
+  assert.ok(todaySource.includes('data-testid="reset-menu"') && todaySource.includes('data-testid="reset-menu-list"'));
+  for (const id of ['plan-start-date', 'stage-temp', 'open-study-record']) {
+    assert.ok(new RegExp(`reset-menu-list[\\s\\S]*?data-testid="${id}"`).test(todaySource), `${id}는 재설정 메뉴 안에 있다`);
+  }
 });
 
 test('23일: 문제 묶음을 유형으로 나눠 맞음 · 오답을 숫자로 보이고, 앞부분 축약 대신 복습에서 빼기로 단위를 뺀다', () => {
@@ -5886,7 +5918,8 @@ test('page unit review registration: exceptions keep the old behaviour', () => {
   const today = fs.readFileSync(path.resolve(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.equal((today.match(/\|\| log\.unitReviewPending/g) || []).length, 2, 'a waiting record counts as a review-included record in the edit modal');
   // 17일: 오늘 할 일의 버튼은 자동 복습 설정만 연다(복습에 넣기 · 난도는 학습량 입력에서)
-  assert.ok(today.includes('data-testid="register-review"') && today.includes('setChoosingReview(true)') && today.includes('pendingCount={0} auto={') && today.includes('<RegisterReviewDialog'));
+  // 23일: 자동 복습 켜고 끄기는 학습 설정(과목 만들기 · 수정)에서만 한다 — 학습 실행에는 나오지 않는다
+  assert.ok(!today.includes('data-testid="register-review"') && !today.includes('pendingCount={0} auto={'));
 });
 
 test('all-subjects panel: the review card tools wrap inside a narrow card instead of sticking out of it', () => {
@@ -11145,7 +11178,7 @@ test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 �
 
 test('30일: 학습 설정에서 아무것도 고치지 않고 저장하면 아무것도 바뀌지 않는다', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
-  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister };'),
+  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister, autoReviewHours };'),
     'nothing is saved when nothing changed, and the saved subject is the stored one (not the screen copy with its computed values)');
   const { resolveSavedWeekdayPages } = loadSource('utils/weekPlan.ts');
   const stored = { 0: 0, 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 0 };
@@ -11881,9 +11914,8 @@ test('5일 여러 날 점검: 바로 복습 넣기 뒤 노트지에서 빠지는
 test('5일 여러 날 점검: 그 과목 기본 복습 칸에서도 복습에 넣기, 단원 끝냄 추천은 창을 본 뒤(닫기 · 고르기)에야 띄웠음으로 기억', () => {
   const today = fs.readFileSync(path.join(__dirname, '..', 'components/TodaySummary.tsx'), 'utf8');
   assert.ok(today.includes('const canRegisterHere = Boolean(detailData && !detailData.owner);'));
-  // 17일: 오늘 할 일에는 자동 복습 설정만
-  assert.ok(today.includes('{canRegisterHere && canSetAutoReview && ('));
-  assert.ok(today.includes('choosingReview && detailData && canRegisterHere && canSetAutoReview && ('));
+  // 23일: 자동 복습 설정은 학습 실행에서 빠졌다(학습 설정의 과목 만들기 · 수정에서 한다)
+  assert.ok(!today.includes('canSetAutoReview') && !today.includes('choosingReview'));
   // 17일: 단원 끝냄 추천은 오늘 할 일 창이 아니라 학습량 입력에서(이번 공부로 단원을 끝내면 복습에 넣기가 켜져 있다)
   assert.ok(!today.includes('rememberChapterPrompt'));
 });
@@ -12705,7 +12737,7 @@ test('17일 fix-140: review intake moves to the amount input — 복습에 넣�
   const today = read('components/TodaySummary.tsx');
   const app = read('App.tsx');
   assert.ok(logger.includes('<ReviewIntakeSection info={intakeInfo}') && today.includes('<ReviewIntakeSection info={addIntakeInfo}'));
-  assert.ok(today.includes('onAddLog(replacementLog, addIntake());') && today.includes('aria-label="자동 복습 설정"'));
+  assert.ok(today.includes('onAddLog(replacementLog, addIntake());') && !today.includes('aria-label="자동 복습 설정"'));
   assert.ok(app.includes("if (intake?.kind === 'register' && waits && !subject?.autoReviewRegister) return registerAllPendingNow(saved, incoming.subjectId, Date.now(), intake.grade);"));
   // 오답 재시험: 2회차부터 오답 · 정답 두 버튼, 정답 다시 가리기, 앞뒤 이동
   const screen = read('components/ReviewPracticeScreen.tsx');

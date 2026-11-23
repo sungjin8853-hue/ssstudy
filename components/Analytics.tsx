@@ -145,6 +145,7 @@ export const Analytics: React.FC<Props> = ({
     isRequired: boolean;
     alwaysBasicReview: boolean;
     autoReviewRegister: boolean;
+    autoReviewHours: number;
   } | null>(null);
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(getAllSubjectReviewIds))
@@ -535,7 +536,8 @@ export const Analytics: React.FC<Props> = ({
       tagIds: subject.tagIds || [],
       isRequired: subject.isRequired ?? false,
       alwaysBasicReview: Boolean(subject.alwaysBasicReview),
-      autoReviewRegister: Boolean(subject.autoReviewRegister)
+      autoReviewRegister: Boolean(subject.autoReviewRegister),
+      autoReviewHours: subject.autoReviewHours ?? 1
     });
   };
 
@@ -1316,6 +1318,7 @@ export const Analytics: React.FC<Props> = ({
                                 isRequired: editForm.isRequired,
                                 alwaysBasicReview: editForm.alwaysBasicReview || undefined,
                                 autoReviewRegister: editForm.autoReviewRegister || undefined,
+                                autoReviewHours: editForm.autoReviewRegister ? editForm.autoReviewHours : sub.autoReviewHours,
                               };
                               // 학습 요일 · 요일별 페이지는 수정 중에 한 주 필요 시간 밑에 나오는 칸에서 바로 고치므로 여기서는 그대로 둔다(마감일이 바뀌면 그 비율대로 페이지만 다시 나눈다)
                               // 아무것도 고치지 않고 저장하면 아무것도 바꾸지 않는다(30일): 계획 · 계획 시작일 · 저장된 과목 모두 그대로
@@ -1325,10 +1328,11 @@ export const Analytics: React.FC<Props> = ({
                                 && JSON.stringify(updatedSubject.tagIds ?? []) === JSON.stringify(original.tagIds ?? [])
                                 && JSON.stringify(updatedSubject.followUpSubjects ?? []) === JSON.stringify(original.followUpSubjects ?? [])
                                 && Boolean(updatedSubject.alwaysBasicReview) === Boolean(original.alwaysBasicReview)
-                                && Boolean(updatedSubject.autoReviewRegister) === Boolean(original.autoReviewRegister);
+                                && Boolean(updatedSubject.autoReviewRegister) === Boolean(original.autoReviewRegister)
+                                && (updatedSubject.autoReviewHours ?? 1) === (original.autoReviewHours ?? 1);
                               if (original && !unchanged) {
-                                const { name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister } = updatedSubject;
-                                const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister };
+                                const { name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister, autoReviewHours } = updatedSubject;
+                                const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister, autoReviewHours };
                                 // 마감일이나 후행과목이 바뀌면 계획을 다시 세우는 것이라 단계별 계획 시간(공부 + 복습)도 새로 적는다
                                 const replanned = next.targetDate !== original.targetDate || JSON.stringify(next.followUpSubjects || []) !== JSON.stringify(original.followUpSubjects || [])
                                   ? withPlanTimes(subjects, logs, next) : next;
@@ -1502,7 +1506,9 @@ export const Analytics: React.FC<Props> = ({
                     {!reviewSubjectIdSet.has(sub.id) && (
                       <div className="mt-2">
                         <AutoReviewToggle dark value={Boolean(editForm?.autoReviewRegister)}
-                          onChange={value => setEditForm(prev => (prev ? { ...prev, autoReviewRegister: value } : prev))} testId="edit-auto-review" />
+                          onChange={value => setEditForm(prev => (prev ? { ...prev, autoReviewRegister: value } : prev))}
+                          hours={editForm?.autoReviewHours ?? 1}
+                          onHoursChange={hours => setEditForm(prev => (prev ? { ...prev, autoReviewHours: hours } : prev))} testId="edit-auto-review" />
                       </div>
                     )}
                   </div>

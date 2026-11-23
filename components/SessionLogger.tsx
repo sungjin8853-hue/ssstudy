@@ -34,8 +34,8 @@ import { ReviewNoteSummary } from './ReviewNoteSummary';
 import { copyText } from '../utils/copyText';
 import { getReviewMemoOutlineText } from '../utils/reviewMemo';
 import { DEFAULT_PAGE_LABEL, formatRecommendedRanges, getPageLabel, pagePositionLabel } from '../utils/pageLabel';
-import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
-import { currentPlanStageId, planRefreshSummary, PlanRefreshSummary, replanSubject, withPlanTimes } from '../utils/weekPlan';
+import { adjustSubjectProgress, calculateFreshWeekdayPagePlan, getActiveSubjectStage, getStageChapters, getAllSubjectReviewIds, getDiffDays, getLocalDateKey, getLogStudyDate, getPastCarryoverPages, getPastPlanBalance, getPlanningDayCount, getSubjectDayRemainingPages, getSubjectDayTarget, getSubjectPlanStartDateKey, getSubjectRemainingPageCount, getSubjectStageReviewSubjectIds, getSubjectStages, isSubjectRequiredNow, normalizeWeekdays, getPlanRemainingScale, planPagesToActualPages, WEEKDAYS } from '../utils/schedule';
+import { currentPlanStageId, getStageMinutesPerPage, planRefreshSummary, PlanRefreshSummary, replanSubject, withPlanTimes } from '../utils/weekPlan';
 import { PlanRefreshDialog } from './PlanRefreshDialog';
 import { RestTimer } from './RestTimer';
 import { aheadFinishPlan, buildAheadDays } from '../utils/aheadDay';
@@ -550,7 +550,8 @@ const getSubjectStudyPlanForDate = (
   logs: StudyLog[],
   targetWeekday: number,
   targetStudyDate: string,
-  today = new Date()
+  today = new Date(),
+  allSubjects: Subject[] = [subject]
 ) => {
   const { scopedPages, remainingDayPages, carryoverPages } = getSubjectDayRemainingPages(
     subject,
@@ -565,9 +566,18 @@ const getSubjectStudyPlanForDate = (
     && log.timeSpentMinutes > 0
   ));
   const measuredAverage = calculateRecentCompletedDayAverage(subjectLogs, remainingDayPages).averageTimePerPage;
-  const averageTimePerPage = measuredAverage > 0
-    ? measuredAverage
-    : Math.max(0, subject.initialAverageTimePerPage || 0);
+  /*
+   * 23일 버그: 지금 단계가 후행과목인데도 한 장당 시간을 본 과목의 효율로만 셌다 —
+   * 후행과목 임시값을 바꿔도 예상 시간과 하루 할 일이 그대로였다.
+   * 후행과목이 지금 단계면 그 단계의 한 장당 시간(잰 값이 있으면 잰 값, 없으면 임시값)으로 센다.
+   */
+  const stageId = currentPlanStageId(subject);
+  const stageMinutes = stageId !== subject.id ? getStageMinutesPerPage(allSubjects, logs, subject, stageId) : 0;
+  const averageTimePerPage = stageMinutes > 0
+    ? stageMinutes
+    : measuredAverage > 0
+      ? measuredAverage
+      : Math.max(0, subject.initialAverageTimePerPage || 0);
   const estimatedMinutes = remainingDayPages * averageTimePerPage;
 
   return {
@@ -590,8 +600,10 @@ export const buildStudyOrderForDate = (
   const todayDateKey = getLocalDateKey(today);
   return sourceSubjects
     .filter(subject => getSubjectRemainingPageCount(subject) > 0)
+    // 23일: 시작 날짜가 아직 오지 않은 과목은 그날 할 일에 넣지 않는다(학습 설정에서 미래로 바꾼 과목)
+    .filter(subject => getSubjectPlanStartDateKey(subject, sourceLogs, todayDateKey) <= (targetStudyDate || todayDateKey))
     .map(subject => {
-      const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today);
+      const basePlan = getSubjectStudyPlanForDate(subject, sourceLogs, targetWeekday, targetStudyDate, today, sourceSubjects);
       if (getPlanningDayCount(getDiffDays(subject.targetDate, today)) < 7) {
         const actualPages = Math.min(getSubjectRemainingPageCount(subject), planPagesToActualPages(subject, basePlan.remainingDayPages));
         return { subject, ...basePlan, carryoverPages: Math.min(basePlan.carryoverPages, actualPages), remainingDayPages: actualPages, estimatedMinutes: actualPages * basePlan.averageTimePerPage };
@@ -1374,10 +1386,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const todayTargetPages = activeReviewRun ? 0
     : todayStudyOrder.find(item => item.subject.id === selectedSubject?.id)?.remainingDayPages || 0;
   const progressPageTarget = todayTargetPages > 0 ? todayTargetPages : pomodoroPageTarget;
-  const goalEndPage = (stageChapters.length > 0 && progressPageTarget
+  // 23일 버그: 단원이나 단계가 지금 쪽보다 앞에서 끝나면(나중에 단원을 고쳤거나 단계 끝을 넘겨 푼 경우)
+  // 진척도의 끝이 지금 쪽보다 앞이 돼 "36 / 16P"처럼 거꾸로 보였다 — 끝은 지금 쪽보다 앞일 수 없다
+  const goalEndPage = Math.max(progressBasePages, (stageChapters.length > 0 && progressPageTarget
     ? endPageForSolved(stageChapters, progressBasePages, progressPageTarget)
-    : getMeasurementGoalEndPage(progressBasePages, progressPageTarget)) || progressBasePages;
-  const progressTargetPages = activeSubjectStage ? Math.min(activeSubjectStage.endPage, goalEndPage) : goalEndPage;
+    : getMeasurementGoalEndPage(progressBasePages, progressPageTarget)) || progressBasePages);
+  const progressTargetPages = Math.max(progressBasePages, activeSubjectStage ? Math.min(activeSubjectStage.endPage, goalEndPage) : goalEndPage);
   // 단원이 있으면 진행 칸을 단원 기준으로 나눈다: 지금 하는 곳(현재 페이지 / 단원 끝)과, 지금 풀어야 할 몫이 단원 끝을 넘을 때만 다음 단원(시작 / 그 몫의 끝 페이지)
   const progressSplit = stageChapters.length > 0 && !activeReviewRun && averageTimePerPage > 0
     ? splitByChapter(stageChapters, progressCurrentPages, progressTargetPages) : null;

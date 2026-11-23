@@ -52,6 +52,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
   const [isRequired, setIsRequired] = useState(false);
   // 23일: 과목을 만들 때 자동 복습 넣기를 켤 수 있다(끄면 "복습에 넣기"를 누를 때만 들어간다)
   const [autoReviewRegister, setAutoReviewRegister] = useState(false);
+  const [autoReviewHours, setAutoReviewHours] = useState(1);
   const [alwaysBasicReview, setAlwaysBasicReview] = useState(false);
   const [growthPageUnit, setGrowthPageUnit] = useState(DEFAULT_GROWTH_PAGE_UNIT);
   const [noPageUnit, setNoPageUnit] = useState(false);
@@ -86,7 +87,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
       ...nextSubject,
       ...(initialMinutes.trim() && Number.isFinite(initial) && initial > 0 ? { initialAverageTimePerPage: initial } : {}),
       ...(alwaysBasicReview ? { alwaysBasicReview: true } : {}),
-      ...(autoReviewRegister ? { autoReviewRegister: true } : {}),
+      ...(autoReviewRegister ? { autoReviewRegister: true, autoReviewHours } : {}),
       scheduledWeekdayPages: calculateFreshWeekdayPagePlan(
         nextSubject,
         getSubjectRemainingPageCount(nextSubject),
@@ -237,7 +238,7 @@ export const SubjectPlanner: React.FC<Props> = ({ onAddSubject }) => {
             </p>
           )}
           <AlwaysBasicReviewToggle value={alwaysBasicReview} onChange={setAlwaysBasicReview} testId="new-plan-always-basic-review" />
-          <AutoReviewToggle value={autoReviewRegister} onChange={setAutoReviewRegister} testId="new-plan-auto-review" />
+          <AutoReviewToggle value={autoReviewRegister} onChange={setAutoReviewRegister} hours={autoReviewHours} onHoursChange={setAutoReviewHours} testId="new-plan-auto-review" />
           <PlanPriorityNote />
           <p className="px-1 text-[13px] font-bold text-slate-500">
             학습 측정 자동 선택에서는 필수가 먼저 나오고, 같은 그룹 안에서는 예상 시간이 짧은 과목부터 선택됩니다.

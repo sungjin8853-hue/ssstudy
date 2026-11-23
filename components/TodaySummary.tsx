@@ -43,7 +43,7 @@ import type { ReviewIntake } from '../utils/reviewIntake';
 import { ReviewDeleteDialog } from './ReviewDeleteDialog';
 import { AheadFinishPanel, AheadSummary } from './AheadDayCard';
 import { AutoReviewFeedbackDialog } from './AutoReviewFeedbackDialog';
-import { autoReviewAskOf, autoReviewHoursOf } from '../utils/autoReview';
+import { autoReviewAskOf } from '../utils/autoReview';
 import { getTempStageRows, StageTempDialog } from './StageTempEditor';
 import { pendingFeedbackOf } from '../utils/subjectFeedback';
 import { pendingChapterGroups } from '../utils/chapterReview';
@@ -584,6 +584,17 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   const [basicSkipped, setBasicSkipped] = useState(false);
   const [showFlowTutorial, setShowFlowTutorial] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  // 23일: 시작 날짜 · 임시값 · 학습 기록 보기를 모은 "재설정" 메뉴
+  const [resetMenuOpen, setResetMenuOpen] = useState(false);
+  useEffect(() => { setResetMenuOpen(false); }, [detailSubjectId]);
+  useEffect(() => {
+    if (!resetMenuOpen) return undefined;
+    const close = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest('[data-testid="reset-menu-list"], [data-testid="reset-menu"]')) setResetMenuOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [resetMenuOpen]);
   // 12일 "오늘 할 일 과목들 정리노트 버튼 옆에 학습 기록 보기"
   const [showRecord, setShowRecord] = useState(false);
   /** "추가 학습하기"를 눌러 원래 정보를 다시 연 끝낸 과목의 키 */
@@ -894,28 +905,19 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
   // 5일 점검: 그 과목의 기본 복습 칸에서도 넣을 수 있다(오늘 학습 할 일이 없는 날엔 학습 칸이 안 보여, 대기 기록을 넣을 곳이 없었다). 복습과목 칸은 아님
   const canRegisterHere = Boolean(detailData && !detailData.owner);
   const pendingReviewCount = useMemo(() => (detailData && canRegisterHere ? logs.filter(log => log.unitReviewPending && log.subjectId === detailData.subject.id).length : 0), [logs, detailData, canRegisterHere]);
-  const [choosingReview, setChoosingReview] = useState(false);
   // 9일: 오늘 할 일에 들어온 복습 칸에서만 "복습 삭제"(그 칸의 기록들). 끝낸 칸 · 다른 칸을 보고 있으면 없다
   const [deletingReview, setDeletingReview] = useState(false);
   const reviewTaskLogs = detailData && onExcludeFromReview && idle?.reviewTaskLogs?.length && idle.selectedDetailKey === detailSubjectId ? idle.reviewTaskLogs : null;
   useEffect(() => { if (!reviewTaskLogs) setDeletingReview(false); }, [reviewTaskLogs]);
-  // 17일: 오늘 할 일의 버튼은 자동 복습 설정만 연다(복습에 넣기 · 난도는 학습량 입력에서)
-  const openRegisterReview = () => setChoosingReview(true);
+  // 23일: 자동 복습 켜고 끄기 · 모을 시간은 학습 설정(과목 만들기 · 수정)에서만 한다 — 학습 실행에는 나오지 않는다
   // 단원을 끝내면 복습에 넣기를 권하는 창도 17일부터는 학습량 입력에서 권한다(이번 공부로 단원을 끝내면 "복습에 넣기"가 켜져 있다)
   // "학습량 변경" 창: 학습량 추가와 오늘 한 기록(고치기 · 지우기)이 한곳에 모인다
   const [changingAmount, setChangingAmount] = useState(false);
   useEffect(() => { setChangingAmount(false); }, [detailData?.subject.id]);
-  // 자동 복습 넣기(3일): 켜 둔 과목은 대기 기록이 없어도 "복습에 넣기" 버튼이 남아 그 창에서 끌 수 있다
-  const autoReview = Boolean(detailData && !detailIsReview && detailData.subject.autoReviewRegister);
-  const canSetAutoReview = Boolean(detailData && !detailIsReview && onUpdateSubjects);
-  const setAutoReview = (on: boolean) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewRegister: on || undefined }]); };
-  const setAutoReviewHours = (hours: number) => { if (detailData && onUpdateSubjects) onUpdateSubjects([{ ...detailData.subject, autoReviewHours: hours }]); };
   // 자동 복습으로 모으는 중인 기록(4일): 정한 공부 시간이 차면 한 묶음으로 들어간다
   // 8일: 자동으로 넣은 묶음의 난도를 물어볼 차례면(저장 직후 · 같은 묶음에 더해진 뒤) 난도 피드백 창
   const autoAsk = useMemo(() => (detailData && !detailIsReview ? autoReviewAskOf(logs, detailData.subject.id) : null), [logs, detailData, detailIsReview]);
   const autoWaiting = useMemo(() => (detailData && !detailIsReview ? logs.filter(log => log.unitReviewPending && log.autoReviewWaiting && log.subjectId === detailData.subject.id) : []), [logs, detailData, detailIsReview]);
-  // 과목을 옮기거나 대기 기록이 없어지면 난도 창을 닫는다(자동으로 넣는 중이면 설정을 보도록 둔다)
-  useEffect(() => { setChoosingReview(false); }, [detailData?.subject.id]);
   // 제목 뒤에 이어 붙이는 과목: 이 과목 → 후행과목, 각 과목에 붙은 복습과목은 대괄호. 예: A-B[C]-D. 이을 것이 없으면 이름만 보인다.
   const chainSegments = detailData && !detailIsReview ? getSubjectChain(detailData.subject, subjects) : [];
   const titleChain = hasSubjectChain(chainSegments) ? chainSegments : null;
@@ -1226,29 +1228,39 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
               {noteCount > 0 && <span className="rounded-full bg-indigo-600 px-2 text-xs font-black leading-5 text-white">{noteCount}</span>}
             </button>
           )}
-          {onChangeLogsReview && (
-            <button type="button" data-testid="open-study-record" onClick={() => setShowRecord(true)} aria-label="학습 기록 보기" className={headerButton}>
-              <span aria-hidden="true">📋</span>학습 기록 보기
-            </button>
-          )}
-          {canRegisterHere && canSetAutoReview && (
-            <button type="button" data-testid="register-review" onClick={openRegisterReview} aria-label="자동 복습 설정" className={headerButton}>
-              <span aria-hidden="true">↻</span>자동 복습
-              <span data-testid="auto-review-badge" className={`rounded-full px-2 text-xs font-black leading-5 ${autoReview ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'}`}>{autoReview ? '켬' : '끔'}</span>
-            </button>
-          )}
-          {!detailIsReview && onUpdateSubjects && detailData && (
-            <button type="button" data-testid="plan-start-date" onClick={() => setEditingStart(true)} aria-label="시작 날짜 바꾸기" className={headerButton}>
-              <span aria-hidden="true">📅</span>시작 날짜
-              <span className="rounded-full bg-slate-200 px-2 text-xs font-black leading-5 text-slate-700">
-                {planStartKey.slice(5).replace('-', '/')}
-              </span>
-            </button>
-          )}
-          {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
-            <button type="button" data-testid="stage-temp" onClick={() => setEditingTemp(true)} aria-label="한 장당 시간 임시값" className={headerButton}>
-              <span aria-hidden="true">⏱</span>임시값
-            </button>
+          {/* 23일 "재설정이라는 버튼을 만들고 거기서 시작날짜 및 임시값, 학습기록 보기를 넣은 버튼으로": 세 가지를 한 버튼 밑에 모은다 */}
+          {(onChangeLogsReview || (!detailIsReview && onUpdateSubjects && detailData)) && (
+            <div className="relative shrink-0">
+              <button type="button" data-testid="reset-menu" aria-haspopup="true" aria-expanded={resetMenuOpen}
+                onClick={() => setResetMenuOpen(open => !open)} aria-label="재설정" className={headerButton}>
+                <span aria-hidden="true">⚙</span>재설정
+              </button>
+              {resetMenuOpen && (
+                <div data-testid="reset-menu-list" role="menu" className="absolute left-0 top-full z-30 mt-1 flex min-w-[13rem] flex-col gap-1 rounded-2xl border-2 border-indigo-200 bg-white p-2 shadow-xl">
+                  {!detailIsReview && onUpdateSubjects && detailData && (
+                    <button type="button" role="menuitem" data-testid="plan-start-date" onClick={() => { setResetMenuOpen(false); setEditingStart(true); }}
+                      aria-label="시작 날짜 바꾸기" className="flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-black text-slate-800 hover:bg-indigo-50">
+                      <span aria-hidden="true">📅</span>시작 날짜
+                      <span className="ml-auto rounded-full bg-slate-200 px-2 text-xs font-black leading-5 text-slate-700">
+                        {planStartKey.slice(5).replace('-', '/')}
+                      </span>
+                    </button>
+                  )}
+                  {!detailIsReview && onUpdateSubjects && tempRows.length > 0 && (
+                    <button type="button" role="menuitem" data-testid="stage-temp" onClick={() => { setResetMenuOpen(false); setEditingTemp(true); }}
+                      aria-label="한 장당 시간 임시값" className="flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-black text-slate-800 hover:bg-indigo-50">
+                      <span aria-hidden="true">⏱</span>임시값
+                    </button>
+                  )}
+                  {onChangeLogsReview && (
+                    <button type="button" role="menuitem" data-testid="open-study-record" onClick={() => { setResetMenuOpen(false); setShowRecord(true); }}
+                      aria-label="학습 기록 보기" className="flex h-11 items-center gap-2 rounded-xl px-3 text-sm font-black text-slate-800 hover:bg-indigo-50">
+                      <span aria-hidden="true">📋</span>학습 기록 보기
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {!detailIsReview && (
             <button type="button" data-testid="amount-change" onClick={openAmountDialog} aria-label="학습 기록 추가" className={headerButton}>
@@ -1279,20 +1291,12 @@ export const TodaySummary: React.FC<Props> = ({ logs, subjects, detailSubjectId,
           onUpdateSubjects={onUpdateSubjects} onClose={() => setEditingTemp(false)} />
       )}
 
-      {choosingReview && detailData && canRegisterHere && canSetAutoReview && (
-        <RegisterReviewDialog key={`${detailData.subject.id}:settings`} info={pendingFeedbackOf(logs, detailData.subject.id, Date.now())} pageLabel={pageLabel}
-          pendingCount={0} auto={canSetAutoReview ? { on: autoReview, onChange: setAutoReview, hours: autoReviewHoursOf(detailData.subject), onHoursChange: setAutoReviewHours,
-            waitingCount: autoWaiting.length, waitingMinutes: autoWaiting.reduce((sum, log) => sum + (Number(log.timeSpentMinutes) || 0), 0) } : undefined}
-          onClose={() => setChoosingReview(false)}
-          onChoose={() => setChoosingReview(false)} />
-      )}
-
       {deletingReview && reviewTaskLogs && onExcludeFromReview && detailData && (
         <ReviewDeleteDialog logs={reviewTaskLogs} pagePos={pagePos} title={idle?.selectedName || detailData.subject.name}
           onDelete={onExcludeFromReview} onClose={() => setDeletingReview(false)} />
       )}
 
-      {autoAsk && onChooseAutoReviewGrade && detailData && !choosingReview && (
+      {autoAsk && onChooseAutoReviewGrade && detailData && (
         <AutoReviewFeedbackDialog key={`${autoAsk.groupAt}:${autoAsk.members.map(log => log.id).join(',')}`} logs={logs} members={autoAsk.members} groupAt={autoAsk.groupAt} pageLabel={pagePos}
           onChoose={grade => onChooseAutoReviewGrade(detailData.subject.id, autoAsk.groupAt, grade)}
           onClose={() => onChooseAutoReviewGrade(detailData.subject.id, autoAsk.groupAt)} />
