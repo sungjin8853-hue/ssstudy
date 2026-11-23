@@ -44,7 +44,6 @@ interface Props {
   canPause: boolean;
   onTogglePause: () => void;
   onClose: () => void;
-  level: number;
   round: number;
   roundSize: number;
   queueLength: number;
@@ -308,7 +307,8 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
                   const label = round === 1 ? '전체 문제' : `오답 ${round - 1}회차`;
                   return (
                     <li key={round} className={`rounded-full border-2 px-4 py-2 text-sm font-black ${active ? 'border-amber-700 bg-amber-700 text-white' : 'border-amber-300 bg-white text-amber-900'}`}>
-                      {round === 1 ? `${props.level}단계 · ` : ''}{label}{active ? ` · ${props.roundSize}문제` : ''}
+                      {/* 23일: 단계로 문제를 가르지 않으므로 "1단계 ·"를 붙이지 않는다 */}
+                      {label}{active ? ` · ${props.roundSize}문제` : ''}
                     </li>
                   );
                 })}

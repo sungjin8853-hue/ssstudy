@@ -1649,6 +1649,16 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 문제를 복습에서 빼거나 되돌려 문제 목록이 바뀌면 풀이 상태를 목록에 맞춘다
   useEffect(() => {
     setGatePractice(previous => (previous ? reconcileReviewPractice(previous, gateReviewQuestions) : previous));
+    /*
+     * 23일 버그: 플래시카드를 보는 중에 문제나 단위를 복습에서 빼면 그 카드가 사라져
+     * 문제 카드도 완료 화면도 없는 빈 화면이 됐다. 카드 묶음을 남은 문제에 맞추고, 다 없어지면 접는다.
+     */
+    setGateFlash(previous => {
+      if (!previous) return previous;
+      const ids = previous.ids.filter(id => gateReviewQuestions.some(question => question.id === id));
+      if (ids.length === 0) return null;
+      return { ...previous, ids, currentId: ids.includes(previous.currentId) ? previous.currentId : ids[0] };
+    });
   }, [gateReviewQuestionSignature]);
 
   // 빼기 안내는 잠시 뒤 저절로 사라진다(되돌리기는 그동안 누를 수 있다)
@@ -2363,7 +2373,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       ...prev,
       logs: prev.logs.filter(log => log.id !== firstLog.id)
     } : prev);
-    setGatePractice(null);
+    // 23일 버그: 풀이를 비우면 남은 단위에서 이미 푼 문제까지 다시 풀어야 했다.
+    // 문제 목록이 바뀌면 풀이를 목록에 맞추는 효과가 있으므로 여기서는 비우지 않는다
     setIsGateAnswerRevealed(false);
     setPreSessionReviewDrafts(prev => {
       const next = { ...prev };
@@ -2934,7 +2945,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         pauseLabel={isPreSessionReviewRunning ? '잠시 중단' : '계속 복습'}
         onTogglePause={() => setIsPreSessionReviewRunning(prev => !prev)}
         onClose={closePreSessionReview}
-        level={gatePractice?.level || 1}
         round={gateRoundNumber}
         roundSize={gateRoundQuestionCount}
         queueLength={gateQuestionQueue.length}
@@ -2945,7 +2955,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           <ReviewQuestionTools key={currentGateQuestion.id} covers={gateCoverOf(currentGateQuestion)} memos={gateRemovalMemos} setMemos={gateSubjectMemos}
             oldLines={gateOldLines} onRemove={handleRemoveGateQuestion} onEdit={handleEditGateLines} sessionCriterion={currentGateMemoItem.criterion}
             unitName={preSessionGateMemoItems.length > 1 ? currentGateMemoItem.range : null}
-            onRemoveUnit={preSessionReviewLogs.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined} />
+            onRemoveUnit={preSessionGateMemoItems.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined} />
         ) : undefined}
         removalNotice={gateRemovalNotice ? (
           <div role="status" data-testid="removal-notice" className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-slate-300 bg-white px-4 py-3">

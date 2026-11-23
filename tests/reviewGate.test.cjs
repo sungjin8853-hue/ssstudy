@@ -1821,8 +1821,13 @@ test('23일: 문제 묶음을 유형으로 나눠 맞음 · 오답을 숫자로 
   assert.ok(tools.includes('data-testid="remove-unit"') && tools.includes('이 단위를 빼요'));
   assert.ok(tools.includes('onRemoveUnit') && tools.includes('unitName'));
   assert.ok(logger.includes('const condensePreSessionReview = (logId?: string) => {'), '뺄 단위를 고를 수 있다');
-  assert.ok(logger.includes('onRemoveUnit={preSessionReviewLogs.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined}'),
-    '단위가 하나뿐이면 단위 빼기를 주지 않는다(그 복습이 비어 버린다)');
+  assert.ok(logger.includes('onRemoveUnit={preSessionGateMemoItems.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined}'),
+    '문제가 있는 단위가 하나뿐이면 단위 빼기를 주지 않는다(그 복습이 비어 버린다)');
+  // 23일 버그: 플래시카드를 보는 중에 문제나 단위를 빼도 빈 화면이 되지 않는다
+  assert.ok(logger.includes('const ids = previous.ids.filter(id => gateReviewQuestions.some(question => question.id === id));'),
+    '카드 묶음을 남은 문제에 맞춘다');
+  assert.ok(logger.includes('// 문제 목록이 바뀌면 풀이를 목록에 맞추는 효과가 있으므로 여기서는 비우지 않는다'),
+    '단위를 빼도 남은 단위에서 이미 푼 결과가 남는다');
 });
 
 test('23일: 플래시카드의 첫 오답 · 마지막 오답은 카드 순서가 아니라 반복된 오답의 회차다', () => {

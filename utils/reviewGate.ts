@@ -172,7 +172,8 @@ export const getDueReviewGateQuestionKeys = inLogSubject((log: StudyLog, nowMs: 
   const schedules = getReviewQuestionSchedules(log);
   return buildReviewQuestions(log.reviewMemo || '').questions.filter(question => {
     if (isReviewQuestionRemoved(log, question.key)) return false;
-    if (!includeLocked && question.level > (log.reviewGateLevel || 1)) return false;
+    // 23일: 난도(단계)로 문제를 막지 않으므로 단계로 걸러내지 않는다(모든 단계가 복습 때가 되면 열린다)
+    void includeLocked;
     const date = schedules[question.key]?.nextReviewDate || log.nextReviewDate;
     return !date || Date.parse(date) <= nowMs;
   }).map(question => question.key);
@@ -197,7 +198,8 @@ export const completeRegularReviewSchedule = inLogSubject((log: StudyLog, nowMs:
   for (const [key, pending] of Object.entries(log.reviewGatePendingSchedules || {})) {
     if (validKeys.has(key)) schedules[key] = { ...pending, nextReviewDate: new Date(nowMs + (pending.intervalMs || getCurrentReviewIntervalMs(pending.reviewStep))).toISOString() };
   }
-  const unlockedKeys = new Set(buildReviewQuestions(log.reviewMemo || '').questions.filter(q => q.level <= (log.reviewGateLevel || 1) && !isReviewQuestionRemoved(log, q.key)).map(q => q.key));
+  // 23일: 단계로 막지 않으므로 뺀 문제만 제외한다(모든 단계의 다음 복습 날짜를 함께 본다)
+  const unlockedKeys = new Set(buildReviewQuestions(log.reviewMemo || '').questions.filter(q => !isReviewQuestionRemoved(log, q.key)).map(q => q.key));
   const dates = Object.entries(schedules).filter(([key]) => unlockedKeys.has(key)).map(([, item]) => Date.parse(item.nextReviewDate)).filter(Number.isFinite);
   // 과목 난도 피드백(FSRS-6)이 정한 다음 복습도 함께 본다: 문제가 모두 멀어도 과목 복습 때가 되면 열린다.
   // 이미 지난 날짜(방금 마친 복습의 옛 예정일)는 넣지 않는다. 넣으면 복습을 마치자마자 다시 복습할 때가 된다.
