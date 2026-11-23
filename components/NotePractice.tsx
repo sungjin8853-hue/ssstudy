@@ -2,8 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { StudyLog } from '../types';
 import type { NoteUnitPage } from '../utils/noteUnits';
-import { getReviewPracticeLevel, gradeReviewPractice, setReviewPracticeLevel, startReviewPractice } from '../utils/reviewPractice';
-import { PracticeLevelSelector } from './PracticeLevelSelector';
+import { gradeReviewPractice, startReviewPractice } from '../utils/reviewPractice';
 import { ReviewStyleSelector } from './ReviewStyleSelector';
 import type { ReviewGrade } from '../utils/reviewPractice';
 import {
@@ -89,7 +88,6 @@ const PracticeRun: React.FC<{
           </div>
         </div>
         {catalog.length > 0 && <ReviewStyleSelector />}
-        {catalog.length > 0 && <PracticeLevelSelector value={getReviewPracticeLevel(practice)} onChange={level => { setPractice(previous => setReviewPracticeLevel(previous, catalog, level)); setRevealed(false); }} />}
         {catalog.length > 0 && !finished && (
           <span data-testid="note-practice-remaining" className="rounded-full bg-amber-100 px-4 py-2 text-sm font-black text-amber-900">
             {practice.round === 1 ? '전체 문제' : `오답 ${practice.round - 1}회차`} · 남은 문제 {practice.queue.length}

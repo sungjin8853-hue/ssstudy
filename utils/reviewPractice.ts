@@ -71,9 +71,14 @@ const levelOf = (state: ReviewPractice, catalog: PracticeQuestion[], logId: stri
   const lowest = Math.min(MAX_REVIEW_LEVEL, ...catalog.filter(q => q.logId === logId).map(q => q.level));
   return Math.max(state.unlocked[logId] || 1, lowest);
 };
-const isAvailable = (state: ReviewPractice, catalog: PracticeQuestion[], q: PracticeQuestion) => q.level <= levelOf(state, catalog, q.logId);
+/**
+ * 23일: 난도(단계) 버튼을 없애면서 단계로 문제를 막지 않는다 — 노트의 모든 문제가 나오고, 언제 다시 나오는지는 FSRS-6가 정한다.
+ * 다시 단계로 막으려면 이 한 줄을 `q.level <= levelOf(state, catalog, q.logId)`로 되돌리면 된다(고른 단계는 그대로 저장돼 있다).
+ */
+const isAvailable = (_state: ReviewPractice, _catalog: PracticeQuestion[], _q: PracticeQuestion) => true;
+void levelOf;
 
-/** 지금 고른 난도까지 열린(이미 푼 것 포함) 문제들을 중요한 것부터 돌려준다. */
+/** 이번에 나올(이미 푼 것 포함) 문제들을 중요한 것부터 돌려준다. */
 export const getPracticeBatch = (state: ReviewPractice, catalog: PracticeQuestion[]) => (
   catalog.map((q, index) => ({ q, index })).filter(item => isAvailable(state, catalog, item.q)).sort(orderFor(state)).map(item => item.q)
 );

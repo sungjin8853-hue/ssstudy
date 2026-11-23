@@ -18,7 +18,7 @@ import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedRev
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { chapterBoundedPomodoroMinutes, chapterPagesLeftFrom, createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
-import { REVIEW_MASK_INTERVAL_MS, applyFlashcardMarks, calculateQuestionPerformance, getPracticeBatch, getReviewPracticeLevel, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, setReviewPracticeLevel, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
+import { REVIEW_MASK_INTERVAL_MS, applyFlashcardMarks, calculateQuestionPerformance, getPracticeBatch, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
 import type { QuestionLineEdit } from './ReviewQuestionTools';
 import { planReviewRemoval, replaceMemoLine, REMOVE_REASON_LABELS } from '../utils/reviewRemoval';
@@ -1019,7 +1019,8 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   const [isGateAnswerRevealed, setIsGateAnswerRevealed] = useState(false);
   // 17일 "한 번 테스트 후 반복되는 오답 재시험": 2회차부터는 카드처럼 앞뒤로 오가며 오답 · 정답만 표시한다(정답은 다시 가릴 수 있다).
   // 표시는 회차 안에서 언제든 바꿀 수 있고, 회차의 모든 문제에 표시하면 그 순서대로 풀이에 반영한다(틀린 것은 다음 회차로)
-  const [gateRetest, setGateRetest] = useState<{ round: number; currentId: string | null; marks: Record<string, 'wrong' | 'right'> } | null>(null);
+  // 23일: 재시험도 1회차처럼 난도 4개로 매긴다(카드마다 매긴 난도를 모아 회차 끝에 반영한다)
+  const [gateRetest, setGateRetest] = useState<{ round: number; currentId: string | null; marks: Record<string, ReviewGrade> } | null>(null);
   const gateRetestOn = Boolean(gatePractice && gateRoundNumber > 1 && gateQuestionQueue.length > 0);
   const gateRetestState = gateRetestOn && gateRetest && gateRetest.round === gateRoundNumber ? gateRetest : null;
   /**
@@ -2043,11 +2044,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setPlanRefreshResult(planRefreshSummary(subjects, updatedSubjects, logs));
   };
 
-  const handleGateLevelChange = (level: number) => {
-    setGatePractice(previous => previous ? setReviewPracticeLevel(previous, gateReviewQuestions, level) : previous);
-    setIsGateAnswerRevealed(false);
-  };
-
   const handleGateReveal = () => {
     if (currentGateQuestion) {
       const elapsed = Math.max(0, Date.now() - gateShownAtRef.current);
@@ -2065,19 +2061,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     setGateRetest({ round: gateRoundNumber, marks: gateRetestState?.marks ?? {}, currentId: gateQuestionQueue[next] });
     setIsGateAnswerRevealed(false);
   };
-  const markGateRetest = (right: boolean) => {
+  const markGateRetest = (grade: ReviewGrade) => {
     if (!gateRetestOn || !currentGateQuestion) return;
-    const marks: Record<string, 'wrong' | 'right'> = { ...(gateRetestState?.marks ?? {}), [currentGateQuestion.id]: right ? 'right' : 'wrong' };
+    const marks: Record<string, ReviewGrade> = { ...(gateRetestState?.marks ?? {}), [currentGateQuestion.id]: grade };
     const queue = gateQuestionQueue;
     if (queue.every(id => marks[id])) {
-      // 회차의 모든 문제에 표시했다: 줄 순서대로 풀이에 반영한다(맞음 → 끝, 오답 → 다음 회차)
+      // 회차의 모든 문제에 난도를 매겼다: 줄 순서대로 풀이에 반영한다(맞음 → 끝, 오답 → 다음 회차)
       setGatePractice(previous => {
         if (!previous) return previous;
         let next = previous;
         for (let count = 0; count < queue.length; count += 1) {
           const id = next.queue[0];
           if (!id || !marks[id]) break;
-          next = gradeReviewPractice(next, gateReviewQuestions, marks[id] === 'right' ? 'good' : 'again');
+          next = gradeReviewPractice(next, gateReviewQuestions, marks[id]);
         }
         return next;
       });
@@ -2917,8 +2913,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         onClose={closePreSessionReview}
         onCondenseFirst={condenseFirstPreSessionReview}
         level={gatePractice?.level || 1}
-        maxLevel={gatePractice ? getReviewPracticeLevel(gatePractice) : 1}
-        onChangeLevel={handleGateLevelChange}
         round={gateRoundNumber}
         roundSize={gateRoundQuestionCount}
         queueLength={gateQuestionQueue.length}
@@ -2975,12 +2969,12 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         retest={gateRetestOn && !gateFlash && currentGateQuestion ? {
           position: Math.max(0, gateQuestionQueue.indexOf(currentGateQuestion.id)) + 1,
           total: gateQuestionQueue.length,
-          marked: gateQuestionQueue.filter(id => gateRetestState?.marks[id]).length,
-          mark: gateRetestState?.marks[currentGateQuestion.id],
+          graded: gateQuestionQueue.filter(id => gateRetestState?.marks[id]).length,
+          grade: gateRetestState?.marks[currentGateQuestion.id],
           onPrev: () => moveGateRetest(-1),
           onNext: () => moveGateRetest(1),
           onHide: () => setIsGateAnswerRevealed(false),
-          onMark: markGateRetest
+          onGrade: markGateRetest
         } : undefined}
         correctIntervalLabel={formatReviewInterval(calculateQuestionPerformance(previousSchedule, currentWrongs, currentAttempts + 1).intervalMs)}
         wrongIntervalLabel={formatReviewInterval(calculateQuestionPerformance(previousSchedule, currentWrongs + 1, currentAttempts + 1).intervalMs)}

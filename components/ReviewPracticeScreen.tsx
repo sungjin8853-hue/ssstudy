@@ -2,7 +2,6 @@ import React from 'react';
 import type { ReviewGrade } from '../utils/reviewPractice';
 import { PomodoroMinutesStepper } from './PomodoroMinutesStepper';
 import { POMODORO_MINUTES } from '../utils/measurement';
-import { PracticeLevelSelector } from './PracticeLevelSelector';
 import { ReviewStyleSelector } from './ReviewStyleSelector';
 
 /** 기본 복습(정리노트 문제 풀이) 화면. 상태는 SessionLogger가 갖고, 여기서는 받은 값을 보여주기만 한다. */
@@ -47,9 +46,6 @@ interface Props {
   onClose: () => void;
   onCondenseFirst: () => void;
   level: number;
-  /** 사용자가 고른 난도(이 단계까지 출제). 문제를 풀어도 저절로 오르지 않는다 */
-  maxLevel: number;
-  onChangeLevel: (level: number) => void;
   round: number;
   roundSize: number;
   queueLength: number;
@@ -68,15 +64,16 @@ interface Props {
    * 17일: 오답 재시험(2회차부터). 있으면 평가 버튼 대신 오답 · 정답 두 개만 보이고, 카드처럼 앞뒤로 오가며 정답을 다시 가릴 수 있다.
    * 회차의 모든 문제에 표시하면 그 결과로 다음 회차(또는 끝)로 넘어간다.
    */
+  /** 23일: 2회차 이후 재시험도 1회차처럼 난도 4개로 매긴다(카드처럼 앞뒤로 오가며 다시 가릴 수 있는 것은 그대로) */
   retest?: {
     position: number;
     total: number;
-    marked: number;
-    mark?: 'wrong' | 'right';
+    graded: number;
+    grade?: ReviewGrade;
     onPrev: () => void;
     onNext: () => void;
     onHide: () => void;
-    onMark: (right: boolean) => void;
+    onGrade: (grade: ReviewGrade) => void;
   };
   /**
    * 21일 플래시카드 단계: 테스트를 다 맞혔거나 "테스트 넘기고 플래시카드로"를 눌렀을 때.
@@ -88,6 +85,7 @@ interface Props {
     total: number;
     marked: number;
     mark?: 'wrong' | 'right';
+    /* 플래시카드만 정답 · 오답 체크다(테스트는 난도 4개) */
     wrongMarked: number;
     /** 21일: 오답으로 건너뛰기 — 첫 오답 · 마지막 오답 */
     jumps: { key: string; label: string; active: boolean; onSelect: () => void }[];
@@ -130,6 +128,8 @@ const GRADE_BUTTONS: { grade: ReviewGrade; title: string; className: string }[] 
   { grade: 'easy', title: '쉽게 맞음', className: 'border-sky-400 bg-sky-100 text-sky-950' }
 ];
 
+const GRADE_TITLES: Record<ReviewGrade, string> = Object.fromEntries(GRADE_BUTTONS.map(button => [button.grade, button.title])) as Record<ReviewGrade, string>;
+
 const RAIL_CHIP: Record<ReviewRailItem['status'], string> = {
   now: 'bg-amber-700 text-white',
   waiting: 'bg-slate-200 text-slate-800',
@@ -137,30 +137,69 @@ const RAIL_CHIP: Record<ReviewRailItem['status'], string> = {
   done: 'bg-green-100 text-green-900'
 };
 
-/** 오답 재시험 카드 조작: 이전 · 다음, 정답 확인 · 가리기, 오답 · 정답 표시 */
-const RetestControls: React.FC<{ retest: NonNullable<Props['retest']>; revealed: boolean; onReveal: () => void }> = ({ retest, revealed, onReveal }) => (
-  <div data-testid="retest-controls" className="flex shrink-0 flex-col gap-3">
+/** 난도 4개(오답 · 어렵게 맞음 · 맞음 · 쉽게 맞음). 1회차와 2회차 이후 재시험이 같은 것을 쓴다 */
+const GradeButtons: React.FC<{
+  onGrade: (grade: ReviewGrade) => void;
+  labels?: Partial<Record<ReviewGrade, string>>;
+  wrongIntervalLabel: string;
+  correctIntervalLabel: string;
+  recommendedGrade?: ReviewGrade | null;
+  chosen?: ReviewGrade;
+  compact?: boolean;
+}> = ({ onGrade, labels, wrongIntervalLabel, correctIntervalLabel, recommendedGrade, chosen, compact }) => (
+  <div className={`grid grid-cols-2 gap-3 ${compact ? '' : 'md:grid-cols-4'}`}>
+    {GRADE_BUTTONS.map(button => {
+      const label = labels?.[button.grade] ?? (button.grade === 'again' ? wrongIntervalLabel : correctIntervalLabel);
+      const recommended = recommendedGrade === button.grade;
+      return (
+        <button key={button.grade} type="button" onClick={() => onGrade(button.grade)}
+          data-grade={button.grade} data-recommended={recommended ? 'true' : undefined} aria-pressed={chosen ? chosen === button.grade : undefined}
+          className={`relative flex ${compact ? 'h-20' : 'h-24'} flex-col items-start justify-center gap-1 rounded-2xl border-2 px-4 py-3 text-left ${button.className} ${recommended ? 'ring-4 ring-indigo-500 ring-offset-2' : ''} ${chosen === button.grade ? 'ring-4 ring-slate-800' : ''}`}>
+          {recommended && <span data-testid="review-recommended" className="absolute -top-3 right-3 rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-black text-white">추천</span>}
+          <span className={compact ? 'text-[19px] font-black' : 'text-[22px] font-black'}>{button.title}</span>
+          <span className="text-sm font-bold">{button.grade === 'again' ? `다시 풀고, 다음 복습 ${label} 뒤` : `다음 복습 ${label} 뒤`}</span>
+        </button>
+      );
+    })}
+  </div>
+);
+
+/** 카드 조작 한 줄: 이전 · 다음과 가운데 자리 표시 */
+const CardNav: React.FC<{ prefix: string; position: number; total: number; note: string; onPrev: () => void; onNext: () => void; tone: 'amber' | 'indigo' }> = ({ prefix, position, total, note, onPrev, onNext, tone }) => {
+  const edge = tone === 'indigo' ? 'border-indigo-300 text-indigo-900 enabled:hover:bg-indigo-50' : 'border-amber-300 text-amber-900 enabled:hover:bg-amber-50';
+  return (
     <div className="flex items-center justify-between gap-2">
-      <button type="button" data-testid="retest-prev" onClick={retest.onPrev} disabled={retest.position <= 1}
-        className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">◀ 이전</button>
-      <span data-testid="retest-position" className="text-center text-sm font-black text-slate-700">
-        {retest.position} / {retest.total}
-        <span className="block text-xs font-bold text-slate-500">표시 {retest.marked}/{retest.total}{retest.mark ? ` · 이 문제 ${retest.mark === 'right' ? '정답' : '오답'}` : ''}</span>
+      <button type="button" data-testid={`${prefix}-prev`} onClick={onPrev} disabled={position <= 1}
+        className={`h-12 rounded-xl border-2 bg-white px-4 text-base font-black disabled:opacity-40 ${edge}`}>◀ 이전</button>
+      <span data-testid={`${prefix}-position`} className="text-center text-sm font-black text-slate-700">
+        {position} / {total}
+        <span className="block text-xs font-bold text-slate-500">{note}</span>
       </span>
-      <button type="button" data-testid="retest-next" onClick={retest.onNext} disabled={retest.position >= retest.total}
-        className="h-12 rounded-xl border-2 border-amber-300 bg-white px-4 text-base font-black text-amber-900 enabled:hover:bg-amber-50 disabled:opacity-40">다음 ▶</button>
+      <button type="button" data-testid={`${prefix}-next`} onClick={onNext} disabled={position >= total}
+        className={`h-12 rounded-xl border-2 bg-white px-4 text-base font-black disabled:opacity-40 ${edge}`}>다음 ▶</button>
     </div>
+  );
+};
+
+/**
+ * 오답 재시험 카드 조작(2회차부터): 이전 · 다음, 정답 확인 · 가리기, 그리고 1회차와 같은 난도 4개.
+ * 난도를 매기면 아직 매기지 않은 다음 문제로 넘어가고, 회차의 문제를 모두 매기면 그 줄 순서대로 풀이에 반영된다.
+ */
+const RetestControls: React.FC<{
+  retest: NonNullable<Props['retest']>; revealed: boolean; onReveal: () => void;
+  labels?: Partial<Record<ReviewGrade, string>>; wrongIntervalLabel: string; correctIntervalLabel: string; recommendedGrade?: ReviewGrade | null; responseLabel?: string;
+}> = ({ retest, revealed, onReveal, labels, wrongIntervalLabel, correctIntervalLabel, recommendedGrade, responseLabel }) => (
+  <div data-testid="retest-controls" className="flex shrink-0 flex-col gap-3">
+    <CardNav prefix="retest" position={retest.position} total={retest.total} onPrev={retest.onPrev} onNext={retest.onNext} tone="amber"
+      note={`매김 ${retest.graded}/${retest.total}${retest.grade ? ` · 이 문제 ${GRADE_TITLES[retest.grade]}` : ''}`} />
     {!revealed ? (
       <button type="button" onClick={onReveal}
         className="h-[68px] rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
     ) : (
       <>
-        <div className="grid grid-cols-2 gap-3">
-          <button type="button" data-retest-mark="wrong" aria-pressed={retest.mark === 'wrong'} onClick={() => retest.onMark(false)}
-            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${retest.mark === 'wrong' ? 'border-rose-600 bg-rose-200 text-rose-950 ring-4 ring-rose-300' : 'border-rose-300 bg-rose-100 text-rose-900'}`}>오답</button>
-          <button type="button" data-retest-mark="right" aria-pressed={retest.mark === 'right'} onClick={() => retest.onMark(true)}
-            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${retest.mark === 'right' ? 'border-green-600 bg-green-200 text-green-950 ring-4 ring-green-300' : 'border-green-400 bg-green-100 text-green-900'}`}>정답</button>
-        </div>
+        {responseLabel && <p data-testid="review-response-time" className="text-center text-sm font-bold text-slate-700">걸린 시간 {responseLabel}</p>}
+        <GradeButtons onGrade={retest.onGrade} labels={labels} wrongIntervalLabel={wrongIntervalLabel} correctIntervalLabel={correctIntervalLabel}
+          recommendedGrade={recommendedGrade} chosen={retest.grade} compact />
         <button type="button" data-testid="retest-hide" onClick={retest.onHide}
           className="h-11 rounded-xl border-2 border-slate-300 bg-white text-sm font-black text-slate-700 hover:bg-slate-50">정답 다시 가리기</button>
       </>
@@ -168,21 +207,43 @@ const RetestControls: React.FC<{ retest: NonNullable<Props['retest']>; revealed:
   </div>
 );
 
-/** 플래시카드 단계 조작: 재시험과 같은 카드 조작에 "플래시카드 끝내기"를 더한다 */
+/**
+ * 플래시카드 단계 조작: 테스트와 달리 정답 · 오답만 체크하고, 다 체크해도 저절로 넘어가지 않는다.
+ * 테스트(난도 4개)와 한눈에 갈라 보이도록 남색으로 둔다.
+ */
 const FlashControls: React.FC<{ flash: NonNullable<Props['flash']>; revealed: boolean; onReveal: () => void }> = ({ flash, revealed, onReveal }) => (
-  <div data-testid="flash-controls" className="flex shrink-0 flex-col gap-3">
-    {flash.jumps.length > 0 && (
-      <div data-testid="flash-jumps" className="flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-bold text-slate-600">오답으로 가기</span>
-        {flash.jumps.map(jump => (
-          <button key={jump.key} type="button" data-flash-jump={jump.key} aria-pressed={jump.active} onClick={jump.onSelect}
-            className={`h-10 rounded-xl border-2 px-3.5 text-[13px] font-black ${jump.active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50'}`}>
-            {jump.label}
-          </button>
-        ))}
-      </div>
+  <div data-testid="flash-controls" className="flex shrink-0 flex-col gap-3 rounded-2xl border-2 border-indigo-200 bg-indigo-50/70 p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <span className="rounded-full bg-indigo-600 px-3 py-1 text-[13px] font-black text-white">플래시카드</span>
+      {flash.jumps.length > 0 && (
+        <div data-testid="flash-jumps" className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-bold text-slate-600">오답으로 가기</span>
+          {flash.jumps.map(jump => (
+            <button key={jump.key} type="button" data-flash-jump={jump.key} aria-pressed={jump.active} onClick={jump.onSelect}
+              className={`h-10 rounded-xl border-2 px-3.5 text-[13px] font-black ${jump.active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50'}`}>
+              {jump.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+    <CardNav prefix="retest" position={flash.position} total={flash.total} onPrev={flash.onPrev} onNext={flash.onNext} tone="indigo"
+      note={`체크 ${flash.marked}/${flash.total}${flash.mark ? ` · 이 문제 ${flash.mark === 'right' ? '정답' : '오답'}` : ''}`} />
+    {!revealed ? (
+      <button type="button" onClick={onReveal}
+        className="h-[68px] rounded-2xl bg-indigo-700 text-xl font-black text-white shadow-[0_4px_0_#312E81] hover:bg-indigo-800">정답 확인</button>
+    ) : (
+      <>
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" data-retest-mark="wrong" aria-pressed={flash.mark === 'wrong'} onClick={() => flash.onMark(false)}
+            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${flash.mark === 'wrong' ? 'border-rose-600 bg-rose-200 text-rose-950 ring-4 ring-rose-300' : 'border-rose-300 bg-rose-100 text-rose-900'}`}>오답</button>
+          <button type="button" data-retest-mark="right" aria-pressed={flash.mark === 'right'} onClick={() => flash.onMark(true)}
+            className={`h-20 rounded-2xl border-2 text-[22px] font-black ${flash.mark === 'right' ? 'border-green-600 bg-green-200 text-green-950 ring-4 ring-green-300' : 'border-green-400 bg-green-100 text-green-900'}`}>정답</button>
+        </div>
+        <button type="button" data-testid="retest-hide" onClick={flash.onHide}
+          className="h-11 rounded-xl border-2 border-slate-300 bg-white text-sm font-black text-slate-700 hover:bg-slate-50">정답 다시 가리기</button>
+      </>
     )}
-    <RetestControls retest={flash} revealed={revealed} onReveal={onReveal} />
     <button type="button" data-testid="flash-done" onClick={flash.onDone}
       className="h-14 rounded-2xl bg-indigo-600 text-[17px] font-black text-white shadow-[0_4px_0_#3730A3] hover:bg-indigo-700">
       플래시카드 끝내기{flash.marked > 0 ? ` · 체크 ${flash.marked}/${flash.total}` : ''}
@@ -256,7 +317,6 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             )}
             {props.hasQuestions && <div className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-2">
               <ReviewStyleSelector />
-              <PracticeLevelSelector value={props.maxLevel} onChange={props.onChangeLevel} />
             </div>}
             <button type="button" onClick={props.onCondenseFirst}
               className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-900 hover:bg-amber-100">앞부분 축약</button>
@@ -283,29 +343,17 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
               {props.flash ? (
                 <FlashControls flash={props.flash} revealed={props.revealed} onReveal={props.onReveal} />
               ) : props.retest ? (
-                <RetestControls retest={props.retest} revealed={props.revealed} onReveal={props.onReveal} />
+                <RetestControls retest={props.retest} revealed={props.revealed} onReveal={props.onReveal}
+                  labels={props.gradeIntervalLabels} wrongIntervalLabel={props.wrongIntervalLabel} correctIntervalLabel={props.correctIntervalLabel}
+                  recommendedGrade={props.recommendedGrade} responseLabel={props.responseLabel} />
               ) : !props.revealed ? (
                 <button type="button" onClick={props.onReveal}
                   className="h-[76px] shrink-0 rounded-2xl bg-amber-700 text-xl font-black text-white shadow-[0_4px_0_#78350F] hover:bg-amber-800">정답 확인</button>
               ) : (
                 <div className="flex shrink-0 flex-col gap-2">
                   {props.responseLabel && <p data-testid="review-response-time" className="text-center text-sm font-bold text-slate-700">걸린 시간 {props.responseLabel}</p>}
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                    {GRADE_BUTTONS.map(button => {
-                      const label = props.gradeIntervalLabels?.[button.grade]
-                        ?? (button.grade === 'again' ? props.wrongIntervalLabel : props.correctIntervalLabel);
-                      const recommended = props.recommendedGrade === button.grade;
-                      return (
-                        <button key={button.grade} type="button" onClick={() => props.onGrade(button.grade)}
-                          data-grade={button.grade} data-recommended={recommended ? 'true' : undefined}
-                          className={`relative flex h-24 flex-col items-start justify-center gap-1 rounded-2xl border-2 px-4 py-3 text-left ${button.className} ${recommended ? 'ring-4 ring-indigo-500 ring-offset-2' : ''}`}>
-                          {recommended && <span data-testid="review-recommended" className="absolute -top-3 right-3 rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-black text-white">추천</span>}
-                          <span className="text-[22px] font-black">{button.title}</span>
-                          <span className="text-sm font-bold">{button.grade === 'again' ? `다시 풀고, 다음 복습 ${label} 뒤` : `다음 복습 ${label} 뒤`}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <GradeButtons onGrade={props.onGrade} labels={props.gradeIntervalLabels} wrongIntervalLabel={props.wrongIntervalLabel}
+                    correctIntervalLabel={props.correctIntervalLabel} recommendedGrade={props.recommendedGrade} />
                 </div>
               )}
             </section>

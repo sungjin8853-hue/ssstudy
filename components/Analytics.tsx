@@ -8,6 +8,7 @@ import type { SubjectMovePlan, SubjectMover, SubjectMoveTarget } from '../utils/
 import { describeForecastBasis, describePlanUnit, ForecastList, FolderSpeedChart, GrowthAmount, InsertGap, PlanUnitSummary, ProgressBar, ShareBar, SpeedFacts, SpeedGainChart, WeekdayNeedBar, WeekdayPagesEditor } from './SpeedPanels';
 import { createNewStudyPlan, SubjectPlanner } from './SubjectPlanner';
 import { AlwaysBasicReviewToggle } from './AlwaysBasicReviewToggle';
+import { AutoReviewToggle } from './AutoReviewToggle';
 import { buildStudyOrderForDate } from './SessionLogger';
 import { insertSiblingOrder, joinWithAnd, orderSiblings, SiblingRef } from '../utils/listOrder';
 import { analyzeSubjectSpeed, buildGroupSpeed, describeSpeedGrowth, PlanUnit, SpeedUnit, sumOf, summarizeFolderSpeed, summarizeUnitAmount, summarizeUnitGrowth, unitAmountGrowthOf, unitGrowthOf } from '../utils/speedGrowth';
@@ -143,6 +144,7 @@ export const Analytics: React.FC<Props> = ({
     tagIds: string[];
     isRequired: boolean;
     alwaysBasicReview: boolean;
+    autoReviewRegister: boolean;
   } | null>(null);
   const reviewSubjectIdSet = useMemo(() => (
     new Set(subjects.flatMap(getAllSubjectReviewIds))
@@ -532,7 +534,8 @@ export const Analytics: React.FC<Props> = ({
       targetDate: subject.targetDate,
       tagIds: subject.tagIds || [],
       isRequired: subject.isRequired ?? false,
-      alwaysBasicReview: Boolean(subject.alwaysBasicReview)
+      alwaysBasicReview: Boolean(subject.alwaysBasicReview),
+      autoReviewRegister: Boolean(subject.autoReviewRegister)
     });
   };
 
@@ -1312,6 +1315,7 @@ export const Analytics: React.FC<Props> = ({
                                 tagIds: editForm.tagIds,
                                 isRequired: editForm.isRequired,
                                 alwaysBasicReview: editForm.alwaysBasicReview || undefined,
+                                autoReviewRegister: editForm.autoReviewRegister || undefined,
                               };
                               // 학습 요일 · 요일별 페이지는 수정 중에 한 주 필요 시간 밑에 나오는 칸에서 바로 고치므로 여기서는 그대로 둔다(마감일이 바뀌면 그 비율대로 페이지만 다시 나눈다)
                               // 아무것도 고치지 않고 저장하면 아무것도 바꾸지 않는다(30일): 계획 · 계획 시작일 · 저장된 과목 모두 그대로
@@ -1320,10 +1324,11 @@ export const Analytics: React.FC<Props> = ({
                                 && Boolean(updatedSubject.isRequired) === Boolean(original.isRequired)
                                 && JSON.stringify(updatedSubject.tagIds ?? []) === JSON.stringify(original.tagIds ?? [])
                                 && JSON.stringify(updatedSubject.followUpSubjects ?? []) === JSON.stringify(original.followUpSubjects ?? [])
-                                && Boolean(updatedSubject.alwaysBasicReview) === Boolean(original.alwaysBasicReview);
+                                && Boolean(updatedSubject.alwaysBasicReview) === Boolean(original.alwaysBasicReview)
+                                && Boolean(updatedSubject.autoReviewRegister) === Boolean(original.autoReviewRegister);
                               if (original && !unchanged) {
-                                const { name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview } = updatedSubject;
-                                const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview };
+                                const { name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister } = updatedSubject;
+                                const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister };
                                 // 마감일이나 후행과목이 바뀌면 계획을 다시 세우는 것이라 단계별 계획 시간(공부 + 복습)도 새로 적는다
                                 const replanned = next.targetDate !== original.targetDate || JSON.stringify(next.followUpSubjects || []) !== JSON.stringify(original.followUpSubjects || [])
                                   ? withPlanTimes(subjects, logs, next) : next;
@@ -1493,6 +1498,13 @@ export const Analytics: React.FC<Props> = ({
                   <div className="mb-4">
                     <AlwaysBasicReviewToggle dark value={Boolean(editForm?.alwaysBasicReview)}
                       onChange={value => setEditForm(prev => (prev ? { ...prev, alwaysBasicReview: value } : prev))} testId="edit-always-basic-review" />
+                    {/* 23일: 복습과목이 아닌 과목만 자동 복습을 켤 수 있다(복습과목은 원래 과목의 복습이다) */}
+                    {!reviewSubjectIdSet.has(sub.id) && (
+                      <div className="mt-2">
+                        <AutoReviewToggle dark value={Boolean(editForm?.autoReviewRegister)}
+                          onChange={value => setEditForm(prev => (prev ? { ...prev, autoReviewRegister: value } : prev))} testId="edit-auto-review" />
+                      </div>
+                    )}
                   </div>
                   <div>
                   <div>

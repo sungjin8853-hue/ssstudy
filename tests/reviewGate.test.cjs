@@ -1742,32 +1742,48 @@ test('practice chooses importance before difficulty and orders equal stages by s
   assert.deepEqual(visited, ['left-hinted', 'left-easy', 'left-hard', 'right']);
 });
 
-test('difficulty never rises by itself: the learner opens larger recall by choosing a level, and schedule keys stay stable', () => {
+test('23일: 난도 버튼을 없애 모든 단계의 문제가 한 번에 나오고, 문제 열쇠는 그대로다', () => {
   const memo = 'a:b,c,d';
   const questions = questionsFor(memo);
   const catalog = questions.map(q => ({ ...q, id: q.key, logId: 'a' }));
   const levels = [...new Set(catalog.map(q => q.level))].sort();
-  assert.ok(levels.length > 1, 'the note has easier and harder questions');
+  assert.ok(levels.length > 1, '이 노트에는 쉬운 문제와 어려운 문제가 있다');
   let state = practice.startReviewPractice(catalog);
   const visited = [];
-  const answerAll = () => {
-    while (state.queue.length) {
-      visited.push(catalog.find(q => q.id === state.queue[0]).level);
-      state = practice.gradeReviewPractice(state, catalog, 'easy');
-    }
-  };
-  answerAll();
-  assert.ok(visited.length > 0 && visited.every(level => level === 1), 'easy answers do not open anything beyond the chosen level');
-  assert.equal(state.completed.length, catalog.filter(q => q.level === 1).length);
-  assert.equal(practice.getReviewPracticeLevel(state), 1);
-  for (const level of levels.slice(1)) {
-    state = practice.setReviewPracticeLevel(state, catalog, level);
-    assert.ok(state.queue.length > 0, 'choosing a higher level brings the harder questions');
-    answerAll();
+  while (state.queue.length) {
+    visited.push(catalog.find(q => q.id === state.queue[0]).level);
+    state = practice.gradeReviewPractice(state, catalog, 'easy');
   }
-  assert.ok(visited.every((level, index) => index === 0 || level >= visited[index - 1]), 'levels come in the order the learner opened them');
-  assert.equal(state.completed.length, catalog.length);
+  assert.equal(state.completed.length, catalog.length, '단계로 막지 않으므로 노트의 모든 문제가 나온다');
+  assert.deepEqual([...new Set(visited)].sort(), levels, '모든 단계가 나온다');
+  // 저장해 둔 단계는 그대로 남지만 출제를 막지 않는다(되돌리기 쉽게)
+  const low = practice.setReviewPracticeLevel(practice.startReviewPractice(catalog), catalog, 1);
+  assert.equal(practice.getReviewPracticeLevel(low), 1);
+  assert.equal(low.queue.length + low.completed.length, catalog.length, '1단계로 두어도 모든 문제가 나온다');
   assert.deepEqual(questionsFor('x:y // ' + memo).filter(q => q.prompt === 'a').map(q => q.key), questions.filter(q => q.prompt === 'a').map(q => q.key));
+});
+
+test('23일: 재시험도 난도 4개로 매기고, 난도 버튼은 없애고, 자동 복습은 과목 만들기 · 수정에서 켠다', () => {
+  const screen = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'ReviewPracticeScreen.tsx'), 'utf8');
+  const logger = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'SessionLogger.tsx'), 'utf8');
+  // 재시험: 1회차와 같은 난도 4개를 쓰고(GradeButtons), 정답 · 오답 표시는 플래시카드에만 남는다
+  assert.ok(screen.includes('<GradeButtons onGrade={retest.onGrade}'), '재시험도 난도 4개로 매긴다');
+  assert.ok(!/RetestControls[\s\S]{0,800}data-retest-mark/.test(screen), '재시험에는 정답 · 오답 표시가 없다');
+  assert.ok(/FlashControls[\s\S]*?data-retest-mark="right"[\s\S]*?flash-done/.test(screen), '플래시카드는 정답 · 오답 체크다');
+  assert.ok(logger.includes('next = gradeReviewPractice(next, gateReviewQuestions, marks[id]);'), '매긴 난도를 그대로 반영한다');
+  assert.ok(logger.includes("marks: Record<string, ReviewGrade>"), '재시험이 모으는 것은 난도다');
+  // 난도(단계) 버튼은 없다
+  assert.ok(!screen.includes('PracticeLevelSelector') && !logger.includes('PracticeLevelSelector'));
+  assert.ok(!require('fs').existsSync(require('path').join(__dirname, '..', 'components', 'PracticeLevelSelector.tsx')));
+  const notePractice = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'NotePractice.tsx'), 'utf8');
+  assert.ok(!notePractice.includes('PracticeLevelSelector'), '정리노트 문제풀기에도 난도 버튼이 없다');
+  // 자동 복습 넣기: 과목 만들기와 학습 설정 수정에서 켠다
+  const planner = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'SubjectPlanner.tsx'), 'utf8');
+  const analytics = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'Analytics.tsx'), 'utf8');
+  assert.ok(planner.includes('testId="new-plan-auto-review"') && planner.includes('...(autoReviewRegister ? { autoReviewRegister: true } : {}),'));
+  assert.ok(analytics.includes('testId="edit-auto-review"') && analytics.includes('autoReviewRegister: editForm.autoReviewRegister || undefined,'));
+  assert.ok(analytics.includes('Boolean(updatedSubject.autoReviewRegister) === Boolean(original.autoReviewRegister)'), '켜고 끈 것만으로도 저장된다');
+  assert.ok(analytics.includes('autoReviewRegister: Boolean(subject.autoReviewRegister)'), '수정 창을 열면 지금 설정이 들어 있다');
 });
 
 test('21일 플래시카드: 표시한 정오답만 반영하고 다음 회차를 열지 않으며, 연속 오답 횟수를 센다', () => {
@@ -1837,29 +1853,26 @@ test('practice completes 1,2,3,4 before retrying only 2,4 and then only 4', () =
 test('grades are only recorded: neither easy nor wrong answers change which level is open, and the learner can raise or lower it', () => {
   const catalog = Array.from({ length: 6 }, (_, i) => ({ id: 'q' + i, logId: 'a', level: i < 2 ? 1 : i < 4 ? 2 : 3, priority: 1, difficulty: (i + 1) / 10 }));
   const start = practice.startReviewPractice(catalog);
-  assert.deepEqual(start.queue, ['q0', 'q1'], 'only the chosen level is open at first');
+  // 23일: 단계로 막지 않으므로 처음부터 여섯 문제가 모두 열려 있다
+  assert.deepEqual(start.queue, ['q0', 'q1', 'q2', 'q3', 'q4', 'q5']);
   for (const grade of ['easy', 'good', 'hard']) {
     const next = practice.gradeReviewPractice(start, catalog, grade);
-    assert.deepEqual(next.queue, ['q1'], grade + ' opens nothing new');
-    assert.equal(practice.getReviewPracticeLevel(next), 1);
+    assert.deepEqual(next.queue, ['q1', 'q2', 'q3', 'q4', 'q5'], grade + '은 줄을 바꾸지 않는다');
     assert.deepEqual(next.grades.q0, [grade]);
   }
   const wrong = practice.gradeReviewPractice(start, catalog, 'again');
-  assert.deepEqual(wrong.queue, ['q1']);
+  assert.deepEqual(wrong.queue, ['q1', 'q2', 'q3', 'q4', 'q5']);
   assert.deepEqual(wrong.grades.q0, ['again']);
-  const second = practice.setReviewPracticeLevel(start, catalog, 2);
-  assert.deepEqual(second.queue, ['q0', 'q1', 'q2', 'q3']);
-  assert.equal(practice.getReviewPracticeLevel(second), 2);
-  assert.deepEqual(practice.setReviewPracticeLevel(second, catalog, 3).queue, ['q0', 'q1', 'q2', 'q3', 'q4', 'q5']);
-  assert.deepEqual(practice.setReviewPracticeLevel(practice.setReviewPracticeLevel(start, catalog, 3), catalog, 1).queue, ['q0', 'q1'], 'lowering the level takes the harder questions away again');
-  assert.equal(practice.getReviewPracticeLevel(practice.setReviewPracticeLevel(start, catalog, 9)), 3, 'the level stays within 1 to 3');
+  // 고른 단계는 저장만 되고 출제를 막지 않는다
+  assert.equal(practice.getReviewPracticeLevel(practice.setReviewPracticeLevel(start, catalog, 9)), 3, '단계 값은 1~3 안에 머문다');
   assert.equal(practice.getReviewPracticeLevel(practice.setReviewPracticeLevel(start, catalog, 0)), 1);
+  assert.deepEqual(practice.setReviewPracticeLevel(start, catalog, 1).queue, ['q0', 'q1', 'q2', 'q3', 'q4', 'q5']);
   let rest = start;
   const order = [];
   const rounds = [];
   while (rest.queue.length) { order.push(rest.queue[0]); rounds.push(rest.round); rest = practice.gradeReviewPractice(rest, catalog, order.length === 1 ? 'again' : 'good'); }
-  assert.deepEqual(order, ['q0', 'q1', 'q0'], 'a wrong question comes back in the retry round, as before');
-  assert.deepEqual(rounds, [1, 1, 2]);
+  assert.deepEqual(order, ['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q0'], '틀린 문제는 다음 회차에 다시 온다');
+  assert.deepEqual(rounds, [1, 1, 1, 1, 1, 1, 2]);
 });
 
 test('the order inside a level is fixed — importance first, then difficulty — whatever the grades', () => {
@@ -1879,18 +1892,17 @@ test('the order inside a level is fixed — importance first, then difficulty �
   assert.deepEqual(practice.startReviewPractice(weighted).queue, ['more-easy', 'more-hard', 'less'], 'a value further to the right comes after, even when its question is easier');
 });
 
-test('a note whose easiest question is above level 1 still offers that question', () => {
+test('단계가 높은 문제만 있는 노트도 그 문제를 낸다(23일: 단계로 막지 않으므로 모두 낸다)', () => {
   const only = [{ id: 'hard', logId: 'a', level: 3, priority: 1 }];
   assert.deepEqual(practice.startReviewPractice(only).queue, ['hard']);
   const upper = [{ id: 'two', logId: 'a', level: 2, priority: 1 }, { id: 'three', logId: 'a', level: 3, priority: 1 }];
-  assert.deepEqual(practice.startReviewPractice(upper).queue, ['two']);
-  assert.deepEqual(practice.setReviewPracticeLevel(practice.startReviewPractice(upper), upper, 3).queue, ['two', 'three']);
+  assert.deepEqual(practice.startReviewPractice(upper).queue, ['two', 'three']);
 });
 
-test('merged note sessions start each note at its own saved level, and one answer never changes another note', () => {
+test('여러 노트를 묶어 풀 때도 한 노트의 답이 다른 노트를 건드리지 않는다(23일: 두 노트의 모든 문제가 나온다)', () => {
   const catalog = ['a', 'b'].flatMap(logId => [1, 2].map(level => ({ id: logId + level, logId, level, priority: 1 })));
   let state = practice.startReviewPractice(catalog, { a: 1, b: 2 });
-  assert.deepEqual(state.queue.sort(), ['a1', 'b1', 'b2']);
+  assert.deepEqual(state.queue.sort(), ['a1', 'a2', 'b1', 'b2']);
   for (const correct of [false, true]) state = practice.gradeReviewPractice(state, catalog, correct);
   assert.deepEqual(state.unlocked, { a: 1, b: 2 }, 'answers never move a level');
   assert.deepEqual(practice.setReviewPracticeLevel(state, catalog, 2).unlocked, { a: 2, b: 2 });
@@ -8500,7 +8512,8 @@ test('the style choice sits in both practice screens and the progress panel move
     firstTryCorrect: 0, firstTryTotal: 0, completion: null, firstTryOk: 0, firstTryBad: 0, finishLabel: '남은 문제 2', canFinish: false, onFinish() {}
   };
   const html = renderToStaticMarkup(React.createElement(ReviewPracticeScreen, base));
-  assert.ok(html.includes('data-testid="review-style"') && html.includes('data-testid="practice-level"'));
+  // 23일: 난도 버튼은 없앴다(단계로 막지 않는다)
+  assert.ok(html.includes('data-testid="review-style"') && !html.includes('data-testid="practice-level"'));
   const aside = html.match(/<aside[^>]*>/)[0];
   assert.ok(aside.includes('lg:order-first') && aside.includes('order-last'), '넓은 화면에서는 문제 카드의 왼쪽, 좁은 화면에서는 카드 아래');
   assert.ok(html.includes('이번 문제 묶음') && html.includes('첫 시도 정답률') && html.indexOf('<aside') > html.indexOf('문제전용문장'), '패널은 그대로 안에 있고 보이는 자리만 옮긴다');
@@ -11055,7 +11068,7 @@ test('29일 버그: 효율 비교 버튼은 평균으로 간 뒤에도 이전 �
 
 test('30일: 학습 설정에서 아무것도 고치지 않고 저장하면 아무것도 바뀌지 않는다', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../components/Analytics.tsx'), 'utf8');
-  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview };'),
+  assert.ok(source.includes('if (original && !unchanged) {') && source.includes('const next: Subject = { ...original, name, followUpSubjects, targetDate, tagIds, isRequired, alwaysBasicReview, autoReviewRegister };'),
     'nothing is saved when nothing changed, and the saved subject is the stored one (not the screen copy with its computed values)');
   const { resolveSavedWeekdayPages } = loadSource('utils/weekPlan.ts');
   const stored = { 0: 0, 1: 4, 2: 4, 3: 4, 4: 4, 5: 4, 6: 0 };
