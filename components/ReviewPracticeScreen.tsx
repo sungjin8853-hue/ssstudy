@@ -44,7 +44,6 @@ interface Props {
   canPause: boolean;
   onTogglePause: () => void;
   onClose: () => void;
-  onCondenseFirst: () => void;
   level: number;
   round: number;
   roundSize: number;
@@ -87,8 +86,8 @@ interface Props {
     mark?: 'wrong' | 'right';
     /* 플래시카드만 정답 · 오답 체크다(테스트는 난도 4개) */
     wrongMarked: number;
-    /** 21일: 오답으로 건너뛰기 — 첫 오답 · 마지막 오답 */
-    jumps: { key: string; label: string; active: boolean; onSelect: () => void }[];
+    /** 23일: 볼 묶음 고르기 — 첫 오답(1회차에서 틀린 것들) · 마지막 오답(마지막으로 틀린 회차) · 전체 */
+    decks: { key: string; label: string; count: number; active: boolean; onSelect: () => void }[];
     onPrev: () => void;
     onNext: () => void;
     onHide: () => void;
@@ -107,6 +106,8 @@ interface Props {
   responseLabel?: string;
   cardRef?: React.Ref<HTMLDivElement>;
   rail: ReviewRailItem[];
+  /** 23일: 이번 문제 묶음을 유형에 따라 나눈 수 — 유형마다 맞은 개수 · 틀린 개수(첫 시도 기준) */
+  kindCounts?: { kind: string; total: number; ok: number; bad: number }[];
   firstTryCorrect: number;
   firstTryTotal: number;
   /** 복습이 끝난 뒤 보여 줄 정리노트 */
@@ -215,13 +216,12 @@ const FlashControls: React.FC<{ flash: NonNullable<Props['flash']>; revealed: bo
   <div data-testid="flash-controls" className="flex shrink-0 flex-col gap-3 rounded-2xl border-2 border-indigo-200 bg-indigo-50/70 p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <span className="rounded-full bg-indigo-600 px-3 py-1 text-[13px] font-black text-white">플래시카드</span>
-      {flash.jumps.length > 0 && (
-        <div data-testid="flash-jumps" className="flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-bold text-slate-600">오답으로 가기</span>
-          {flash.jumps.map(jump => (
-            <button key={jump.key} type="button" data-flash-jump={jump.key} aria-pressed={jump.active} onClick={jump.onSelect}
-              className={`h-10 rounded-xl border-2 px-3.5 text-[13px] font-black ${jump.active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50'}`}>
-              {jump.label}
+      {flash.decks.length > 1 && (
+        <div data-testid="flash-decks" className="flex flex-wrap items-center gap-2">
+          {flash.decks.map(deck => (
+            <button key={deck.key} type="button" data-flash-deck={deck.key} aria-pressed={deck.active} onClick={deck.onSelect}
+              className={`h-10 rounded-xl border-2 px-3.5 text-[13px] font-black ${deck.active ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50'}`}>
+              {deck.label} {deck.count}
             </button>
           ))}
         </div>
@@ -318,8 +318,6 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
             {props.hasQuestions && <div className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-2">
               <ReviewStyleSelector />
             </div>}
-            <button type="button" onClick={props.onCondenseFirst}
-              className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm font-bold text-amber-900 hover:bg-amber-100">앞부분 축약</button>
             {props.onSkipToFlash && !props.flash && !props.isComplete && props.hasQuestions && (
               <button type="button" data-testid="skip-to-flash" onClick={props.onSkipToFlash}
                 className="h-11 rounded-xl border-2 border-indigo-300 bg-white px-4 text-sm font-black text-indigo-800 hover:bg-indigo-50">테스트 넘기고 플래시카드로</button>
@@ -393,6 +391,19 @@ export const ReviewPracticeScreen: React.FC<Props> = props => {
                 <h2 className="text-base font-black text-slate-900">이번 문제 묶음</h2>
                 <span className="text-[13px] font-semibold text-slate-700">{props.subjectName} · {props.rail.length}문제</span>
               </div>
+              {(props.kindCounts?.length ?? 0) > 0 && (
+                <ul data-testid="kind-counts" className="m-0 flex list-none flex-col gap-1 p-0">
+                  {(props.kindCounts ?? []).map(item => (
+                    <li key={item.kind} data-kind={item.kind} className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-black text-slate-800">{item.kind} <span className="font-bold text-slate-500">{item.total}</span></span>
+                      <span className="flex shrink-0 items-center gap-1 text-xs font-black">
+                        <span data-kind-ok={item.ok} className="rounded-md bg-green-100 px-2 py-0.5 text-green-900">맞음 {item.ok}</span>
+                        <span data-kind-bad={item.bad} className="rounded-md bg-rose-100 px-2 py-0.5 text-rose-900">오답 {item.bad}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
                 {props.rail.map(item => (
                   <li key={item.id} className={`flex min-h-[44px] items-center gap-2.5 rounded-xl border-2 px-3 py-1.5 text-slate-900 ${item.status === 'now' ? 'border-amber-700 bg-amber-100' : 'border-amber-100 bg-white'}`}>

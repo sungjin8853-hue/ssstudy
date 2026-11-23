@@ -18,7 +18,7 @@ import { BASIC_REVIEW_DETAIL_PREFIX, createRepeatedSubjectReview, getRepeatedRev
 import { endPageForSolved, pagesBetween, positionAfterSolved, splitByChapter } from '../utils/subjectChapters';
 import { chapterBoundedPomodoroMinutes, chapterPagesLeftFrom, createPageMeasurement, getAutoSolvedPageCount, getLogProgressPages, getMeasurementGoalEndPage, getMeasurementRemainingPages, getPomodoroPageTarget, getPomodoroProgress, getSessionTimes, isPomodoroGoalExceeded, PomodoroPlan } from '../utils/measurement';
 import { applyReviewGateOutcomes, getDueReviewGateRetries, getDueReviewGateQuestionKeys, getReviewGateQuestionKeys, getReviewGateRetryKeys, getReviewQuestionSchedules, parseReviewGateMemo, previewReviewCompletionIntervals, ReviewGateOutcome } from '../utils/reviewGate';
-import { REVIEW_MASK_INTERVAL_MS, applyFlashcardMarks, calculateQuestionPerformance, getPracticeBatch, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
+import { REVIEW_MASK_INTERVAL_MS, applyFlashcardMarks, flashcardWrongDecks, calculateQuestionPerformance, getPracticeBatch, gradeReviewPractice, previewGradeIntervals, reconcileReviewPractice, startReviewPractice, ReviewPractice, ReviewGrade } from '../utils/reviewPractice';
 import { ReviewQuestionTools } from './ReviewQuestionTools';
 import type { QuestionLineEdit } from './ReviewQuestionTools';
 import { planReviewRemoval, replaceMemoLine, REMOVE_REASON_LABELS } from '../utils/reviewRemoval';
@@ -1027,7 +1027,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
    * 21일 플래시카드 단계: 테스트를 전부 맞혀 끝났거나 "테스트 넘기고 플래시카드로"를 눌렀을 때.
    * 이번 묶음의 문제를 카드로 넘기며 정답 · 오답을 체크한다(첫 테스트 오답은 미리 오답으로 체크돼 있다)
    */
-  const [gateFlash, setGateFlash] = useState<{ ids: string[]; marks: Record<string, 'wrong' | 'right'>; currentId: string } | null>(null);
+  const [gateFlash, setGateFlash] = useState<{ deck: 'all' | 'first' | 'last'; ids: string[]; marks: Record<string, 'wrong' | 'right'>; currentId: string } | null>(null);
   const [gateFlashDone, setGateFlashDone] = useState(false);
   const gateCurrentId = gateFlash ? gateFlash.currentId
     : gateRetestState?.currentId && gateQuestionQueue.includes(gateRetestState.currentId) ? gateRetestState.currentId : gateQuestionQueue[0];
@@ -2095,22 +2095,27 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
     if (!gatePractice || !gateBatch.length) return;
     const ids = gateBatch.map(question => question.id);
     // 첫 테스트에서 틀린 문제는 오답으로 미리 체크돼 있다(그대로 두면 오답으로 반영된다)
-    const wrong = ids.filter(id => gatePractice.firstCorrect[id] === false);
-    const marks = Object.fromEntries(wrong.map(id => [id, 'wrong' as const])) as Record<string, 'wrong' | 'right'>;
-    // 21일: 테스트를 넘겨 왔으면 보고 있던 문제를, 테스트가 끝나 왔으면 첫 오답을 가장 먼저 보여 준다
-    const currentId = (from && ids.includes(from) ? from : wrong[0]) ?? ids[0];
-    setGateFlash({ ids, marks, currentId });
+    const marks = Object.fromEntries(
+      ids.filter(id => gatePractice.firstCorrect[id] === false).map(id => [id, 'wrong' as const])
+    ) as Record<string, 'wrong' | 'right'>;
+    /*
+     * 23일: 테스트를 넘겨 왔으면 보고 있던 문제부터 전체 묶음을 보고,
+     * 테스트가 끝나 왔으면 첫 오답 묶음(1회차에서 틀린 것들)을 본다. 틀린 것이 없으면 전체다.
+     */
+    const decks = flashcardWrongDecks(gatePractice, gateReviewQuestions);
+    if (from && ids.includes(from)) setGateFlash({ deck: 'all', ids, marks, currentId: from });
+    else if (decks) setGateFlash({ deck: 'first', ids: decks.first.ids, marks, currentId: decks.first.ids[0] });
+    else setGateFlash({ deck: 'all', ids, marks, currentId: ids[0] });
     setGateRetest(null);
     setIsGateAnswerRevealed(false);
   };
-  /** 플래시카드에서 첫 오답 · 마지막 오답으로 건너뛰기 */
-  const jumpGateFlash = (edge: 'first' | 'last') => {
-    setGateFlash(previous => {
-      if (!previous || !gatePractice) return previous;
-      const wrong = previous.ids.filter(id => gatePractice.firstCorrect[id] === false);
-      const id = edge === 'first' ? wrong[0] : wrong[wrong.length - 1];
-      return id ? { ...previous, currentId: id } : previous;
-    });
+  /** 플래시카드에서 볼 묶음 바꾸기(첫 오답 · 마지막 오답 · 전체). 체크해 둔 정오답은 그대로 둔다 */
+  const selectGateFlashDeck = (deck: 'all' | 'first' | 'last') => {
+    if (!gatePractice) return;
+    const decks = flashcardWrongDecks(gatePractice, gateReviewQuestions);
+    const ids = deck === 'all' ? gateBatch.map(question => question.id) : decks?.[deck].ids ?? [];
+    if (!ids.length) return;
+    setGateFlash(previous => previous ? { ...previous, deck, ids, currentId: ids[0] } : previous);
     setIsGateAnswerRevealed(false);
   };
   const moveGateFlash = (step: number) => {
@@ -2339,9 +2344,14 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
   // 복습 문제를 다 풀어도 복습과목을 바로 시작하지 않는다(28일 요청): 추가 복습 시간을 가진 뒤 "복습과목 시작"을 눌러 이어 간다.
   // 문제 결과는 그 버튼을 누를 때 저장된다.
 
-  const condenseFirstPreSessionReview = () => {
+  /**
+   * 23일 "앞부분 축약 버튼을 없애고 복습에서 빼기로 해당 단위부분을 복습에서 뺄수 있게":
+   * 한 단위(기록)를 이번 복습에서 뺀다. 단위를 고르지 않으면 앞 단위를 뺀다(예전 앞부분 축약과 같다).
+   */
+  const condensePreSessionReview = (logId?: string) => {
     if (preSessionReviewLogs.length === 0) return;
-    const [firstLog, ...remainingLogs] = preSessionReviewLogs;
+    const firstLog = (logId ? preSessionReviewLogs.find(log => log.id === logId) : preSessionReviewLogs[0]) ?? preSessionReviewLogs[0];
+    const remainingLogs = preSessionReviewLogs.filter(log => log.id !== firstLog.id);
     if (preSessionReviewGroup?.isGateRetry) {
       onClearReviewGateRetries([firstLog.id]);
     } else {
@@ -2841,6 +2851,19 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
       return { id: question.id, label: `${index + 1}번 · ${kindOf(question)}`, status, wrongCount };
     });
     const graded = batch.filter(question => gatePractice && question.id in gatePractice.firstCorrect);
+    /*
+     * 23일 "문제 묶음 이거 유형에 따라서 나눈 후 맞은 갯수 틀린갯수 각각 숫자로":
+     * 유형마다 문제 수와 첫 시도 맞음 · 오답을 센다(아직 풀지 않은 것은 어느 쪽에도 들어가지 않는다).
+     */
+    const kindCounts = batch.reduce((list, question) => {
+      const kind = kindOf(question);
+      const found = list.find(item => item.kind === kind) ?? (list.push({ kind, total: 0, ok: 0, bad: 0 }), list[list.length - 1]);
+      found.total += 1;
+      const first = gatePractice?.firstCorrect[question.id];
+      if (first === true) found.ok += 1;
+      else if (first === false) found.bad += 1;
+      return list;
+    }, [] as { kind: string; total: number; ok: number; bad: number }[]);
     const currentId = currentGateQuestion?.id || '';
     const coverOf = (question: GateReviewQuestion) => question.covered ?? [{ logId: question.logId, questionKey: question.questionKey }];
     const scheduleOf = (cover: { logId: string; questionKey: string }) => {
@@ -2911,7 +2934,6 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         pauseLabel={isPreSessionReviewRunning ? '잠시 중단' : '계속 복습'}
         onTogglePause={() => setIsPreSessionReviewRunning(prev => !prev)}
         onClose={closePreSessionReview}
-        onCondenseFirst={condenseFirstPreSessionReview}
         level={gatePractice?.level || 1}
         round={gateRoundNumber}
         roundSize={gateRoundQuestionCount}
@@ -2921,7 +2943,9 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         question={renderCurrentGatePrompt()}
         questionTools={currentGateQuestion && currentGateMemoItem && onRemoveReviewQuestions ? (
           <ReviewQuestionTools key={currentGateQuestion.id} covers={gateCoverOf(currentGateQuestion)} memos={gateRemovalMemos} setMemos={gateSubjectMemos}
-            oldLines={gateOldLines} onRemove={handleRemoveGateQuestion} onEdit={handleEditGateLines} sessionCriterion={currentGateMemoItem.criterion} />
+            oldLines={gateOldLines} onRemove={handleRemoveGateQuestion} onEdit={handleEditGateLines} sessionCriterion={currentGateMemoItem.criterion}
+            unitName={preSessionGateMemoItems.length > 1 ? currentGateMemoItem.range : null}
+            onRemoveUnit={preSessionReviewLogs.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined} />
         ) : undefined}
         removalNotice={gateRemovalNotice ? (
           <div role="status" data-testid="removal-notice" className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-slate-300 bg-white px-4 py-3">
@@ -2946,17 +2970,22 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
           marked: gateFlash.ids.filter(id => gateFlash.marks[id]).length,
           mark: gateFlash.marks[gateFlash.currentId],
           wrongMarked: gateFlash.ids.filter(id => gatePractice?.firstCorrect[id] === false).length,
-          jumps: (() => {
-            const wrong = gateFlash.ids.filter(id => gatePractice?.firstCorrect[id] === false);
-            if (wrong.length === 0) return [];
-            const edges: Array<{ key: 'first' | 'last'; label: string }> = wrong.length > 1
-              ? [{ key: 'first', label: '첫 오답' }, { key: 'last', label: '마지막 오답' }]
-              : [{ key: 'first', label: '오답' }];
-            return edges.map(edge => ({
-              key: edge.key,
-              label: edge.label,
-              active: gateFlash.currentId === (edge.key === 'first' ? wrong[0] : wrong[wrong.length - 1]),
-              onSelect: () => jumpGateFlash(edge.key)
+          decks: (() => {
+            const decks = gatePractice ? flashcardWrongDecks(gatePractice, gateReviewQuestions) : null;
+            const entries: Array<{ key: 'first' | 'last' | 'all'; label: string; count: number }> = [];
+            if (decks) {
+              entries.push({ key: 'first', label: '첫 오답', count: decks.first.ids.length });
+              // 한 회차만 틀렸으면 첫 오답과 마지막 오답이 같은 묶음이라 하나만 둔다
+              if (decks.last.round !== decks.first.round) entries.push({ key: 'last', label: '마지막 오답', count: decks.last.ids.length });
+            }
+            // 오답 묶음을 보고 있으면 전체로 돌아갈 수 있게 둔다
+            if (entries.length > 0 && gateFlash.deck !== 'all') entries.push({ key: 'all', label: '전체', count: gateBatch.length });
+            return entries.map(entry => ({
+              key: entry.key,
+              label: entry.label,
+              count: entry.count,
+              active: gateFlash.deck === entry.key,
+              onSelect: () => selectGateFlashDeck(entry.key)
             }));
           })(),
           onPrev: () => moveGateFlash(-1),
@@ -2983,6 +3012,7 @@ export const SessionLogger: React.FC<Props> = ({ subjects, logs, activeWeekday: 
         responseLabel={isGateAnswerRevealed && gateRevealMs !== null && currentAttempts === 0 ? formatResponseSeconds(gateRevealMs) : undefined}
         cardRef={gateQuestionCardRef}
         rail={rail}
+        kindCounts={kindCounts}
         firstTryCorrect={graded.filter(question => gatePractice?.firstCorrect[question.id]).length}
         firstTryTotal={graded.length}
         firstTryOk={Object.values(gatePractice?.firstCorrect || {}).filter(Boolean).length}

@@ -27,6 +27,10 @@ interface Props {
   onEdit: (edits: QuestionLineEdit[]) => string | null;
   /** 세션 노트의 분류기준(노트 전체를 감싼 토글의 기준처럼 집합 추천에 쓴다) */
   sessionCriterion?: string | null;
+  /** 23일: 이 문제가 나온 단위의 이름(여러 단위를 묶어 복습할 때만 준다) */
+  unitName?: string | null;
+  /** 23일: 이 단위를 이번 복습에서 뺀다(예전 "앞부분 축약"을 대신한다). 뺄 단위가 없으면 주지 않는다 */
+  onRemoveUnit?: () => void;
 }
 
 const REASONS: { reason: ReviewRemovedReason; title: string; hint: string }[] = [
@@ -42,7 +46,7 @@ const lineKey = (line: QuestionDefinitionLine) => `${line.logId}:${line.lineInde
  *  - 이 문제가 어떤 능력 정의(`[집합식]:[기준]`)와 노트 줄에서 나왔는지 보여 주고, 그 자리에서 바로 고칠 수 있다(정리노트처럼 집합 추천이 뜬다).
  *  - 같은 값이 나온 다른 줄과 고치기 전의 이전 값을 함께 보여 준다.
  */
-export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, oldLines, onRemove, onEdit, sessionCriterion }) => {
+export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, oldLines, onRemove, onEdit, sessionCriterion, unitName, onRemoveUnit }) => {
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -84,6 +88,13 @@ export const ReviewQuestionTools: React.FC<Props> = ({ covers, memos, setMemos, 
               </button>
             ))}
           </div>
+          {onRemoveUnit && (
+            <button type="button" data-testid="remove-unit" onClick={onRemoveUnit}
+              className="flex min-h-[4.5rem] flex-col items-start justify-center gap-1 rounded-2xl border-2 border-amber-300 bg-white px-4 py-3 text-left hover:bg-amber-50">
+              <span className="text-lg font-black text-amber-900">이 단위를 빼요{unitName ? ` · ${unitName}` : ''}</span>
+              <span className="text-sm font-semibold text-slate-700">이번 복습에서 이 단위의 문제가 모두 빠져요 · 노트와 문제는 그대로예요</span>
+            </button>
+          )}
 
           {rows.length > 0 && (
             <div data-testid="question-definitions" className="flex flex-col gap-2.5">

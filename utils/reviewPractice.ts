@@ -39,6 +39,8 @@ export interface ReviewPractice {
   level: number;
   priority: number;
   round: number;
+  /** 23일: 회차마다 틀린 문제들(1회차 오답 · 2회차 오답 …). 플래시카드에서 첫 오답 · 마지막 오답 묶음을 고르는 데 쓴다 */
+  wrongByRound: Record<number, string[]>;
   roundSize: number;
   roundAnswered: number;
   /** 있으면 한 번에 나오는 문제들(같은 중요도 묶음)의 순서를 이 값으로 섞는다(29일 요청: 기본은 랜덤). 풀이 중에는 같은 순서로 유지된다 */
@@ -123,7 +125,8 @@ export const reconcileReviewPractice = (previous: ReviewPractice, catalog: Pract
     ...previous,
     queue: keep(previous.queue), roundWrong: keep(previous.roundWrong), completed: keep(previous.completed), answered: keep(previous.answered),
     retryPool: previous.retryPool ? keep(previous.retryPool) : null,
-    wrongCounts: pick(previous.wrongCounts), attempts: pick(previous.attempts), firstCorrect: pick(previous.firstCorrect), grades: pick(previous.grades)
+    wrongCounts: pick(previous.wrongCounts), attempts: pick(previous.attempts), firstCorrect: pick(previous.firstCorrect), grades: pick(previous.grades),
+    wrongByRound: Object.fromEntries(Object.entries(previous.wrongByRound || {}).map(([round, ids]) => [round, keep(ids)]))
   };
   return settle(next, catalog);
 };
@@ -133,7 +136,7 @@ export const startReviewPractice = (catalog: PracticeQuestion[], unlocked: Recor
   settle({
     ...(seed !== undefined ? { seed } : {}),
     queue: [], roundWrong: [], completed: [], wrongCounts: {}, attempts: {}, firstCorrect: {}, unlocked: { ...unlocked },
-    grades: {}, answered: [], retryPool: null,
+    grades: {}, answered: [], retryPool: null, wrongByRound: {},
     level: 1, priority: 1, round: 1, roundSize: 0, roundAnswered: 0
   }, catalog)
 );
@@ -161,6 +164,8 @@ export const gradeReviewPractice = (previous: ReviewPractice, catalog: PracticeQ
     wrongCounts: { ...previous.wrongCounts, [id]: (previous.wrongCounts[id] || 0) + (correct ? 0 : 1) },
     completed: correct ? [...previous.completed, id] : previous.completed,
     roundWrong: correct ? previous.roundWrong : [...previous.roundWrong, id],
+    wrongByRound: correct ? (previous.wrongByRound || {})
+      : { ...(previous.wrongByRound || {}), [previous.round]: [...new Set([...(previous.wrongByRound?.[previous.round] || []), id])] },
     grades: { ...previous.grades, [id]: [...(previous.grades[id] || []), grade] },
     answered: [...previous.answered, id]
   }, catalog);
@@ -191,6 +196,21 @@ export const applyFlashcardMarks = (
   const completed = Array.from(new Set([...next.completed, ...ids]));
   return { ...next, completed, queue: [], roundWrong: [], answered: [], retryPool: null,
     roundSize: completed.length, roundAnswered: completed.length };
+};
+
+/**
+ * 플래시카드에서 고를 수 있는 오답 묶음: 첫 오답(1회차에서 틀린 것들)과 마지막 오답(마지막으로 틀린 회차의 것들).
+ * 카드 순서가 아니라 반복된 오답의 회차를 뜻한다(23일). 한 회차만 틀렸으면 둘이 같은 묶음이다.
+ */
+export const flashcardWrongDecks = (state: ReviewPractice, catalog: PracticeQuestion[]) => {
+  const known = new Set(catalog.map(q => q.id));
+  const order = catalog.map(q => q.id);
+  const rounds = Object.entries(state.wrongByRound || {})
+    .map(([round, ids]) => ({ round: Number(round), ids: order.filter(id => ids.includes(id) && known.has(id)) }))
+    .filter(entry => entry.ids.length > 0)
+    .sort((a, b) => a.round - b.round);
+  if (rounds.length === 0) return null;
+  return { first: rounds[0], last: rounds[rounds.length - 1] };
 };
 
 /** 등급 줄에서 'again'이 잇따른 가장 긴 길이 — 이번 테스트에서 연속으로 틀린 횟수 */

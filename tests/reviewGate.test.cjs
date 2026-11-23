@@ -1786,6 +1786,77 @@ test('23일: 재시험도 난도 4개로 매기고, 난도 버튼은 없애고, 
   assert.ok(analytics.includes('autoReviewRegister: Boolean(subject.autoReviewRegister)'), '수정 창을 열면 지금 설정이 들어 있다');
 });
 
+test('23일: 문제 묶음을 유형으로 나눠 맞음 · 오답을 숫자로 보이고, 앞부분 축약 대신 복습에서 빼기로 단위를 뺀다', () => {
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const read = name => fs2.readFileSync(path2.join(__dirname, '..', 'components', name), 'utf8');
+  const screen = read('ReviewPracticeScreen.tsx');
+  const logger = read('SessionLogger.tsx');
+  const tools = read('ReviewQuestionTools.tsx');
+  // 유형별 맞음 · 오답 숫자
+  assert.ok(screen.includes('data-testid="kind-counts"') && screen.includes('맞음 {item.ok}') && screen.includes('오답 {item.bad}'));
+  assert.ok(logger.includes('const kindCounts = batch.reduce(') && logger.includes('kindCounts={kindCounts}'), '유형은 레일과 같은 이름을 쓴다(kindOf)');
+  assert.ok(logger.includes("if (first === true) found.ok += 1;") && logger.includes("else if (first === false) found.bad += 1;"),
+    '첫 시도로 세고, 아직 풀지 않은 문제는 어느 쪽에도 넣지 않는다');
+  // 유형이 여럿이면 줄도 여럿이다
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { ReviewPracticeScreen } = loadSource('components/ReviewPracticeScreen.tsx');
+  const html = renderToStaticMarkup(React.createElement(ReviewPracticeScreen, {
+    subjectName: '국어', rangeLabel: '1~10', elapsedLabel: '00:00', countdownLabel: null, revealed: false,
+    onReveal() {}, onGrade() {}, onClose() {}, onTogglePause() {}, isRunning: true, canPause: true,
+    level: 1, round: 1, roundSize: 2, queueLength: 2, hasQuestions: true, isComplete: false,
+    question: React.createElement('p', null, '문제'), questionRange: '1~10', hasCurrentQuestion: true,
+    wrongIntervalLabel: '2시간', correctIntervalLabel: '1일', pauseLabel: '멈춤',
+    rail: [{ id: 'a', label: '1번 · 기본 관계', status: 'now', wrongCount: 0 }],
+    kindCounts: [{ kind: '기본 관계', total: 3, ok: 2, bad: 1 }, { kind: '역방향', total: 2, ok: 0, bad: 2 }],
+    firstTryCorrect: 2, firstTryTotal: 3, completion: null, firstTryOk: 2, firstTryBad: 3,
+    finishLabel: '남은 문제 2', canFinish: false, onFinish() {}
+  }));
+  assert.ok(html.includes('data-kind="기본 관계"') && html.includes('data-kind="역방향"'), '유형마다 한 줄이다');
+  assert.ok(/data-kind="기본 관계"[\s\S]*?맞음 2[\s\S]*?오답 1/.test(html) && /data-kind="역방향"[\s\S]*?맞음 0[\s\S]*?오답 2/.test(html),
+    '유형마다 맞은 개수 · 틀린 개수를 숫자로 보인다');
+  // 앞부분 축약 단추는 복습 문제 화면에서 없애고, 복습에서 빼기로 그 단위를 뺀다
+  assert.ok(!screen.includes('앞부분 축약') && !screen.includes('onCondenseFirst'));
+  assert.ok(tools.includes('data-testid="remove-unit"') && tools.includes('이 단위를 빼요'));
+  assert.ok(tools.includes('onRemoveUnit') && tools.includes('unitName'));
+  assert.ok(logger.includes('const condensePreSessionReview = (logId?: string) => {'), '뺄 단위를 고를 수 있다');
+  assert.ok(logger.includes('onRemoveUnit={preSessionReviewLogs.length > 1 ? () => condensePreSessionReview(currentGateQuestion.logId) : undefined}'),
+    '단위가 하나뿐이면 단위 빼기를 주지 않는다(그 복습이 비어 버린다)');
+});
+
+test('23일: 플래시카드의 첫 오답 · 마지막 오답은 카드 순서가 아니라 반복된 오답의 회차다', () => {
+  const catalog = [1, 2, 3, 4].map(i => ({ id: String(i), logId: 'a', level: 1, priority: 1 }));
+  let state = practice.startReviewPractice(catalog);
+  // 1회차: 2 · 4를 틀린다
+  while (state.queue.length && state.round === 1) {
+    state = practice.gradeReviewPractice(state, catalog, ['2', '4'].includes(state.queue[0]) ? 'again' : 'good');
+  }
+  // 2회차: 4만 또 틀린다 → 3회차
+  while (state.queue.length && state.round === 2) {
+    state = practice.gradeReviewPractice(state, catalog, state.queue[0] === '4' ? 'again' : 'good');
+  }
+  assert.deepEqual(state.wrongByRound, { 1: ['2', '4'], 2: ['4'] });
+  const decks = practice.flashcardWrongDecks(state, catalog);
+  assert.deepEqual(decks.first, { round: 1, ids: ['2', '4'] }, '첫 오답 = 1회차에서 틀린 것들');
+  assert.deepEqual(decks.last, { round: 2, ids: ['4'] }, '마지막 오답 = 마지막으로 틀린 회차의 것들');
+  // 한 회차만 틀렸으면 첫 오답과 마지막 오답이 같은 묶음이다
+  let once = practice.startReviewPractice(catalog);
+  while (once.queue.length && once.round === 1) {
+    once = practice.gradeReviewPractice(once, catalog, once.queue[0] === '3' ? 'again' : 'good');
+  }
+  const single = practice.flashcardWrongDecks(once, catalog);
+  assert.deepEqual([single.first.round, single.last.round], [1, 1]);
+  assert.deepEqual(single.first.ids, ['3']);
+  // 틀린 것이 없으면 고를 오답 묶음이 없다(전체를 본다)
+  let clean = practice.startReviewPractice(catalog);
+  while (clean.queue.length) clean = practice.gradeReviewPractice(clean, catalog, 'good');
+  assert.equal(practice.flashcardWrongDecks(clean, catalog), null);
+  // 플래시카드 표시는 회차 오답으로 세지 않는다(테스트 회차만 센다)
+  const after = practice.applyFlashcardMarks(state, catalog, { 1: 'wrong' });
+  assert.deepEqual(after.wrongByRound, { 1: ['2', '4'], 2: ['4'] });
+});
+
 test('21일 플래시카드: 표시한 정오답만 반영하고 다음 회차를 열지 않으며, 연속 오답 횟수를 센다', () => {
   const catalog = [1, 2, 3, 4].map(i => ({ id: String(i), logId: 'a', level: 1, priority: 1 }));
   let state = practice.startReviewPractice(catalog);
@@ -1827,12 +1898,13 @@ test('21일 플래시카드: 표시한 정오답만 반영하고 다음 회차�
 
   // 21일: 어느 카드를 가장 먼저 보여 주는가 — 테스트를 넘겨 왔으면 보고 있던 문제, 테스트가 끝나 왔으면 첫 오답. 오답 가기는 첫 · 마지막만
   const logger = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'SessionLogger.tsx'), 'utf8');
-  assert.ok(logger.includes('const currentId = (from && ids.includes(from) ? from : wrong[0]) ?? ids[0];'), '넘겨 온 문제 → 그 문제부터, 아니면 첫 오답부터');
+  assert.ok(logger.includes("if (from && ids.includes(from)) setGateFlash({ deck: 'all', ids, marks, currentId: from });"), '넘겨 온 문제부터 본다');
+  assert.ok(logger.includes("else if (decks) setGateFlash({ deck: 'first', ids: decks.first.ids, marks, currentId: decks.first.ids[0] });"), '테스트가 끝나 오면 첫 오답 묶음부터 본다');
   assert.ok(logger.includes('onSkipToFlash={() => startGateFlash(gateCurrentId)}'), '"테스트 넘기고 플래시카드로"는 보고 있던 문제를 넘긴다');
-  assert.ok(logger.includes("[{ key: 'first', label: '첫 오답' }, { key: 'last', label: '마지막 오답' }]"), '오답 가기 단추는 첫 · 마지막 둘뿐이다');
+  assert.ok(logger.includes("entries.push({ key: 'first', label: '첫 오답', count: decks.first.ids.length });"), '첫 오답 묶음을 고를 수 있다');
+  assert.ok(logger.includes("if (decks.last.round !== decks.first.round) entries.push({ key: 'last', label: '마지막 오답'"), '마지막 오답은 회차가 다를 때만 따로 둔다');
   const screen = require('fs').readFileSync(require('path').join(__dirname, '..', 'components', 'ReviewPracticeScreen.tsx'), 'utf8');
-  assert.ok(screen.includes('data-testid="flash-done"') && screen.includes('data-testid="flash-jumps"'), '플래시카드에는 끝내기와 오답 가기가 있다');
-  assert.ok(!screen.includes('data-flash-deck'), '회차별 묶음 고르기는 만들지 않는다');
+  assert.ok(screen.includes('data-testid="flash-done"') && screen.includes('data-testid="flash-decks"'), '플래시카드에는 끝내기와 묶음 고르기가 있다');
 });
 
 test('practice completes 1,2,3,4 before retrying only 2,4 and then only 4', () => {
